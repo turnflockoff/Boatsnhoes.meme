@@ -1,113 +1,98 @@
-# Boatsnhoes.meme — Proof-of-Work Architecture (Draft)
+# Boatsnhoes.meme — GPU mining campaign on Ethereum (revised design)
 
-> Status: research prototype / design proposal. This is not a launched coin, audited consensus implementation, or promise of mining profitability.
+> Status: concept and technical plan only. No deployed token, audited contracts, live mining rewards, or guaranteed payouts are claimed.
 
-## Executive recommendation
+## Correct architecture
 
-The repository README currently describes a proof of work on the Ethereum blockchain. That phrase needs a precise architecture decision:
+The product goal is GPU proof-of-work mining that earns BoatsnHoes tokens, with reward issuance stopping six months before a declared project end date, and token/reward settlement recorded on Ethereum.
 
-- **Ethereum-issued token:** Deploy an ERC-20 token on Ethereum. Ethereum validators secure the chain; a token contract cannot replace Ethereum's consensus or make the token itself a native Ethereum PoW coin.
-- **Independent native PoW chain:** Build and operate a separate blockchain with its own nodes, peer-to-peer network, transaction rules, block production, difficulty adjustment, issuance schedule, wallets, and explorer. This is materially more work and needs independent security review.
+Ethereum Mainnet itself cannot be GPU-mined. Ethereum switched from proof-of-work to proof-of-stake at The Merge on September 15, 2022; mining was switched off. See:
+- https://ethereum.org/roadmap/merge/
+- https://ethereum.org/developers/docs/consensus-mechanisms/pow/mining/
+- https://ethereum.org/developers/docs/consensus-mechanisms/pow/mining/mining-algorithms/
 
-For a CPU-oriented native PoW experiment, evaluate **RandomX** as the proof-of-work function instead of inventing a new cryptographic hash. RandomX is designed to favor general-purpose CPUs using randomized program execution and memory-hard techniques. It is not ASIC-proof; specialized hardware and optimized implementations may still gain advantages. Pin an exact reviewed upstream release or commit and verify licensing before integration.
+Therefore this project must not market its GPU workload as Ethereum block mining. The accurate description is: **GPU-mined project rewards, settled on Ethereum**.
 
-Primary references:
-- RandomX project: https://github.com/tevador/RandomX
-- Argon2 specification (RFC 9106): https://www.rfc-editor.org/rfc/rfc9106.html
-- Bitcoin-style target semantics background: https://bitcoindevelopers.org/docs/reference/block-chain-ref/
+## Recommended system
 
-## Proposed prototype profile (not mainnet parameters)
+1. **Ethereum token contract:** ERC-20 token for balances and transfers.
+2. **GPU PoW miner:** Runs locally on a miner's GPU and searches for valid shares against a published job.
+3. **Mining pool / coordinator:** Issues jobs, tracks shares, and prevents duplicate submissions. This is an operational trust point unless replaced by a more elaborate decentralized validation design.
+4. **Reward accounting:** Contract or audited distributor pays only finalized, verified reward claims. Never let an unaudited public API mint tokens.
+5. **Ethereum settlement:** Publish claim roots or verified claim records on Ethereum; miners claim with Merkle proofs, or use a contract-based mechanism appropriate to expected volume and gas costs.
+6. **Hard stop:** Smart contract enforces a fixed mining end timestamp. Mining reward accrual and claim creation stop at the configured cutoff. Define the actual project end date first; the cutoff is exactly six calendar months earlier, using UTC and a documented calendar-month rule. Ethereum has no announced end date, so do not claim the cutoff is tied to an Ethereum shutdown.
 
-| Setting | Initial proposal | Notes |
-|---|---:|---|
-| Chain name | BoatsnHoes | Working name |
-| Symbol | HOES | Branding proposal only; check ticker conflicts before launch |
-| Consensus | Native Proof of Work | Only if a separate chain is selected |
-| PoW function | RandomX | Use an established implementation; do not fork its cryptography casually |
-| Hash output | 256-bit | Compare as an unsigned integer to target |
-| Block interval | 120 seconds | Simulation target; tune after testnet measurements |
-| Difficulty retarget | Every 60 blocks | Use median-time-past and bounded adjustment |
-| Max adjustment | 4x easier / 4x harder per window | Prevent extreme single-window swings |
-| Epoch seed | Deterministic from ancestor block hash at fixed epoch boundary | Define exact epoch and seed transition to prevent miner disagreement |
-| Coinbase maturity | 100 blocks | Testnet starting value |
-| Max block weight | 2,000,000 weight units | Must be finalized with transaction encoding |
-| Subsidy | Unset | Do not invent economics before supply and issuance decisions |
-| Premine / treasury | Unset | Explicit governance and disclosure decision required |
+## GPU algorithm choice
 
-Do not launch with these defaults without adversarial testing and a published consensus specification.
+For a GPU-first mining experience, do not use RandomX as the default: RandomX is intentionally CPU-oriented. Evaluate a well-studied GPU-suitable proof-of-work algorithm and existing audited implementations rather than inventing a hash function. Ethash is historically associated with Ethereum GPU mining, but Ethereum Mainnet's PoW is ended; Ethash can only be used as this project's own work function or on another compatible PoW network. Its DAG/memory-hard design enabled GPU mining, but ASICs were also developed.
 
-## PoW header and verification model
+Potential choices to benchmark:
+- **Ethash-style:** Familiar GPU/DAG workload and established ecosystem history. Use only as this project's own work function, not Ethereum consensus.
+- **Autolykos-style or another established GPU PoW:** Evaluate implementation maturity, licenses, ASIC dynamics, hardware support, and independent security analysis before selection.
+- Never advertise any algorithm as ASIC-proof or profitable without evidence.
 
-A candidate block header must include consensus-critical fields, encoded canonically and identically by every node:
-- version
-- previous block hash
-- transaction Merkle root
-- timestamp
-- compact target / difficulty field
-- nonce
-- RandomX key/seed derivation context (deterministically derived; never miner-chosen)
+## Protocol outline
 
-Conceptual algorithm:
-1. Validate the parent and derive the epoch seed from the chain's deterministic seed schedule.
-2. Serialize the header with a single canonical byte order and fixed-width encoding.
-3. Compute the PoW hash by running the upstream RandomX implementation against the serialized header using the deterministic epoch seed.
-4. Decode the compact target with strict overflow and range checks.
-5. Accept only if the 256-bit PoW result is less than or equal to the target and the target is no easier than the chain's POW_LIMIT.
-6. Independently validate transactions, block weight, coinbase amount, timestamps, and all state transitions.
+A mining job should include:
+- chain/project identifier and algorithm identifier
+- monotonically increasing job ID
+- challenge / previous accepted job reference
+- dataset epoch and seed, derived deterministically
+- target / share difficulty
+- job expiration time
+- payout epoch and pool identifier
 
-The actual RandomX API uses a keyed VM/cache/dataset configuration. Integration must follow the upstream implementation's exact API and test vectors; this is a protocol outline, not drop-in code.
+Miner submission should include:
+- job ID
+- miner payout address (validated as an Ethereum address)
+- worker ID (display-only; not an authentication credential)
+- nonce / solution
+- claimed share difficulty
 
-## Difficulty adjustment requirements
+Coordinator validation:
+- reject unknown or expired jobs
+- recompute proof locally with the exact pinned algorithm version and parameters
+- reject duplicate `(job_id, miner, nonce)` submissions
+- enforce per-miner rate limits and anti-abuse controls
+- record valid shares idempotently
+- compute rewards from a published deterministic schedule
+- expose auditable share and payout history
 
-For each retarget window:
-- Use a robust timestamp statistic, preferably median-time-past, rather than trusting one miner timestamp.
-- Clamp elapsed time to a documented range before calculating the new target.
-- Use integer arithmetic with explicit rounding and overflow checks.
-- Enforce 0 < target <= POW_LIMIT.
-- Specify behavior for missing history, genesis, timestamp ties, reorgs, and testnet minimum-difficulty exceptions.
-- Add deterministic test vectors at boundaries and on reorged branches.
+A pool must not accept a miner's claimed hash or difficulty without recomputing it independently.
 
-Do not copy Bitcoin's retarget algorithm partially. Either adopt a fully specified known algorithm with its assumptions, or specify and test this chain's exact rules.
+## Six-month early stop
 
-## Miner software layout
+Use explicit immutable schedule fields:
+- `project_end_at` — public declared end date (UTC)
+- `mining_cutoff_at` — computed as six calendar months before `project_end_at`
+- `claims_deadline_at` — separately defined; should not be confused with mining cutoff
+- `paused` — emergency stop controlled by disclosed governance or multisig
 
-Suggested modules:
-- `consensus/pow`: header serialization, RandomX wrapper, seed schedule, target decoding, PoW verification.
-- `consensus/difficulty`: deterministic retarget calculation.
-- `node/chain`: block validation, fork choice, chain state.
-- `node/p2p`: peer protocol, rate limits, anti-DoS.
-- `miner`: template retrieval, nonce search, result submission, graceful cancellation.
-- `wallet`: key management and address format (separate security review required).
-- `rpc`: authenticated local RPC; never expose wallet-control RPC publicly by default.
-- `tests/vectors`: canonical header, PoW, target and retarget vectors.
+Recommended contract behavior:
+- mining/reward accrual rejects submissions at or after `mining_cutoff_at`
+- no admin function can silently extend the cutoff
+- any emergency pause is logged on-chain
+- claims for rewards already earned remain available until `claims_deadline_at`
+- unclaimed reward handling is published before launch
+- if a schedule change is ever allowed before launch, emit events and provide advance notice; after launch, do not allow unilateral extension
 
-## Required test plan
+Do not set an actual cutoff until the project end date is chosen. There is no known Ethereum end date to use.
 
-Before even a public testnet:
-- Upstream RandomX test vectors pass on every supported platform.
-- Header serialization has byte-for-byte golden vectors.
-- Same block validates identically across at least two independent implementations.
-- Target decoder rejects zero, negative-equivalent, overflow, non-canonical and above-limit values.
-- Difficulty tests cover boundary windows, manipulated timestamps, integer rounding, reorgs and extreme elapsed times.
-- Coinbase issuance cannot exceed the exact scheduled subsidy plus fees.
-- Reorg tests confirm deterministic chain selection and no double application of state transitions.
-- Fuzz parsers, serialization, compact-target decoding, block validation and P2P messages.
-- Run a testnet with independent operators; commission external consensus and cryptography review.
+## Initial development milestones
 
-## Important product and security notes
+1. Benchmark candidate GPU algorithms on NVIDIA and AMD devices. Choose based on hashrate, VRAM requirement, power use, reproducible verification, license, and attack surface.
+2. Build a local-only miner harness and CPU/reference verifier. Do not connect payouts yet.
+3. Implement deterministic job encoding, share validation, duplicate rejection, and share difficulty retargeting.
+4. Add a testnet ERC-20 and audited claim/distributor contract with an explicit emission cap and immutable cutoff.
+5. Test with independent miners and adversarial submissions; audit contracts and reward logic.
+6. Only then consider mainnet deployment and token launch disclosures.
 
-- A RandomX PoW function alone does not create a blockchain. Nodes, networking, transaction validation, chain selection, issuance, wallets, and upgrade rules are also consensus/security-critical.
-- CPU-friendly does not mean fair, profitable, ASIC-resistant, or secure against majority attacks.
-- Never promise returns, mining income, price appreciation, or guaranteed decentralization.
-- Do not collect seed phrases or private keys. Do not place wallet secrets in logs, frontend code, GitHub, or committed environment files.
-- Do not advertise the project as audited or production-ready until independent audits are completed and published.
+## Tokenomics intentionally unset
 
-## Open architecture decision
+Do not guess token supply, initial allocation, emissions, or exchange value. Define a hard cap, reward schedule, treasury allocation (if any), and treatment of unclaimed rewards transparently before deployment. Do not promise investment returns or mining profitability.
 
-The current README says proof of work on the Ethereum blockchain. Choose one before implementing a real miner:
+## Clear project wording
 
-A. **Ethereum token + off-chain/contract-verified mining rewards:** easier to prototype, but it is not native PoW and introduces oracle, anti-Sybil, and reward-contract design problems.
+Use: **Boats N Hoes is a GPU-mined rewards project with token settlement on Ethereum. Ethereum secures the settlement layer; the project's own GPU proof-of-work campaign is separate from Ethereum consensus.**
 
-B. **Independent RandomX-based PoW chain:** the correct direction if the requirement is actual native PoW mining, but requires a full node and chain implementation.
-
-Recommended next milestone: a local-only PoW harness that integrates the upstream RandomX library, tests header hashing and target verification, benchmarks CPU memory use and hashes per second, and has no token value or mainnet claims. Then decide whether to build a native chain or an Ethereum token.
+Do not use: Mine Ethereum, Ethereum GPU mining, or Ethereum PoW coin.
