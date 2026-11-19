@@ -1,25 +1,28 @@
 # Boats N Hoes — Useful Compute MVP
 
-This directory contains the first runnable, deliberately small software scaffold for the RX 470 useful-compute prototype. It is not a blockchain miner and does not use Ethereum consensus.
+This directory contains an early local coordinator/worker scaffold for the RX 470 useful-compute prototype. It is not a blockchain miner and does not use Ethereum consensus.
 
-## Current implementation
+## Implemented scaffold
 
-- FastAPI coordinator with an in-memory job queue and worker registry.
-- Signed job definitions using HMAC-SHA256 (prototype trust model: coordinator and worker share a secret).
-- Worker registration, job acquisition, result submission, basic job/result validation, duplicate-submission rejection, and SQLite-backed result/reward ledger.
-- A local CPU demo worker so the workflow can be exercised before GPU hardware support is validated.
-- Optional inference runner interface; GPU execution is deliberately not enabled by default.
-- Unit tests for job creation, worker lifecycle, idempotency and bad submissions.
+- FastAPI coordinator with an in-memory job queue and in-memory job state.
+- HMAC-SHA256 job manifest signing on the coordinator.
+- Worker registration stored in SQLite.
+- Result submissions and simulated reward points stored in SQLite.
+- A local CPU demo worker that executes a deterministic SHA-256 task.
+- A Vulkan device-enumeration diagnostic helper.
+- Basic tests for worker registration, job claiming, deterministic result validation, and wrong-answer rejection.
+
+**Important implementation limits:** jobs and leases are currently held in process memory and are lost when the API restarts. The demo worker currently does not independently verify the HMAC signature. The coordinator does not yet implement authenticated clients, durable job leasing, lease expiry/requeue, multi-process concurrency control, or a real AI inference adapter. These are explicit next tasks, not completed features.
 
 ## Safety and correctness boundaries
 
-The HMAC signature authenticates the job envelope to a worker that knows the shared key. It does not prove that a GPU ran the model. Result hashes are integrity identifiers, not proofs of execution. The coordinator is a trusted central component in this MVP. Rewards are simulated ledger points only; no token minting, private-key handling, wallet signing, or on-chain transfer is implemented.
+The HMAC signature authenticates a manifest only to a party that has the shared secret and actually verifies it. The current demo worker does not yet verify it. Result hashes are integrity identifiers, not proofs of execution. The coordinator is trusted in this MVP. Rewards are simulated ledger points only; no token minting, private-key handling, wallet signing, or on-chain transfer is implemented.
 
 The reference repositories:
 - https://github.com/MooreThreads/ethminer-musa
 - https://github.com/simplechain-org/go-ethereum-pow
 
-are research references only. Their PoW/consensus implementations are not integrated into this AI task execution MVP. The first is a GPU Ethash miner with vendor/backend-specific code; the second is an archived Go-Ethereum PoW fork. Neither provides verified AI inference for RX 470 by itself. Review their licenses and notices before any code reuse.
+are research references only. Their PoW/consensus implementations are not integrated into this AI task execution MVP. The first is an Ethash GPU miner with vendor/backend-specific code; the second is an archived Go-Ethereum PoW fork. Neither provides verified AI inference for RX 470 by itself. Review exact licenses and notices before any code reuse.
 
 ## Quick start (Ubuntu)
 
@@ -28,16 +31,19 @@ are research references only. Their PoW/consensus implementations are not integr
     . .venv/bin/activate
     pip install -r requirements.txt
     cp .env.example .env
-    # Set a long random PROTOTYPE_SECRET in .env before use beyond localhost.
+    # Set PROTOTYPE_SECRET to a long random value.
     uvicorn app.main:app --host 127.0.0.1 --port 8000
 
-In a second terminal:
+In another terminal:
 
     cd prototype
     . .venv/bin/activate
     python demo_worker.py --url http://127.0.0.1:8000
 
-Open http://127.0.0.1:8000/docs for the local API docs.
+Create a demo job using the API docs at http://127.0.0.1:8000/docs:
+- POST /v1/jobs with {"payload":"hello from Boats N Hoes","task_type":"demo:sha256"}.
+- The demo worker claims and processes queued jobs.
+- GET /v1/ledger shows simulated points.
 
 ## Tests
 
@@ -45,33 +51,32 @@ Open http://127.0.0.1:8000/docs for the local API docs.
     . .venv/bin/activate
     pytest -q
 
+A GitHub Actions workflow runs these tests on pushes and pull requests affecting prototype files.
+
 ## API outline
 
 - `POST /v1/workers/register` — register a worker identifier.
-- `POST /v1/jobs` — create a demo inference job.
+- `POST /v1/jobs` — create a deterministic demo job.
 - `POST /v1/jobs/next` — worker claims the next queued job.
-- `POST /v1/jobs/{job_id}/submit` — submit a result and receipt.
+- `POST /v1/jobs/{job_id}/submit` — submit a result.
 - `GET /v1/ledger` — view simulated accepted-work entries.
+- `GET /health` — local health check.
 
-## GPU path: intentionally gated
+## GPU diagnostic
 
-Before adding Vulkan inference, verify actual device IDs, driver binding and Vulkan visibility using:
+From the prototype directory:
 
-    lsb_release -a
-    uname -r
-    lspci -nnk | grep -A3 -E 'VGA|Display'
-    vulkaninfo --summary
-    glxinfo -B
-    ls -l /dev/dri/
+    python -m app.gpu_probe_cli
 
-Then run a standalone Vulkan smoke test on each GPU separately. RX 470 support in current official ROCm matrices is not assumed. Start with Mesa RADV/Vulkan only if the installed Linux stack exposes the devices successfully. Keep the 4 GB card to small tasks and benchmark the 8 GB card independently.
+This checks whether `vulkaninfo --summary` can run. Device enumeration is not proof that AI inference works. Run the Ubuntu hardware inventory commands in the main design document and test each GPU separately.
 
-## Not implemented yet
+## Not implemented
 
-- Actual model inference on RX 470.
-- Durable queued-job leasing/expiry and multi-process concurrency guarantees.
-- Public internet deployment, authentication hardening, rate limits, TLS, and abuse prevention.
-- Independent task verifiers / audit sampling.
-- Ethereum ERC-20 integration, reward distribution, and contracts.
+- Persistent job queue and leases across API restarts.
+- Worker-side manifest signature verification.
+- Real model inference on RX 470.
+- Independent task verifiers and audit sampling.
+- Public deployment security, client authentication, TLS, rate limits, and abuse prevention.
+- Ethereum ERC-20 integration or reward distribution.
 
 Treat this as an engineering starter, not production infrastructure.
