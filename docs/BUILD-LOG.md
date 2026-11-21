@@ -15,3 +15,9 @@
 3. **Social share cards.** The `og:image` meta tag sets the picture people see when they paste your link in Facebook, X or Discord. It must be a full `https://` URL to a PNG or JPG, ideally 1200×630 px. SVG images don't show up.
 4. **Browsers can only half-see your GPU.** WebGL and WebGPU report a GPU name, but browsers blur it for privacy. That is why the real check is the Linux `vulkaninfo` command.
 5. **Rotated text can break phones.** A rotated full-width block pokes past the screen edge and lets the page scroll sideways. The fix is to shrink each block to its text width (`width: fit-content`).
+
+## 2026-11-21 (later): Homepage back to orange/black
+
+- You picked version A (the orbital design) from a side-by-side of all 4 homepages in the repo history and your upload.
+- Restored it from git history instead of rebuilding. Changed only: footer links (they pointed at folders the site hides), a link to the GPU contributor page, an orange share image, and a phone-only icon overlap.
+- **What you learned:** every version of a file lives in git history. `git show <commit>:index.html` brings back any past version without redoing the work.
