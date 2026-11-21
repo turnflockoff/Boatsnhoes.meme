@@ -2,21 +2,24 @@
 
 This directory contains an early local coordinator/worker scaffold for the RX 470 useful-compute prototype. It is not a blockchain miner and does not use Ethereum consensus.
 
-## Implemented scaffold
+## Implemented (Phase 1: durable local MVP)
 
-- FastAPI coordinator with an in-memory job queue and in-memory job state.
-- HMAC-SHA256 job manifest signing on the coordinator.
-- Worker registration stored in SQLite.
-- Result submissions and simulated reward points stored in SQLite.
-- A local CPU demo worker that executes a deterministic SHA-256 task.
-- A Vulkan device-enumeration diagnostic helper.
-- Basic tests for worker registration, job claiming, deterministic result validation, and wrong-answer rejection.
+- FastAPI coordinator built by `create_app()`; all job state lives in SQLite (WAL mode), so jobs and leases **survive a coordinator restart**.
+- Explicit job state machine: `queued → leased → accepted`, with `rejected`, `expired` and `failed` final states. Every transition is written to an `events` audit table.
+- **Atomic claiming** with `BEGIN IMMEDIATE` transactions: two workers, or two coordinator processes on the same database, can't lease the same job.
+- **Leases** (`LEASE_SECONDS`, default 60): if a worker goes silent, its job is requeued. After `MAX_ATTEMPTS` (default 3) the job is marked `failed`. Wrong answers requeue the job until attempts run out, then it's `rejected`.
+- **Idempotent submissions**: resubmitting the same accepted result returns the original receipt and is paid only once. A different worker submitting after acceptance gets `409`. Late submissions from a worker that lost its lease get `403`. Expired jobs get `410`.
+- **The worker verifies the coordinator's HMAC-SHA256 manifest signature**, the payload hash, the task type and the deadline before it executes anything. A job signed with a different secret is refused.
+- `GET /v1/ledger` includes job counts and `consistency_problems`, an invariant check an auditor can run at any time. `GET /v1/jobs/{id}` shows a job's status and audit trail.
+- A local CPU demo worker that runs a deterministic SHA-256 task (a test fixture, not useful work).
+- Vulkan device-enumeration diagnostic helper.
+- 13 tests: restart persistence, lease expiry and requeue, retry exhaustion, job expiry, wrong worker, duplicate and conflicting submissions, malformed results, 20-thread concurrent claims, tampered or foreign manifests, and secrets kept out of API responses.
 
-**Important implementation limits:** jobs and leases are currently held in process memory and are lost when the API restarts. The demo worker currently does not independently verify the HMAC signature. The coordinator does not yet implement authenticated clients, durable job leasing, lease expiry/requeue, multi-process concurrency control, or a real AI inference adapter. These are explicit next tasks, not completed features.
+**Still missing (honest limits):** workers register without authentication, and anyone who can reach the API can create jobs. The coordinator is trusted, and the shared secret is symmetric, so a worker that knows it could forge manifests. Per-worker keys or asymmetric signatures are the fix. There is no real AI inference adapter yet (Phase 2) and no RX 470 validation yet (Phase 3).
 
 ## Safety and correctness boundaries
 
-The HMAC signature authenticates a manifest only to a party that has the shared secret and actually verifies it. The current demo worker does not yet verify it. Result hashes are integrity identifiers, not proofs of execution. The coordinator is trusted in this MVP. Rewards are simulated ledger points only; no token minting, private-key handling, wallet signing, or on-chain transfer is implemented.
+The HMAC signature authenticates a manifest only to a party that has the shared secret and actually verifies it. The demo worker verifies it before executing. Result hashes are integrity identifiers, not proofs of execution. The coordinator is trusted in this MVP. Rewards are simulated ledger points only; no token minting, private-key handling, wallet signing, or on-chain transfer is implemented.
 
 The reference repositories:
 - https://github.com/MooreThreads/ethminer-musa

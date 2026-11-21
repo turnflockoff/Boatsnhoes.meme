@@ -1,110 +1,127 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 import uuid
-from collections import deque
-from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import FastAPI, HTTPException
 
-from .config import get_settings
+from .config import Settings, get_settings
 from .ledger import Ledger
 from .models import JobCreate, JobEnvelope, ResultSubmission, WorkerRegistration
 from .security import sha256_text, sign_manifest
 
-settings = get_settings()
-ledger = Ledger(settings.database_path)
-app = FastAPI(title="Boats N Hoes Useful-Compute MVP", version="0.1.0")
-queue: deque[str] = deque()
-jobs: dict[str, dict[str, Any]] = {}
+log = logging.getLogger("bnh.coordinator")
+
+# Fields covered by the coordinator's HMAC signature. Workers must verify exactly these.
+SIGNED_FIELDS = ("job_id", "task_type", "payload", "payload_hash", "reward_points", "expires_at")
 
 
-@app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok", "mode": "local-prototype"}
+def create_app(settings: Settings | None = None,
+               clock: Callable[[], float] = time.time) -> FastAPI:
+    """Build the coordinator. `clock` is injectable so tests can move time forward."""
+    settings = settings or get_settings()
+    ledger = Ledger(settings.database_path)
+    app = FastAPI(title="Boats N Hoes Useful-Compute MVP", version="0.2.0")
+    app.state.ledger = ledger
+    app.state.settings = settings
 
+    def now() -> int:
+        return int(clock())
 
-@app.post("/v1/workers/register")
-def register_worker(body: WorkerRegistration) -> dict[str, str]:
-    ledger.register_worker(body.worker_id, json.dumps(body.capabilities), int(time.time()))
-    return {"worker_id": body.worker_id, "status": "registered"}
-
-
-@app.post("/v1/jobs", response_model=JobEnvelope)
-def create_job(body: JobCreate) -> JobEnvelope:
-    now = int(time.time())
-    job_id = str(uuid.uuid4())
-    fields = {
-        "job_id": job_id,
-        "task_type": body.task_type,
-        "payload": body.payload,
-        "payload_hash": sha256_text(body.payload),
-        "reward_points": body.reward_points,
-        "expires_at": now + body.ttl_seconds,
-    }
-    signature = sign_manifest(fields, settings.secret)
-    jobs[job_id] = {**fields, "signature": signature, "status": "queued", "worker_id": None}
-    queue.append(job_id)
-    return JobEnvelope(**jobs[job_id])
-
-
-@app.post("/v1/jobs/next", response_model=JobEnvelope)
-def next_job(worker_id: str) -> JobEnvelope:
-    if not ledger.has_worker(worker_id):
-        raise HTTPException(status_code=403, detail="worker is not registered")
-    now = int(time.time())
-    while queue:
-        job_id = queue.popleft()
-        job = jobs.get(job_id)
-        if not job or job["status"] != "queued":
-            continue
-        if job["expires_at"] <= now:
-            job["status"] = "expired"
-            continue
-        job["status"] = "leased"
-        job["worker_id"] = worker_id
+    def envelope(job: dict[str, Any]) -> JobEnvelope:
         return JobEnvelope(**{k: job[k] for k in JobEnvelope.model_fields})
-    raise HTTPException(status_code=404, detail="no queued jobs")
+
+    @app.get("/health")
+    def health() -> dict[str, Any]:
+        return {"status": "ok", "mode": "local-prototype", "jobs": ledger.status_counts()}
+
+    @app.post("/v1/workers/register")
+    def register_worker(body: WorkerRegistration) -> dict[str, str]:
+        ledger.register_worker(body.worker_id, json.dumps(body.capabilities), now())
+        log.info("worker registered", extra={"worker_id": body.worker_id})
+        return {"worker_id": body.worker_id, "status": "registered"}
+
+    @app.post("/v1/jobs", response_model=JobEnvelope)
+    def create_job(body: JobCreate) -> JobEnvelope:
+        t = now()
+        fields = {
+            "job_id": str(uuid.uuid4()),
+            "task_type": body.task_type,
+            "payload": body.payload,
+            "payload_hash": sha256_text(body.payload),
+            "reward_points": body.reward_points,
+            "expires_at": t + body.ttl_seconds,
+        }
+        signature = sign_manifest(fields, settings.secret)
+        ledger.create_job(fields, signature, settings.max_attempts, t)
+        return JobEnvelope(**fields, signature=signature)
+
+    @app.get("/v1/jobs/{job_id}")
+    def job_status(job_id: str) -> dict[str, Any]:
+        job = ledger.get_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="unknown job")
+        public = ("job_id", "task_type", "status", "attempts", "max_attempts", "expires_at",
+                  "lease_expires_at", "worker_id")
+        return {k: job[k] for k in public} | {"events": ledger.events(job_id)}
+
+    @app.post("/v1/jobs/next", response_model=JobEnvelope)
+    def next_job(worker_id: str) -> JobEnvelope:
+        if not ledger.has_worker(worker_id):
+            raise HTTPException(status_code=403, detail="worker is not registered")
+        job = ledger.claim_next(worker_id, settings.lease_seconds, now())
+        if job is None:
+            raise HTTPException(status_code=404, detail="no queued jobs")
+        return envelope(job)
+
+    @app.post("/v1/jobs/{job_id}/submit")
+    def submit_result(job_id: str, body: ResultSubmission) -> dict[str, Any]:
+        t = now()
+        if body.completed_at < body.started_at or body.completed_at > t + 30:
+            raise HTTPException(status_code=422, detail="invalid worker timestamps")
+        if sha256_text(body.result) != body.result_hash:
+            raise HTTPException(status_code=422, detail="result hash mismatch")
+        job = ledger.get_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="unknown job")
+        # Deterministic demo verifier: the task is SHA256(payload). This checks the
+        # answer, not that the assigned GPU executed the task.
+        correct = body.result == sha256_text(job["payload"])
+        outcome, job = ledger.submit(job_id, body.worker_id, body.result_hash, correct, t)
+        receipt = {"job_id": job_id, "verification": "deterministic-answer-check",
+                   "execution_proof": False}
+        if outcome in ("accepted", "duplicate"):
+            return receipt | {"status": "accepted", "reward_points": job["reward_points"],
+                              "idempotent_replay": outcome == "duplicate"}
+        errors = {
+            "unknown": (404, "unknown job"),
+            "conflict": (409, "job already accepted with a different result"),
+            "not_leased": (409, "job is not awaiting a result"),
+            "wrong_worker": (403, "job leased to a different worker"),
+            "expired": (410, "job expired"),
+            "rejected_requeued": (422, "result failed verification; job requeued"),
+            "rejected_final": (422, "result failed verification; no attempts left"),
+        }
+        code, detail = errors[outcome]
+        raise HTTPException(status_code=code, detail=detail)
+
+    @app.get("/v1/ledger")
+    def read_ledger() -> dict[str, Any]:
+        return {"entries": ledger.entries(), "total_simulated_points": ledger.total_points(),
+                "jobs": ledger.status_counts(), "consistency_problems": ledger.check_consistency(),
+                "notice": "Simulated points only; not tokens or money."}
+
+    return app
 
 
-@app.post("/v1/jobs/{job_id}/submit")
-def submit_result(job_id: str, body: ResultSubmission) -> dict[str, Any]:
-    job = jobs.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="unknown job")
-    if job["status"] != "leased":
-        raise HTTPException(status_code=409, detail="job is not awaiting a result")
-    if job["worker_id"] != body.worker_id:
-        raise HTTPException(status_code=403, detail="job leased to a different worker")
-    now = int(time.time())
-    if job["expires_at"] <= now:
-        job["status"] = "expired"
-        raise HTTPException(status_code=410, detail="job expired")
-    if body.completed_at < body.started_at or body.completed_at > now + 30:
-        raise HTTPException(status_code=422, detail="invalid worker timestamps")
-    if sha256_text(body.result) != body.result_hash:
-        raise HTTPException(status_code=422, detail="result hash mismatch")
-
-    # Deterministic demo verifier: the task is SHA256(payload). This verifies
-    # the answer, not that the assigned GPU executed the task.
-    expected = sha256_text(job["payload"])
-    if body.result != expected:
-        raise HTTPException(status_code=422, detail="task result failed deterministic verification")
-    try:
-        ledger.record_submission(job_id, body.worker_id, body.result_hash, job["reward_points"], now)
-    except Exception as exc:
-        # A duplicate ledger primary key is treated as a conflict. Do not expose
-        # database internals to the client.
-        raise HTTPException(status_code=409, detail="duplicate or previously recorded submission") from exc
-    job["status"] = "accepted"
-    return {"job_id": job_id, "status": "accepted", "reward_points": job["reward_points"],
-            "verification": "deterministic-answer-check", "execution_proof": False}
-
-
-@app.get("/v1/ledger")
-def read_ledger() -> dict[str, Any]:
-    entries = ledger.entries()
-    return {"entries": entries, "total_simulated_points": ledger.total_points(),
-            "notice": "Simulated points only; not tokens or money."}
+def __getattr__(name: str) -> Any:
+    # `uvicorn app.main:app` builds the app lazily so importing this module (tests,
+    # tooling) never touches the default database or requires a configured secret.
+    if name == "app":
+        global app
+        app = create_app()
+        return app
+    raise AttributeError(name)

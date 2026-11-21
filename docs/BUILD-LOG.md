@@ -21,3 +21,16 @@
 - You picked version A (the orbital design) from a side-by-side of all 4 homepages in the repo history and your upload.
 - Restored it from git history instead of rebuilding. Changed only: footer links (they pointed at folders the site hides), a link to the GPU contributor page, an orange share image, and a phone-only icon overlap.
 - **What you learned:** every version of a file lives in git history. `git show <commit>:index.html` brings back any past version without redoing the work.
+
+## 2026-11-21 (evening): Matching pages + durable GPU job queue
+
+**Shipped**
+- /contribute, /thanks and 404 now use the same orange/black look as the homepage. The orange boat logo is also the browser-tab icon.
+- GPU worker backend, Phase 1: jobs live in SQLite and survive restarts. Leases time out and requeue, retries are capped, and every step goes to an audit log. Workers refuse jobs whose signature doesn't check out.
+- Tests went from 4 to 13, all passing. I also ran a real end-to-end test: coordinator, two workers, a coordinator restart mid-run, and a worker using the wrong key.
+
+**What you learned**
+1. **A lease is a timed lock.** A worker "borrows" a job for 60 seconds. If the rig crashes or goes offline, the job returns to the queue for another rig. The coordinator never waits forever on a dead machine.
+2. **Idempotent means safe to repeat.** If a rig's Wi-Fi drops and it sends the same result twice, it's paid once and gets the same receipt both times.
+3. **Signatures protect the miners.** Each job is signed with a secret key. A worker checks the signature before running anything, so a fake coordinator can't make your GPU run its code.
+4. **Test the bad days, not just the good one.** Most of the new tests cover failures: crashes, timeouts, cheaters, duplicates, and 20 workers grabbing jobs at the same moment.

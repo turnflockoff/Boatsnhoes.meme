@@ -38,21 +38,21 @@ This roadmap separates implemented repository assets from proposed work. A check
 - [ ] Define expected output and task-specific acceptance criteria.
 
 ## Track D — Coordinator and workers
-- [ ] Define versioned job and receipt schemas.
+- [x] Define job and receipt schemas (Pydantic models; versioning still to add).
 - [ ] Implement worker identity and authenticated registration.
-- [ ] Implement coordinator job lifecycle and deadlines.
-- [ ] Implement worker polling / job leasing / retries.
+- [x] Implement coordinator job lifecycle and deadlines (SQLite state machine).
+- [x] Implement worker polling / job leasing / retries.
 - [ ] Add structured logs and health reporting.
-- [ ] Add idempotent receipt submission.
-- [ ] Test worker restart and coordinator restart behavior.
+- [x] Add idempotent receipt submission.
+- [x] Test coordinator restart (jobs persist) and silent-worker recovery (lease timeout → requeue).
 
 ## Track E — Verification and accounting
 - [ ] Implement schema, input hash, model hash, and job-version checks.
-- [ ] Reject duplicate and expired submissions.
+- [x] Reject duplicate and expired submissions.
 - [ ] Define deterministic task checks and tolerances for nondeterministic tasks.
 - [ ] Add independent re-run / spot-audit flow.
-- [ ] Record pending, accepted, rejected, and disputed results.
-- [ ] Keep rewards simulated and off-chain.
+- [x] Record queued, leased, accepted, rejected, expired and failed results with an audit trail (disputes not yet).
+- [x] Keep rewards simulated and off-chain.
 - [ ] Export an auditable reward report.
 - [ ] Document collusion, fabrication, and verification limitations.
 

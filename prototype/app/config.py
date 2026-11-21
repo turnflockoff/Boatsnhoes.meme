@@ -13,6 +13,19 @@ load_dotenv()
 class Settings:
     secret: str
     database_path: Path
+    lease_seconds: int = 60
+    max_attempts: int = 3
+
+
+def _int_env(name: str, default: int, low: int, high: int) -> int:
+    raw = os.getenv(name, str(default))
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    if not low <= value <= high:
+        raise ValueError(f"{name} must be between {low} and {high}")
+    return value
 
 
 def get_settings() -> Settings:
@@ -20,4 +33,9 @@ def get_settings() -> Settings:
     db = Path(os.getenv("DATABASE_PATH", "./data/prototype.sqlite3"))
     if len(secret) < 24:
         raise ValueError("PROTOTYPE_SECRET must be at least 24 characters")
-    return Settings(secret=secret, database_path=db)
+    return Settings(
+        secret=secret,
+        database_path=db,
+        lease_seconds=_int_env("LEASE_SECONDS", 60, 5, 3600),
+        max_attempts=_int_env("MAX_ATTEMPTS", 3, 1, 20),
+    )

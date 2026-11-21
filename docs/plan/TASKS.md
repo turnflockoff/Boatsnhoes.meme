@@ -22,6 +22,8 @@
 - [ ] Tail emission decision
 
 ## Phase 3: Chain and Mining
+- [x] GPU worker backend, Phase 1: durable SQLite job queue, leases and retries, signed manifests verified by workers, audit log (13 tests passing)
+- [ ] GPU worker Phase 2: real AI inference task interface; Phase 3: RX 470 hardware validation
 - [ ] Memory-hard, ASIC-resistant algorithm (pseudocode, reference miner)
 - [ ] Per-block difficulty adjustment
 - [ ] Testnet, then public testnet
@@ -55,6 +57,7 @@
 - [x] Custom graphics: logo mark, favicon, boat art, OG share image
 - [x] Contribute a GPU page (browser check, Linux check, tester form)
 - [x] Desktop/mobile testing (390, 768, 1440 px)
+- [x] Subpages restyled to match the orange/black homepage
 - [ ] Rebuild or upload Mine, Tokenomics, Stay Safe pages
 - [ ] Litepaper, Casino coming-soon, Meme Lab
 - [x] Waitlist backend: Netlify Forms (`gpu-testers`)
