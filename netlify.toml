@@ -1,0 +1,5 @@
+[build]
+  publish = "."
+
+# Static project site: no build command required.
+# Deploy previews can be enabled from the Netlify UI after connecting this repository.
