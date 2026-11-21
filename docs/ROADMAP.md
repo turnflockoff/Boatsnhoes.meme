@@ -11,7 +11,8 @@ This roadmap separates implemented repository assets from proposed work. A check
 - [x] Add a responsive static landing page.
 - [x] Publish this master roadmap.
 - [ ] Review page on desktop and mobile browsers.
-- [ ] Add project favicon / social preview artwork.
+- [x] Add SVG project favicon and social-sharing metadata.
+- [ ] Add custom social preview artwork.
 - [ ] Configure production domain and HTTPS.
 - [ ] Add a simple privacy-respecting contact / contribution path.
 
