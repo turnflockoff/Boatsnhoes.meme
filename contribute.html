@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Contribute a GPU — Boats n Hoes ($BNH)</title>
+<meta name="description" content="Check whether your GPU could mine $BNH and join the Boats n Hoes hardware tester list. No coin exists yet; testing comes first.">
+<meta name="theme-color" content="#fff1d9">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+<link rel="canonical" href="https://boatsnhoes.meme/contribute">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://boatsnhoes.meme/contribute">
+<meta property="og:title" content="Got a GPU? Get your rig ready — Boats n Hoes">
+<meta property="og:description" content="Run a 10-second browser check, then help test real hardware before $BNH has a chain.">
+<meta property="og:image" content="https://boatsnhoes.meme/assets/og-image.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://boatsnhoes.meme/assets/og-image.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bagel+Fat+One&family=Space+Grotesk:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/assets/site.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="nav">
+  <a class="brand" href="/" aria-label="Boats n Hoes home"><img src="/assets/mark.svg" alt="" width="40" height="40">$BNH</a>
+  <button class="menu" id="menubtn" type="button" aria-expanded="false" aria-controls="navlinks">Menu</button>
+  <nav class="links" id="navlinks" aria-label="Main">
+    <a href="#check">1 · Browser check</a><a href="#linux">2 · Linux check</a><a href="#join">3 · Join testers</a><a href="#faq">FAQ</a><a href="/">← Home</a>
+  </nav>
+</header>
+
+<main id="main">
+<section class="c-hero wrap">
+  <span class="badge">GPU tester program · early access</span>
+  <h1 style="margin-top:18px">Got a GPU collecting <span>dust?</span></h1>
+  <p class="tag">Before $BNH has a chain, we're testing what regular cards can really do. Three steps: check this device, run the Linux check, join the tester list.</p>
+  <div class="callout" style="max-width:640px;margin:24px auto 0;text-align:left"><b>Heads up:</b> no miner or worker software is released yet. Nothing runs on your machine from this page, and testers get no payouts or coins.</div>
+</section>
+
+<section id="check">
+  <div class="wrap">
+    <div class="kicker">Step 1 · 10 seconds</div>
+    <h2>Quick browser check.</h2>
+    <p class="lead">Reads what your browser reports about this device's graphics. It runs locally. Nothing is sent anywhere unless you attach it to the sign-up form yourself.</p>
+    <div class="checker" style="margin-top:24px">
+      <button class="btn" id="runcheck" type="button">Check this device</button>
+      <div class="report" id="report" hidden>
+        <div class="verdict" id="verdict"></div>
+        <dl id="facts"></dl>
+        <div class="report-actions"><button class="btn ghost" id="copyreport" type="button">Copy report</button><button class="btn ghost" id="attachreport" type="button">Attach to sign-up ↓</button></div>
+        <p class="fine">Browsers often hide or round hardware details for privacy, and phones won't be mining rigs. The Linux check in step 2 is what counts.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="linux" style="padding-top:0">
+  <div class="wrap">
+    <div class="kicker">Step 2 · Linux rigs</div>
+    <h2>Run the real hardware check.</h2>
+    <p class="lead">The same commands we run on the project's own RX 470 rig. Remove usernames or hostnames before you share the output.</p>
+    <div class="cmds" style="margin-top:24px">
+      <div class="cmd"><div><b>OS release</b><code>lsb_release -a</code></div><button class="copy" type="button">Copy</button></div>
+      <div class="cmd"><div><b>Kernel</b><code>uname -r</code></div><button class="copy" type="button">Copy</button></div>
+      <div class="cmd"><div><b>GPUs + drivers</b><code>lspci -nnk | grep -A3 -E 'VGA|Display'</code></div><button class="copy" type="button">Copy</button></div>
+      <div class="cmd"><div><b>Vulkan devices</b><code>vulkaninfo --summary</code></div><button class="copy" type="button">Copy</button></div>
+      <div class="cmd"><div><b>GPU permissions</b><code>ls -l /dev/dri</code></div><button class="copy" type="button">Copy</button></div>
+      <div class="cmd"><div><b>Project probe (JSON)</b><code>git clone https://github.com/turnflockoff/Boatsnhoes.meme &amp;&amp; cd Boatsnhoes.meme/prototype &amp;&amp; python3 -m app.gpu_probe_cli</code></div><button class="copy" type="button">Copy</button></div>
+    </div>
+    <p class="fine" style="margin-top:14px">Missing <code>vulkaninfo</code>? On Ubuntu: <code>sudo apt install vulkan-tools mesa-vulkan-drivers</code></p>
+    <div class="facts" style="margin-top:30px">
+      <div class="fact"><span class="tagline">Testing first</span><h3>AMD Polaris</h3><p>RX 470, 480, 570, 580. The project's own cards, on Vulkan with Mesa drivers.</p></div>
+      <div class="fact"><span class="tagline">Welcome</span><h3>Any GPU, 4 GB+</h3><p>Other AMD, NVIDIA and Intel cards help us learn what works. No compatibility is promised yet.</p></div>
+      <div class="fact"><span class="tagline">Not yet</span><h3>Phones &amp; shared PCs</h3><p>Mining runs for hours. Only use hardware you own and pay the power bill for.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="join" style="padding-top:0">
+  <div class="wrap join">
+    <div>
+      <div class="kicker">Step 3 · Early testers</div>
+      <h2>Join the tester crew.</h2>
+      <p class="lead">When the first test build is ready, testers get the install guide and a benchmark job. You'll be credited in the published results if you want.</p>
+      <ul class="ticks"><li>One email when the test build ships</li><li>No coin, no presale, no payouts</li><li>Reply "stop" anytime to be removed</li></ul>
+    </div>
+    <form class="form" name="gpu-testers" method="POST" action="/thanks" data-netlify="true" netlify-honeypot="bot-field">
+      <input type="hidden" name="form-name" value="gpu-testers">
+      <p class="hide"><label>Don't fill this out: <input type="text" name="bot-field" tabindex="-1" autocomplete="off"></label></p>
+      <label>Name or handle<input name="handle" type="text" maxlength="60" required autocomplete="nickname"></label>
+      <label>Email<input name="email" type="email" required autocomplete="email"></label>
+      <div class="row2">
+        <label>GPU model(s)<input name="gpus" type="text" maxlength="120" placeholder="e.g. 2× RX 470" required></label>
+        <label>VRAM per card<select name="vram"><option value="">Not sure</option><option>2 GB</option><option>4 GB</option><option>6 GB</option><option>8 GB</option><option>10–12 GB</option><option>16 GB+</option></select></label>
+      </div>
+      <label>Operating system<select name="os"><option>Ubuntu / Debian</option><option>Other Linux</option><option>Windows</option><option>macOS</option></select></label>
+      <label>Hardware check output (optional)<textarea name="report" id="reportfield" rows="5" maxlength="12000" placeholder="Paste step 2 output, or attach the browser report from step 1"></textarea></label>
+      <label class="consent"><input type="checkbox" name="understands" value="yes" required> I understand this is an unpaid test. No coin, reward, or payout is offered.</label>
+      <button class="btn alt" type="submit">Join the crew</button>
+      <p class="fine" style="margin:0">Stored with Netlify Forms and used only to contact you about this project. Ask anytime and we'll delete it.</p>
+    </form>
+  </div>
+</section>
+
+<section id="faq" style="padding-top:0">
+  <div class="wrap">
+    <h2>Straight answers.</h2>
+    <div class="faq">
+      <details><summary>Do testers earn $BNH?</summary><p>No. $BNH doesn't exist yet, and testing isn't paid. When mining opens, it's planned as a fair launch where anyone can mine.</p></details>
+      <details><summary>What will run on my machine?</summary><p>Nothing yet. The first test build will be open source, so you can read every line before installing. Downloads will be signed with published checksums.</p></details>
+      <details><summary>Why test before there's a coin?</summary><p>Because a "GPU-friendly" coin that old GPUs can't actually run is a scam waiting to happen. We publish what works and what breaks.</p></details>
+      <details><summary>What does the browser check collect?</summary><p>Nothing leaves your browser unless you paste or attach the report into the form.</p></details>
+      <details><summary>Someone DMed me offering early $BNH or a miner download.</summary><p>That's a scam. We never DM first and never ask for a recovery phrase. Only trust links on boatsnhoes.meme and the GitHub repo.</p></details>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p class="footlinks"><a href="/">Home</a><a href="https://github.com/turnflockoff/Boatsnhoes.meme">GitHub</a><a href="https://github.com/turnflockoff/Boatsnhoes.meme/blob/main/docs/ROADMAP.md">Build roadmap</a></p>
+    <p>Draft project. Not an investment, and nothing here is financial advice.</p>
+  </div>
+</footer>
+<script src="/assets/contribute.js" defer></script>
+</body>
+</html>

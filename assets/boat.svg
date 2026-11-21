@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" role="img" aria-label="A boat with a garden-hoe mast, a $BNH sail, a GPU-chip jib, and GPU-fan portholes">
+  <!-- hoe mast -->
+  <rect x="196" y="40" width="10" height="170" rx="5" fill="#8a4b1f" stroke="#14146b" stroke-width="5"/>
+  <path d="M201 40 h58 q10 0 10 10 v26 h-20 v-14 h-48z" fill="#c9ccd6" stroke="#14146b" stroke-width="5" stroke-linejoin="round"/>
+  <!-- main sail -->
+  <path d="M190 62 L190 190 L96 190 Z" fill="#ff4f81" stroke="#14146b" stroke-width="5" stroke-linejoin="round"/>
+  <text x="160" y="176" font-family="Bagel Fat One, Archivo Black, Impact, sans-serif" font-size="21" fill="#fff" text-anchor="middle" transform="rotate(-9 160 176)">$BNH</text>
+  <!-- GPU-chip jib -->
+  <path d="M212 92 L212 190 L292 190 Z" fill="#1f1fe0" stroke="#14146b" stroke-width="5" stroke-linejoin="round"/>
+  <rect x="222" y="150" width="26" height="26" rx="4" fill="#ffc933" stroke="#14146b" stroke-width="4"/>
+  <rect x="230" y="158" width="10" height="10" rx="2" fill="#14146b"/>
+  <path d="M228 144v6M235 144v6M242 144v6M228 176v6M235 176v6M242 176v6M248 157h6M248 164h6M248 171h6" stroke="#ffc933" stroke-width="3" stroke-linecap="round"/>
+  <!-- flag -->
+  <path d="M201 40 l-4 -22 l34 10z" fill="#1f1fe0" stroke="#14146b" stroke-width="4" stroke-linejoin="round"/>
+  <!-- hull with GPU-fan portholes -->
+  <path d="M50 205 H350 Q335 270 270 270 H130 Q65 270 50 205Z" fill="#ffc933" stroke="#14146b" stroke-width="6" stroke-linejoin="round"/>
+  <path d="M62 222 H338" stroke="#14146b" stroke-width="3" opacity=".25"/>
+  <circle cx="120" cy="240" r="15" fill="#fff1d9" stroke="#14146b" stroke-width="5"/><path d="M120 240 q8.2 -2.2 12.0 5.2" fill="none" stroke="#14146b" stroke-width="3.2" stroke-linecap="round" transform="rotate(0 120 240)"/><path d="M120 240 q8.2 -2.2 12.0 5.2" fill="none" stroke="#14146b" stroke-width="3.2" stroke-linecap="round" transform="rotate(90 120 240)"/><path d="M120 240 q8.2 -2.2 12.0 5.2" fill="none" stroke="#14146b" stroke-width="3.2" stroke-linecap="round" transform="rotate(180 120 240)"/><path d="M120 240 q8.2 -2.2 12.0 5.2" fill="none" stroke="#14146b" stroke-width="3.2" stroke-linecap="round" transform="rotate(270 120 240)"/><circle cx="120" cy="240" r="3.5" fill="#14146b"/><circle cx="200" cy="240" r="15" fill="#fff1d9" stroke="#14146b" stroke-width="5"/><path d="M200 240 q8.2 -2.2 12.0 5.2" fill="none" stroke="#14146b" stroke-width="3.2" stroke-linecap="round" transform="rotate(0 200 240)"/><path d="M200 240 q8.2 -2.2 12.0 5.2" fill="none" stroke="#14146b" stroke-width="3.2" stroke-linecap="round" transform="rotate(90 200 240)"/><path d="M200 240 q8.2 -2.2 12.0 5.2" fill="none" stroke="#14146b" stroke-width="3.2" stroke-linecap="round" transform="rotate(180 200 240)"/><path d="M200 240 q8.2 -2.2 12.0 5.2" fill="none" stroke="#14146b" stroke-width="3.2" stroke-linecap="round" transform="rotate(270 200 240)"/><circle cx="200" cy="240" r="3.5" fill="#14146b"/><circle cx="280" cy="240" r="15" fill="#fff1d9" stroke="#14146b" stroke-width="5"/><path d="M280 240 q8.2 -2.2 12.0 5.2" fill="none" stroke="#14146b" stroke-width="3.2" stroke-linecap="round" transform="rotate(0 280 240)"/><path d="M280 240 q8.2 -2.2 12.0 5.2" fill="none" stroke="#14146b" stroke-width="3.2" stroke-linecap="round" transform="rotate(90 280 240)"/><path d="M280 240 q8.2 -2.2 12.0 5.2" fill="none" stroke="#14146b" stroke-width="3.2" stroke-linecap="round" transform="rotate(180 280 240)"/><path d="M280 240 q8.2 -2.2 12.0 5.2" fill="none" stroke="#14146b" stroke-width="3.2" stroke-linecap="round" transform="rotate(270 280 240)"/><circle cx="280" cy="240" r="3.5" fill="#14146b"/>
+</svg>

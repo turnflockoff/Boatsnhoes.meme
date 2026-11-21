@@ -6,7 +6,7 @@
 
 ## Project website
 
-A responsive static landing page is available at [`index.html`](index.html). The complete milestone checklist is in [`docs/ROADMAP.md`](docs/ROADMAP.md). Deploy the repository root as a static site (for example, with Netlify; see `netlify.toml`). A public deployment URL is not claimed until one is configured and verified.
+The site merges the $BNH meme-coin brand with this repo's GPU-compute work. Pages: [`index.html`](index.html) (home), [`contribute.html`](contribute.html) (GPU check + tester sign-up via Netlify Forms), `thanks.html`, `404.html`. Graphics live in [`assets/`](assets/); security headers in [`_headers`](_headers). The coin/casino plan, decisions and to-dos are in [`docs/plan/`](docs/plan/README.md). The complete milestone checklist is in [`docs/ROADMAP.md`](docs/ROADMAP.md). Deploy the repository root as a static site (for example, with Netlify; see `netlify.toml`). A public deployment URL is not claimed until one is configured and verified.
 
 ## Current prototype direction
 
