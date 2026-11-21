@@ -1,164 +1,82 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Boats n Hoes ($BNH) — the meme coin you can actually mine</title>
-<meta name="description" content="Boats n Hoes ($BNH): a draft proof-of-work meme coin built for regular GPUs and CPUs. Step one: prove the hardware. Join the GPU tester list.">
-<meta name="theme-color" content="#fff1d9">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#090705">
+<meta name="description" content="Boats N Hoes is an experimental open-source project exploring useful AI compute on older AMD GPUs.">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
-<link rel="canonical" href="https://boatsnhoes.meme/">
 <meta property="og:type" content="website">
-<meta property="og:url" content="https://boatsnhoes.meme/">
-<meta property="og:title" content="Boats n Hoes ($BNH)">
-<meta property="og:description" content="The meme coin you can actually mine. GPUs, CPUs, and one very confident boat.">
-<meta property="og:image" content="https://boatsnhoes.meme/assets/og-image.png">
+<meta property="og:title" content="BOATS N HOES — Useful Compute, No Bullshit">
+<meta property="og:description" content="An open-source experiment in useful AI compute, starting with two AMD Radeon RX 470 GPUs.">
+<meta property="og:image" content="https://boatsnhoes.meme/assets/og-home.png">
 <meta property="og:image:width" content="1200"><meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="A cartoon boat with a garden-hoe mast and GPU-fan portholes next to the words Boats N Hoes">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:image" content="https://boatsnhoes.meme/assets/og-image.png">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Bagel+Fat+One&family=Space+Grotesk:wght@400;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/assets/site.css">
+<meta name="twitter:image" content="https://boatsnhoes.meme/assets/og-home.png">
+
+<title>BOATS N HOES — AI Compute for the People</title>
+<style>
+:root{--bg:#080706;--panel:#0d0d0d;--ink:#f4f1ed;--muted:#aaa29b;--line:#292421;--acid:#ff9c22;--orange:#ff4d32;--max:1240px}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:#090705;color:var(--ink);font:15px/1.6 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}a{color:inherit}button{font:inherit}.wrap{width:min(var(--max),calc(100% - 44px));margin:auto}
+.top{position:absolute;top:0;left:0;right:0;z-index:5;background:linear-gradient(180deg,#090705ef,transparent)}.nav{height:82px;display:flex;align-items:center;justify-content:space-between;gap:24px}.brand{display:flex;align-items:center;gap:11px;text-decoration:none;font-weight:800;letter-spacing:-.03em;font-size:15px}.mark{width:34px;height:34px;display:grid;place-items:center;color:#ff9c22;font-size:24px;font-weight:950}.links{display:flex;gap:25px;align-items:center}.links a{text-decoration:none;color:#b6aea7;font-size:12px}.links a:hover{color:#fff}.navcta,.btn{display:inline-flex;align-items:center;justify-content:center;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:750;font-size:13px;border:0;background:linear-gradient(115deg,#ffb21e,#ff493e);color:#fff;box-shadow:0 6px 25px #ff62252b;transition:.2s}.navcta:hover,.btn:hover{transform:translateY(-2px);filter:brightness(1.08)}.btn.secondary{background:#141211;border:1px solid #39302a;color:#eee;box-shadow:none}.menu{display:none;background:#171311;border:1px solid #39302a;color:#eee;border-radius:7px;padding:8px 11px}
+.hero{position:relative;isolation:isolate;min-height:720px;padding:160px 0 34px;display:flex;flex-direction:column;align-items:center;text-align:center;overflow:hidden}.hero:before{content:"";position:absolute;z-index:-2;inset:0 0 120px;background:radial-gradient(ellipse at 50% 43%,#17100a 0%,#080706 43%,transparent 73%),radial-gradient(ellipse at 0% 10%,#7c310d55,transparent 31%),radial-gradient(ellipse at 100% 18%,#5b260d40,transparent 28%)}.hero:after{content:"";position:absolute;z-index:-1;width:min(920px,100vw);aspect-ratio:1;border:1px solid #342b25;border-radius:50%;top:35px;left:50%;transform:translateX(-50%);box-shadow:0 0 0 43px #29221e,0 0 0 87px #25201d,0 0 0 131px #211c19,0 0 0 175px #1e1a17;pointer-events:none}
+.hero-copy{position:relative;z-index:2;max-width:700px}.eyebrow{color:#ff9b22;font:750 10px/1.4 ui-monospace,monospace;letter-spacing:.22em;text-transform:uppercase;display:inline-flex;align-items:center;gap:10px}.dot{width:7px;height:7px;border-radius:50%;background:#ff593a;box-shadow:0 0 14px #ff593a}h1{font-size:clamp(48px,6.4vw,76px);line-height:1.04;letter-spacing:-.065em;margin:24px 0 18px;font-weight:850}h1 span{color:#ff9d26}.lede{max-width:590px;margin:0 auto;color:#aaa39d;font-size:16px;line-height:1.7}.actions{display:flex;justify-content:center;flex-wrap:wrap;gap:12px;margin-top:26px}.note{color:#827b74;font-size:11px;margin-top:14px}
+.orbit-stage{position:relative;width:min(900px,100%);height:300px;margin:4px auto 0;z-index:1}.orbit-node{position:absolute;width:66px;height:66px;border-radius:50%;border:1px solid #39312b;background:linear-gradient(145deg,#211b17,#0d0c0b);display:grid;place-items:center;color:#ff9a22;box-shadow:0 8px 28px #0009;font-size:25px}.orbit-node:after{content:"";position:absolute;inset:7px;border:1px solid #302720;border-radius:50%}.orbit-node.n1{left:8%;top:12%}.orbit-node.n2{right:10%;top:13%}.orbit-node.n3{left:28%;top:54%}.orbit-node.n4{right:25%;top:47%}.orbit-node.n5{left:16%;bottom:2%}.orbit-node.n6{right:15%;bottom:0}.orbit-node.n7{left:49%;bottom:-12%;transform:translateX(-50%)}.orbit-node span{position:relative;z-index:1}.orbit-node.core{width:76px;height:76px;left:50%;top:42%;transform:translate(-50%,-50%);background:linear-gradient(145deg,#3a2110,#16100c);color:#ffb12c;font-size:30px}
+.feature-row{position:relative;z-index:3;width:100%;display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:-8px}.feature{min-height:200px;padding:25px 23px 22px;border:1px solid #262321;border-radius:13px;background:linear-gradient(145deg,#101010,#090909);box-shadow:0 18px 45px #0008;text-align:center}.feature-icon{width:46px;height:46px;margin:0 auto 15px;border:1px solid #51463c;border-radius:50%;display:grid;place-items:center;color:#ff9d28;font-size:19px;background:#171310}.feature h3{font-size:18px;margin:0 0 9px;letter-spacing:-.025em}.feature p{max-width:310px;margin:0 auto;color:#9c9690;font-size:12px;line-height:1.65}
+.section{padding:82px 0;border-top:1px solid #211d19;background:#090807}.section-head{display:flex;justify-content:space-between;align-items:end;gap:30px;margin-bottom:34px}.kicker{color:#ff9a27;font:800 10px ui-monospace,monospace;letter-spacing:.2em;text-transform:uppercase}h2{font-size:clamp(32px,4vw,48px);line-height:1.05;letter-spacing:-.055em;margin:10px 0 0}.section-head p{max-width:430px;color:var(--muted);margin:0}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.card{background:linear-gradient(145deg,#151210,#0d0c0b);border:1px solid #2d2722;border-radius:10px;padding:24px}.num{font:12px ui-monospace,monospace;color:#ff9d27}.card h3{font-size:19px;margin:17px 0 8px}.card p{color:var(--muted);font-size:14px;margin:0}.architecture{display:grid;grid-template-columns:1fr 1fr;gap:18px}.stack{display:grid;gap:9px}.layer{display:flex;align-items:center;gap:15px;padding:17px 19px;border:1px solid #302822;background:#110f0d;border-radius:8px}.layer b{font-size:14px}.layer small{display:block;color:var(--muted);font-size:12px}.layer .symbol{color:#ff9d27;font:18px ui-monospace,monospace;width:28px}.down{text-align:center;color:#a65a24;font:14px ui-monospace,monospace}.aside{padding:26px;border:1px solid #57351e;border-radius:10px;background:linear-gradient(145deg,#21150d,#100d0b)}.aside h3{margin:0 0 10px;font-size:21px}.aside p{color:var(--muted);font-size:14px}.pill{display:inline-block;border:1px solid #78451f;color:#ffad45;border-radius:100px;padding:5px 10px;font:10px ui-monospace,monospace;letter-spacing:.1em;text-transform:uppercase}.statusgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.stat{padding:19px;border:1px solid #302822;background:#100e0c;border-radius:8px}.stat strong{display:block;font-size:25px;letter-spacing:-.04em}.stat span{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em}.roadmap{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}.step{display:flex;gap:15px;padding:20px;border:1px solid #302822;border-radius:8px;background:#100e0c}.step .n{font:800 13px ui-monospace,monospace;color:#ff9d27}.step h3{font-size:16px;margin:0 0 5px}.step p{font-size:13px;color:var(--muted);margin:0}.warning{border-left:3px solid #ff633a;padding:18px 20px;background:#21140f;color:#d6c5bb;font-size:13px;margin-top:22px}.warning b{color:#ffad8e}.cta{padding:58px;border-radius:12px;background:linear-gradient(115deg,#ffad22,#ff5039);color:#160d08;display:flex;justify-content:space-between;align-items:center;gap:30px}.cta h2{max-width:620px}.cta p{max-width:500px;color:#482819}.cta .btn{background:#120e0b;color:#ffb34b;border-color:#120e0b;white-space:nowrap}footer{padding:32px 0;color:var(--muted);font-size:12px;background:#080706}.foot{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}.foot a{color:var(--ink);text-decoration:none}
+@media(max-width:800px){.orbit-node.n7{bottom:2%}.hero{min-height:0;padding:130px 0 35px}.orbit-stage{height:250px}.feature-row{grid-template-columns:1fr;max-width:520px;margin-top:0}.feature{min-height:0}.grid{grid-template-columns:1fr}.architecture{grid-template-columns:1fr}.statusgrid{grid-template-columns:repeat(2,1fr)}.section-head{display:block}.section-head p{margin-top:15px}.cta{padding:32px;display:block}.cta .btn{margin-top:12px}}
+@media(max-width:620px){.wrap{width:min(var(--max),calc(100% - 28px))}.links{display:none;position:absolute;top:72px;left:0;right:0;background:#090705;padding:18px 22px 24px;border-bottom:1px solid #302822;flex-direction:column;align-items:flex-start}.links.open{display:flex}.menu{display:block}.navcta{display:none}.hero{padding-top:116px}.lede{font-size:14px}.orbit-stage{height:210px;width:calc(100% + 16px);margin-left:-8px}.orbit-node{width:49px;height:49px;font-size:19px}.orbit-node.core{width:60px;height:60px}.orbit-node.n1{left:4%}.orbit-node.n2{right:4%}.orbit-node.n3{left:23%}.orbit-node.n4{right:20%}.orbit-node.n5{left:10%}.orbit-node.n6{right:9%}.feature-row{gap:10px}.roadmap{grid-template-columns:1fr}.section{padding:58px 0}.nav{height:70px}}
+</style>
 </head>
 <body>
-<a class="skip" href="#main">Skip to content</a>
-<header class="nav">
-  <a class="brand" href="/" aria-label="Boats n Hoes home"><img src="/assets/mark.svg" alt="" width="40" height="40">$BNH</a>
-  <button class="menu" id="menubtn" type="button" aria-expanded="false" aria-controls="navlinks">Menu</button>
-  <nav class="links" id="navlinks" aria-label="Main">
-    <a href="#mine">Mine demo</a><a href="#deal">The deal</a><a href="#status">Status</a><a href="#voyage">Voyage</a><a href="#faq">FAQ</a><a href="/contribute">Contribute a GPU</a>
-  </nav>
-</header>
-
-<main id="main">
-<section class="hero wrap" style="padding-top:10px;padding-bottom:0">
-  <span class="badge">Draft project · no coin exists yet</span>
-  <h1><span class="a">Boats</span> <span class="n">n</span> <span class="b">Hoes</span></h1>
-  <p class="tag">The meme coin you can actually mine. GPUs, CPUs, and one very confident boat.</p>
-  <div class="boat-stage">
-    <svg class="boat" viewBox="0 0 400 300" role="img" aria-label="A boat with a garden-hoe mast, a $BNH sail, a GPU-chip jib, and GPU-fan portholes">
-  <!-- hoe mast -->
-  <rect x="196" y="40" width="10" height="170" rx="5" fill="#8a4b1f" stroke="#14146b" stroke-width="5"/>
-  <path d="M201 40 h58 q10 0 10 10 v26 h-20 v-14 h-48z" fill="#c9ccd6" stroke="#14146b" stroke-width="5" stroke-linejoin="round"/>
-  <!-- main sail -->
-  <path d="M190 62 L190 190 L96 190 Z" fill="#ff4f81" stroke="#14146b" stroke-width="5" stroke-linejoin="round"/>
-  <text x="160" y="176" font-family="Bagel Fat One, Archivo Black, Impact, sans-serif" font-size="21" fill="#fff" text-anchor="middle" transform="rotate(-9 160 176)">$BNH</text>
-  <!-- GPU-chip jib -->
-  <path d="M212 92 L212 190 L292 190 Z" fill="#1f1fe0" stroke="#14146b" stroke-width="5" stroke-linejoin="round"/>
-  <rect x="222" y="150" width="26" height="26" rx="4" fill="#ffc933" stroke="#14146b" stroke-width="4"/>
-  <rect x="230" y="158" width="10" height="10" rx="2" fill="#14146b"/>
-  <path d="M228 144v6M235 144v6M242 144v6M228 176v6M235 176v6M242 176v6M248 157h6M248 164h6M248 171h6" stroke="#ffc933" stroke-width="3" stroke-linecap="round"/>
-  <!-- flag -->
-  <path d="M201 40 l-4 -22 l34 10z" fill="#1f1fe0" stroke="#14146b" stroke-width="4" stroke-linejoin="round"/>
-  <!-- hull with GPU-fan portholes -->
-  <path d="M50 205 H350 Q335 270 270 270 H130 Q65 270 50 205Z" fill="#ffc933" stroke="#14146b" stroke-width="6" stroke-linejoin="round"/>
-  <path d="M62 222 H338" stroke="#14146b" stroke-width="3" opacity=".25"/>
-  <circle cx="120" cy="240" r="15" fill="#fff1d9" stroke="#14146b" stroke-width="5"/><path d="M120 240 q8.2 -2.2 12.0 5.2" fill="none" stroke="#14146b" stroke-width="3.2" stroke-linecap="round" transform="rotate(0 120 240)"/><path d="M120 240 q8.2 -2.2 12.0 5.2" fill="none" stroke="#14146b" stroke-width="3.2" stroke-linecap="round" transform="rotate(90 120 240)"/><path d="M120 240 q8.2 -2.2 12.0 5.2" fill="none" stroke="#14146b" stroke-width="3.2" stroke-linecap="round" transform="rotate(180 120 240)"/><path d="M120 240 q8.2 -2.2 12.0 5.2" fill="none" stroke="#14146b" stroke-width="3.2" stroke-linecap="round" transform="rotate(270 120 240)"/><circle cx="120" cy="240" r="3.5" fill="#14146b"/><circle cx="200" cy="240" r="15" fill="#fff1d9" stroke="#14146b" stroke-width="5"/><path d="M200 240 q8.2 -2.2 12.0 5.2" fill="none" stroke="#14146b" stroke-width="3.2" stroke-linecap="round" transform="rotate(0 200 240)"/><path d="M200 240 q8.2 -2.2 12.0 5.2" fill="none" stroke="#14146b" stroke-width="3.2" stroke-linecap="round" transform="rotate(90 200 240)"/><path d="M200 240 q8.2 -2.2 12.0 5.2" fill="none" stroke="#14146b" stroke-width="3.2" stroke-linecap="round" transform="rotate(180 200 240)"/><path d="M200 240 q8.2 -2.2 12.0 5.2" fill="none" stroke="#14146b" stroke-width="3.2" stroke-linecap="round" transform="rotate(270 200 240)"/><circle cx="200" cy="240" r="3.5" fill="#14146b"/><circle cx="280" cy="240" r="15" fill="#fff1d9" stroke="#14146b" stroke-width="5"/><path d="M280 240 q8.2 -2.2 12.0 5.2" fill="none" stroke="#14146b" stroke-width="3.2" stroke-linecap="round" transform="rotate(0 280 240)"/><path d="M280 240 q8.2 -2.2 12.0 5.2" fill="none" stroke="#14146b" stroke-width="3.2" stroke-linecap="round" transform="rotate(90 280 240)"/><path d="M280 240 q8.2 -2.2 12.0 5.2" fill="none" stroke="#14146b" stroke-width="3.2" stroke-linecap="round" transform="rotate(180 280 240)"/><path d="M280 240 q8.2 -2.2 12.0 5.2" fill="none" stroke="#14146b" stroke-width="3.2" stroke-linecap="round" transform="rotate(270 280 240)"/><circle cx="280" cy="240" r="3.5" fill="#14146b"/>
-</svg>
-    <svg class="waves" viewBox="0 0 800 80" preserveAspectRatio="none" aria-hidden="true">
-      <path d="M0 40 Q50 0 100 40 T200 40 T300 40 T400 40 T500 40 T600 40 T700 40 T800 40 V80 H0Z" fill="#1f1fe0" stroke="#14146b" stroke-width="5"/>
-    </svg>
-  </div>
-  <div class="actions" style="margin:0 0 40px"><a class="btn" href="/contribute">Check your GPU</a><a class="btn alt" href="#voyage">See the plan</a></div>
+<header class="top"><div class="wrap nav">
+<a class="brand" href="#top" aria-label="Boats N Hoes home"><span class="mark">B</span><span>BOATS <span style="color:var(--acid)">N</span> HOES</span></a>
+<nav class="links" id="navlinks" aria-label="Main navigation"><a href="#mission">Mission</a><a href="#architecture">How it works</a><a href="#status">Status</a><a href="#roadmap">Roadmap</a><a href="/contribute">Contribute a GPU</a><a href="https://github.com/turnflockoff/Boatsnhoes.meme">Source code ↗</a></nav>
+<a class="navcta" href="https://github.com/turnflockoff/Boatsnhoes.meme">Explore the build ↗</a><button class="menu" id="menubtn" type="button" aria-label="Toggle navigation" aria-expanded="false">Menu</button>
+</div></header>
+<main id="top">
+<section class="wrap hero">
+<div class="hero-copy">
+<div class="eyebrow"><span class="dot"></span> OPEN COMPUTE EXPERIMENT · AMD GPU NETWORK</div>
+<h1>AI COMPUTE POWERED<br>BY <span>THE PEOPLE.</span></h1>
+<p class="lede">Putting overlooked GPUs to work. Boats N Hoes is an open-source experiment exploring useful AI compute, starting with two Radeon GPUs and a mission to make distributed computing practical, transparent, and verifiable.</p>
+<div class="actions"><a class="btn" href="#roadmap">Get Started ↗</a><a class="btn secondary" href="https://github.com/turnflockoff/Boatsnhoes.meme">Explore GitHub</a></div>
+<p class="note">EARLY-STAGE PROTOTYPE · HARDWARE VALIDATION IN PROGRESS</p>
+</div>
+<div class="orbit-stage" role="img" aria-label="Illustration of a distributed GPU compute network">
+<div class="orbit-node n1"><span>🔥</span></div><div class="orbit-node n2"><span>🔒</span></div><div class="orbit-node n3"><span>⬡</span></div><div class="orbit-node n4"><span>▰</span></div><div class="orbit-node n5"><span>🔥</span></div><div class="orbit-node n6"><span>🔥</span></div><div class="orbit-node n7"><span>▥</span></div><div class="orbit-node core"><span>✳</span></div>
+</div>
+<div class="feature-row">
+<article class="feature"><div class="feature-icon">◈</div><h3>Start Your AI Journey</h3><p>Explore practical AI workloads, model inference, and the tools behind an open compute experiment.</p></article>
+<article class="feature"><div class="feature-icon">✣</div><h3>Contribute Your GPUs</h3><p>Help test how accessible hardware can participate in coordinated compute jobs. Worker onboarding is on the roadmap. <a href="/contribute" style="color:#ff9d27">Check your GPU →</a></p></article>
+<article class="feature"><div class="feature-icon">▣</div><h3>Build in the Open</h3><p>Inspect the source, follow development, reproduce tests, and help us publish real performance results.</p></article>
+</div>
 </section>
-
-<div class="ticker" aria-hidden="true"><div>
-  $BNH ⛵ PROOF OF WORK ⛏️ MINE IT ⛵ GPUS + CPUS ⛵ NO PRESALE ⛵ $BNH ⛵ PROOF OF WORK ⛏️ MINE IT ⛵ GPUS + CPUS ⛵ NO PRESALE ⛵&nbsp;
-  $BNH ⛵ PROOF OF WORK ⛏️ MINE IT ⛵ GPUS + CPUS ⛵ NO PRESALE ⛵ $BNH ⛵ PROOF OF WORK ⛏️ MINE IT ⛵ GPUS + CPUS ⛵ NO PRESALE ⛵&nbsp;
-</div></div>
-
-<section class="mine" id="mine">
-  <div class="wrap">
-    <h2>Try mining. Right now.</h2>
-    <p>Tap the button. Every tap is a very real fake coin.</p>
-    <div class="count" id="count" aria-live="polite">0</div>
-    <button class="btn" id="hoe" type="button">Swing the hoe</button>
-    <p class="note">Demo only. No chain exists yet, so these coins are pretend. Want the real thing? <a href="/contribute" style="color:#ffc933">Get your rig tested →</a></p>
-  </div>
-</section>
-
-<section id="deal">
-  <div class="wrap">
-    <h2>What’s the deal?</h2>
-    <p class="lead">Boats n Hoes is a meme coin built to be mined, not just bought. Anyone with a GPU or a CPU gets a seat at the table. Before any chain exists, we're proving what regular graphics cards can really do, in the open.</p>
-    <div class="facts" style="margin-top:34px">
-      <div class="fact"><span class="tagline">Planned</span><h3>Mine it</h3><p>Proof of work with a memory-hungry algorithm that favors regular GPUs and CPUs over giant ASIC farms.</p></div>
-      <div class="fact"><span class="tagline">Planned · legal review first</span><h3>Spend it</h3><p>House currency for a Boats n Hoes game site with provably fair games, only where it's legal and licensed.</p></div>
-      <div class="fact"><span class="tagline">Draft numbers</span><h3>Scarce on purpose</h3><p>A hard supply cap near 100M and halvings every 3.5 years. Fair launch, no premine is the lean.</p></div>
-      <div class="fact"><span class="tagline">Happening now</span><h3>Prove the GPUs</h3><p>Two Radeon RX 470s on Ubuntu are the first test rig. We publish real temps, power, and speed, not hype.</p></div>
-      <div class="fact"><span class="tagline">Always</span><h3>Check the work</h3><p>Every line of code is public on GitHub. Reproduce our tests, break our assumptions, tell us.</p></div>
-      <div class="fact"><span class="tagline">Stay safe</span><h3>Nobody DMs first</h3><p>We'll never ask for your recovery phrase, and we never DM first. Miner downloads will be signed with published checksums.</p></div>
-    </div>
-  </div>
-</section>
-
-<section id="status" style="padding-top:0">
-  <div class="wrap">
-    <div class="kicker">Honest status · Nov 2026</div>
-    <h2>Where the boat is.</h2>
-    <div class="status">
-      <div class="stat done"><strong>✓ Bought</strong><span>boatsnhoes.meme</span></div>
-      <div class="stat"><strong>Drafted</strong><span>Tokenomics &amp; security plan</span></div>
-      <div class="stat wait"><strong>Testing</strong><span>2× RX 470 hardware</span></div>
-      <div class="stat wait"><strong>Not live</strong><span>Chain, coin, miner, casino</span></div>
-    </div>
-    <div class="callout"><b>No $BNH exists yet.</b> There is no token, presale, airdrop, or live reward. If someone is selling $BNH right now, it is not us.</div>
-  </div>
-</section>
-
-<section id="voyage" style="padding-top:0">
-  <div class="wrap">
-    <h2>The voyage</h2>
-    <ol class="road">
-      <li class="now"><span><b>Prove the GPUs <small>Now</small></b>Validate the RX 470 rig, run test jobs on each card, and open the <a href="/contribute">GPU tester list</a>.</span></li>
-      <li><span><b>Pick the chain</b>Proof of work built for GPU and CPU miners, with a custom algorithm to keep ASICs out.</span></li>
-      <li><span><b>Lock the tokenomics</b>Supply cap, block reward, halving schedule. Draft: 60-second blocks.</span></li>
-      <li><span><b>Public testnet</b>Miners test the algorithm and try to break it. Code audit and bug bounty.</span></li>
-      <li><span><b>Mainnet fair launch</b>Signed miner downloads and an onboarding guide. No premine is the lean.</span></li>
-      <li><span><b>Game site opens</b>Only after licensing and legal review, with age checks and self-exclusion tools.</span></li>
-    </ol>
-  </div>
-</section>
-
-<section id="faq" style="padding-top:0">
-  <div class="wrap">
-    <h2>FAQ</h2>
-    <div class="faq">
-      <details><summary>Can I buy $BNH?</summary><p>No. It doesn't exist yet. When it launches, the plan is a fair launch you mine, not a presale.</p></details>
-      <details><summary>Is this Ethereum mining?</summary><p>No. Ethereum switched to proof of stake in 2022 and can't be mined. $BNH is planned as its own proof-of-work chain.</p></details>
-      <details><summary>Why the hoe?</summary><p>It's a garden hoe. You mine with it. The boat holds the hoe. Please don't overthink the boat.</p></details>
-      <details><summary>How can I help right now?</summary><p>Run the 10-second GPU check and the Linux commands on the <a href="/contribute">contributor page</a>, then join the tester list.</p></details>
-      <details><summary>Is it an investment?</summary><p>No. It's a meme coin project in draft. Nothing here is financial advice, and there are no promised returns, payouts, or prices.</p></details>
-    </div>
-  </div>
-</section>
+<section class="section" id="mission"><div class="wrap"><div class="section-head"><div><div class="kicker">01 / The mission</div><h2>Compute first.<br>Hype never.</h2></div><p>Boats N Hoes explores a small, auditable path from local GPU inference to coordinated useful-compute jobs. We publish what works, what breaks, and what remains unproven.</p></div>
+<div class="grid"><article class="card"><span class="num">01 — HARDWARE</span><h3>Start with what we have</h3><p>Reported setup: Ryzen 5 5600X, 32 GB RAM, Ubuntu, and two RX 470 cards with different VRAM capacities.</p></article><article class="card"><span class="num">02 — USEFUL WORK</span><h3>Run real inference</h3><p>Test a small Vulkan-capable workload on each GPU independently. Measure memory, speed, temperature, and output quality.</p></article><article class="card"><span class="num">03 — VERIFICATION</span><h3>Check before counting</h3><p>Validate task outputs, reject duplicate jobs, and independently audit selected results before recording accepted work.</p></article></div></div></section>
+<section class="section" id="architecture"><div class="wrap"><div class="section-head"><div><div class="kicker">02 / Proposed architecture</div><h2>A simple stack.<br>One layer at a time.</h2></div><p>This is the intended design, not a claim that a distributed network is already running.</p></div>
+<div class="architecture"><div class="stack">
+<div class="layer"><span class="symbol">01</span><div><b>Job coordinator</b><small>Creates and assigns bounded tasks</small></div></div><div class="down">↓</div>
+<div class="layer"><span class="symbol">02</span><div><b>GPU worker agents</b><small>Independent RX 470 workers</small></div></div><div class="down">↓</div>
+<div class="layer"><span class="symbol">03</span><div><b>Verification engine</b><small>Task checks, duplicate detection, audits</small></div></div><div class="down">↓</div>
+<div class="layer"><span class="symbol">04</span><div><b>Off-chain reward ledger</b><small>Prototype accounting only</small></div></div></div>
+<aside class="aside"><span class="pill">Design boundary</span><h3>Ethereum is not the compute engine.</h3><p>The prototype may explore an ERC-20 settlement layer later, after useful work and verification are demonstrated. Ethereum Mainnet uses proof-of-stake; this project is not Ethereum mining and does not secure Ethereum consensus.</p><p>Worker receipts and hashes are accounting evidence, not cryptographic proof that a GPU executed a model.</p></aside></div></div></section>
+<section class="section" id="status"><div class="wrap"><div class="section-head"><div><div class="kicker">03 / Project status</div><h2>Transparent by default.</h2></div><p>No fake live counters. These labels reflect the current documented state of the repository.</p></div>
+<div class="statusgrid"><div class="stat"><strong>Design</strong><span>Documented</span></div><div class="stat"><strong>2 GPUs</strong><span>Reported hardware</span></div><div class="stat"><strong>Pending</strong><span>Vulkan validation</span></div><div class="stat"><strong>Not live</strong><span>Network / rewards</span></div></div>
+<div class="warning"><b>Important:</b> No working miner, validated GPU inference stack, live compute network, deployed token, audited contract, live rewards, or guaranteed payouts are claimed. The RX 470 cards and their software compatibility still need to be tested on the actual machine.</div></div></section>
+<section class="section" id="roadmap"><div class="wrap"><div class="section-head"><div><div class="kicker">04 / Build sequence</div><h2>From bench test<br>to proof of concept.</h2></div><p>Milestones are deliberately ordered to prove the hardware before adding infrastructure or token complexity.</p></div>
+<div class="roadmap">
+<div class="step"><span class="n">M0</span><div><h3>Inventory the machine</h3><p>Capture Ubuntu, kernel, PCI IDs, drivers, Vulkan devices, and permissions.</p></div></div>
+<div class="step"><span class="n">M1</span><div><h3>Run inference per GPU</h3><p>Complete a small Vulkan smoke test on each card and record benchmark results.</p></div></div>
+<div class="step"><span class="n">M2</span><div><h3>Build the worker agent</h3><p>Registration, signed job retrieval, execution, receipts, retries, and logs.</p></div></div>
+<div class="step"><span class="n">M3</span><div><h3>Build coordinator + verifier</h3><p>Job lifecycle, deterministic checks, duplicate rejection, audit sampling, SQLite ledger.</p></div></div>
+<div class="step"><span class="n">M4</span><div><h3>Prove two-worker operation</h3><p>Run both GPUs independently; test restarts, malformed jobs, and throughput.</p></div></div>
+<div class="step"><span class="n">M5</span><div><h3>Simulate rewards</h3><p>Calculate hypothetical credits from accepted work. No real payouts.</p></div></div>
+<div class="step"><span class="n">M6</span><div><h3>Consider testnet settlement</h3><p>Only after the compute prototype works: capped test token, tests, and independent review.</p></div></div>
+<div class="step"><span class="n">NEXT</span><div><h3>Contribute and reproduce</h3><p>Read the hardware notes, run the checks, and publish reproducible results.</p></div></div>
+</div></div></section>
+<section class="wrap" style="padding:20px 0 82px"><div class="cta"><div><div class="kicker" style="color:#48552c">OPEN SOURCE / EARLY STAGE</div><h2>Don't take the word for it. Check the work.</h2><p>Read the prototype notes, inspect the code, and help turn the first hardware test into a reproducible result.</p></div><a class="btn" href="https://github.com/turnflockoff/Boatsnhoes.meme">Go to GitHub ↗</a></div></section>
 </main>
-
-<footer>
-  <div class="wrap">
-    <p><b>boatsnhoes.meme</b></p>
-    <p class="footlinks"><a href="/contribute">Contribute a GPU</a><a href="https://github.com/turnflockoff/Boatsnhoes.meme">GitHub</a><a href="https://github.com/turnflockoff/Boatsnhoes.meme/blob/main/docs/ROADMAP.md">Build roadmap</a><a href="https://github.com/turnflockoff/Boatsnhoes.meme/blob/main/docs/AI-USEFUL-COMPUTE-PROTOTYPE.md">Technical notes</a></p>
-    <p>Draft project. Chain, supply, and launch details are not final and can change. This is a meme coin project, not an investment, and nothing here is financial advice. Gambling is age-restricted and may be illegal where you live. Only play where it is legal, and only with money you can afford to lose.</p>
-  </div>
-</footer>
-
-<script>
-(function(){
-  var m=document.getElementById('menubtn'),l=document.getElementById('navlinks');
-  m.addEventListener('click',function(){m.setAttribute('aria-expanded',String(l.classList.toggle('open')))});
-  l.querySelectorAll('a').forEach(function(a){a.addEventListener('click',function(){l.classList.remove('open');m.setAttribute('aria-expanded','false')})});
-  var n=0,c=document.getElementById('count'),b=document.getElementById('hoe');
-  b.addEventListener('click',function(){
-    n++; c.textContent=n.toLocaleString();
-    var p=document.createElement('div'); p.className='pop'; p.textContent='+1 $BNH';
-    var r=b.getBoundingClientRect();
-    p.style.left=(r.left+r.width/2-40+(Math.random()*60-30))+'px'; p.style.top=(r.top-10)+'px';
-    document.body.appendChild(p); setTimeout(function(){p.remove()},800);
-  });
-})();
-</script>
-</body>
-</html>
+<footer><div class="wrap foot"><span>© 2026 BOATS N HOES · Experimental open-source project</span><span><a href="https://github.com/turnflockoff/Boatsnhoes.meme">GitHub</a> &nbsp;·&nbsp; <a href="/contribute">Contribute a GPU</a> &nbsp;·&nbsp; <a href="https://github.com/turnflockoff/Boatsnhoes.meme/blob/main/docs/AI-USEFUL-COMPUTE-PROTOTYPE.md">Technical notes</a> &nbsp;·&nbsp; <a href="https://github.com/turnflockoff/Boatsnhoes.meme/blob/main/docs/ROADMAP.md">Full roadmap</a></span></div></footer>
+<script>const b=document.getElementById('menubtn'),n=document.getElementById('navlinks');b.addEventListener('click',()=>{const open=n.classList.toggle('open');b.setAttribute('aria-expanded',String(open))});n.querySelectorAll('a').forEach(a=>a.addEventListener('click',()=>{n.classList.remove('open');b.setAttribute('aria-expanded','false')}));</script>
+</body></html>

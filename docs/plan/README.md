@@ -33,6 +33,7 @@ A viral meme coin, BOATS N HOES ($BNH): proof-of-work mined on consumer GPUs/CPU
 | 8 | Merge meme-coin brand with GitHub GPU-compute track; hardware validation comes first | Final | 2026-11-21 |
 | 9 | Hosting: Netlify (project `boatsnhoes-dik6`), deploys from GitHub. **Supersedes** Cloudflare Pages plan: owner chose Netlify on 2026-11-21. `_headers` works unchanged on Netlify | Final | 2026-11-21 |
 | 10 | Waitlist backend: Netlify Forms (`gpu-testers` form on /contribute) | Final | 2026-11-21 |
+| 12 | Homepage: orange/black orbital design (GitHub version A), copy kept as written. Supersedes the merged pink homepage; other pages keep decision 11 styling for now | Final | 2026-11-21 |
 | 11 | Brand art: hoe-mast boat, $BNH sail, GPU-chip jib, GPU-fan portholes; palette cream/navy/pink/blue/sun | Final | 2026-11-21 |
 
 ## Open Questions
@@ -69,6 +70,7 @@ Threats and defenses. Status: planned unless marked done.
 - Not built: Litepaper, Casino coming-soon, Meme Lab, AgentWiki.
 
 ## Changelog
+- **0.5.1 (2026-11-21):** Homepage switched to the orange/black orbital version you picked. Footer links fixed, GPU-page link and orange share image added, mobile icon overlap fixed.
 - **0.5 (2026-11-21):** Merged meme-coin plan with GitHub GPU-compute repo. Built Home v2, Contribute a GPU page with Netlify Forms waitlist, custom graphics (logo, boat art, favicon, 1200x630 share card). Desktop/mobile tested (390/768/1440 px, real fonts, `_headers` CSP applied). Hosting switched to Netlify (supersedes Cloudflare Pages). Netlify project created; GitHub link pending.
 - **0.4 (2026-11-20):** Added Security section, DDoS plan, Stay Safe page, `_headers`, USER_TODO.md. Logged 60s blocks, 3.5-year halving, ~100M cap, AgentWiki idea. Confirmed ETC is still proof of work.
 - **0.1 (2026-11-19):** Project created. Corrected the Ethereum PoW assumption.
