@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Boats n Hoes ($BNH)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bagel+Fat+One&family=Space+Grotesk:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#fff1d9; --text:#14146b; --blue:#1f1fe0; --pink:#ff4f81; --sun:#ffc933; --card:#ffffff; --line:#14146b;
+  --display:"Bagel Fat One","Arial Rounded MT Bold",Impact,sans-serif;
+  --body:"Space Grotesk",system-ui,-apple-system,"Segoe UI",sans-serif;
+  box-sizing:border-box; padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){--bg:#0d0d5c;--text:#fff1d9;--card:#17178a;--line:#fff1d9}
+}
+:root[data-theme="dark"]{--bg:#0d0d5c;--text:#fff1d9;--card:#17178a;--line:#fff1d9}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*,*::before,*::after{box-sizing:inherit}
+body{margin:0;background:var(--bg);color:var(--text);font-family:var(--body);font-size:18px;line-height:1.55;overflow-x:hidden}
+.wrap{max-width:1000px;margin:0 auto;padding:0 20px}
+h1,h2,h3{font-family:var(--display);font-weight:400;margin:0;line-height:.95}
+a{color:inherit}
+:focus-visible{outline:4px solid var(--pink);outline-offset:3px}
+
+/* hero */
+.hero{text-align:center;padding:36px 0 0;position:relative}
+.hero h1{font-size:clamp(64px,19vw,190px);letter-spacing:-.02em;text-transform:uppercase}
+.hero h1 span{display:block}
+.hero h1 .a{color:var(--blue);transform:rotate(-3deg)}
+.hero h1 .n{color:var(--sun);font-size:.5em;transform:rotate(4deg);-webkit-text-stroke:3px var(--text);paint-order:stroke fill;margin:-.05em 0}
+.hero h1 .b{color:var(--pink);transform:rotate(-2deg)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .hero h1 .a{color:#7f8cff}}
+:root[data-theme="dark"] .hero h1 .a{color:#7f8cff}
+.tag{font-size:clamp(18px,3.4vw,26px);font-weight:600;max-width:34ch;margin:22px auto 0}
+.boat-stage{position:relative;margin:10px auto 0;max-width:560px}
+.boat{width:100%;height:auto;display:block;animation:bob 3.6s ease-in-out infinite;transform-origin:50% 80%}
+@keyframes bob{0%,100%{transform:translateY(0) rotate(-2.5deg)}50%{transform:translateY(-12px) rotate(2.5deg)}}
+.waves{display:block;width:100%;height:80px;margin-top:-34px;position:relative}
+
+/* ticker */
+.ticker{background:var(--pink);color:#fff;border-block:4px solid var(--line);overflow:hidden;white-space:nowrap;font-family:var(--display);font-size:26px;padding:10px 0}
+.ticker div{display:inline-block;animation:slide 22s linear infinite}
+@keyframes slide{to{transform:translateX(-50%)}}
+
+section{padding:72px 0}
+h2{font-size:clamp(40px,8vw,72px);margin-bottom:28px}
+.lead{max-width:60ch}
+
+/* mine game */
+.mine{background:var(--blue);color:#fff1d9;border-block:4px solid var(--line);text-align:center}
+.mine h2{color:var(--sun)}
+.count{font-family:var(--display);font-size:clamp(56px,16vw,130px);line-height:1;margin:14px 0}
+.hoe-btn{font:inherit;font-family:var(--display);font-size:28px;background:var(--sun);color:#14146b;border:4px solid #14146b;border-radius:999px;padding:16px 34px;cursor:pointer;box-shadow:0 7px 0 #14146b;transition:transform .08s,box-shadow .08s;touch-action:manipulation}
+.hoe-btn:active{transform:translateY(6px);box-shadow:0 1px 0 #14146b}
+.note{font-size:15px;opacity:.85;margin-top:18px}
+.pop{position:fixed;pointer-events:none;font-family:var(--display);color:var(--sun);font-size:28px;animation:pop .8s ease-out forwards;z-index:5}
+@keyframes pop{to{transform:translateY(-70px) scale(1.4);opacity:0}}
+
+/* facts */
+.facts{display:grid;gap:20px;grid-template-columns:repeat(auto-fit,minmax(250px,1fr))}
+.fact{background:var(--card);border:4px solid var(--line);border-radius:28px;padding:26px;box-shadow:8px 8px 0 var(--pink)}
+.fact:nth-child(2){box-shadow:8px 8px 0 var(--sun);transform:rotate(1deg)}
+.fact:nth-child(3){box-shadow:8px 8px 0 var(--blue);transform:rotate(-1deg)}
+.fact h3{font-size:32px;margin-bottom:10px}
+.fact p{margin:0}
+
+/* roadmap */
+.road{list-style:none;margin:0;padding:0;counter-reset:s;display:grid;gap:14px}
+.road li{counter-increment:s;display:flex;gap:16px;align-items:center;background:var(--card);border:3px solid var(--line);border-radius:20px;padding:14px 18px}
+.road li::before{content:counter(s);flex:none;display:grid;place-items:center;width:44px;height:44px;border-radius:50%;background:var(--sun);color:#14146b;font-family:var(--display);font-size:22px}
+.road b{display:block}
+
+footer{padding:40px 0 60px;font-size:14px;border-top:4px solid var(--line)}
+footer p{max-width:70ch}
+@media (prefers-reduced-motion:reduce){.boat,.ticker div{animation:none}.pop{animation-duration:.01s}}
+</style>
+</head>
+<body>
+
+<header class="hero wrap">
+  <h1 aria-label="Boats n Hoes"><span class="a">Boats</span><span class="n">n</span><span class="b">Hoes</span></h1>
+  <p class="tag">The meme coin you can actually mine. GPUs, CPUs, and one very confident boat.</p>
+  <div class="boat-stage">
+    <svg class="boat" viewBox="0 0 400 300" role="img" aria-label="A boat with a garden hoe for a mast">
+      <!-- hoe mast -->
+      <rect x="196" y="40" width="10" height="170" rx="5" fill="#8a4b1f" stroke="#14146b" stroke-width="5"/>
+      <path d="M201 40 h58 q10 0 10 10 v26 h-20 v-14 h-48z" fill="#c9ccd6" stroke="#14146b" stroke-width="5" stroke-linejoin="round"/>
+      <!-- sail -->
+      <path d="M190 62 L190 190 L100 190 Z" fill="#ff4f81" stroke="#14146b" stroke-width="5" stroke-linejoin="round"/>
+      <text x="153" y="170" font-family="Bagel Fat One,Impact,sans-serif" font-size="30" fill="#fff" text-anchor="middle" transform="rotate(-9 153 170)">$BNH</text>
+      <!-- hull -->
+      <path d="M50 205 H350 Q335 270 270 270 H130 Q65 270 50 205Z" fill="#ffc933" stroke="#14146b" stroke-width="6" stroke-linejoin="round"/>
+      <circle cx="120" cy="238" r="12" fill="#fff1d9" stroke="#14146b" stroke-width="5"/>
+      <circle cx="200" cy="238" r="12" fill="#fff1d9" stroke="#14146b" stroke-width="5"/>
+      <circle cx="280" cy="238" r="12" fill="#fff1d9" stroke="#14146b" stroke-width="5"/>
+      <!-- flag -->
+      <path d="M201 40 l-4 -22 l34 10z" fill="#1f1fe0" stroke="#14146b" stroke-width="4" stroke-linejoin="round"/>
+    </svg>
+    <svg class="waves" viewBox="0 0 800 80" preserveAspectRatio="none" aria-hidden="true">
+      <path d="M0 40 Q50 0 100 40 T200 40 T300 40 T400 40 T500 40 T600 40 T700 40 T800 40 V80 H0Z" fill="#1f1fe0" stroke="#14146b" stroke-width="5"/>
+    </svg>
+  </div>
+</header>
+
+<div class="ticker" aria-hidden="true"><div>
+  $BNH ⛵ PROOF OF WORK ⛏️ MINE IT ⛵ $BNH ⛵ PROOF OF WORK ⛏️ MINE IT ⛵ $BNH ⛵ PROOF OF WORK ⛏️ MINE IT ⛵ $BNH ⛵ PROOF OF WORK ⛏️ MINE IT ⛵&nbsp;
+  $BNH ⛵ PROOF OF WORK ⛏️ MINE IT ⛵ $BNH ⛵ PROOF OF WORK ⛏️ MINE IT ⛵ $BNH ⛵ PROOF OF WORK ⛏️ MINE IT ⛵ $BNH ⛵ PROOF OF WORK ⛏️ MINE IT ⛵&nbsp;
+</div></div>
+
+<section class="mine">
+  <div class="wrap">
+    <h2>Try mining. Right now.</h2>
+    <p>Tap the button. Every tap is a very real fake coin.</p>
+    <div class="count" id="count" aria-live="polite">0</div>
+    <button class="hoe-btn" id="hoe">Swing the hoe</button>
+    <p class="note">Demo only. Real mining starts when the chain does.</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>What’s the deal?</h2>
+    <p class="lead">Boats n Hoes is a meme coin built to be mined, not just bought. Anyone with a GPU or a CPU gets a seat at the table, and the coin will be the house currency on our gambling site.</p>
+    <div class="facts" style="margin-top:34px">
+      <div class="fact"><h3>Mine it</h3><p>Proof of work with a memory-hungry algorithm that favors regular GPUs and CPUs over giant ASIC farms.</p></div>
+      <div class="fact"><h3>Spend it</h3><p>Use $BNH as currency on the Boats n Hoes gambling site, with provably fair games.</p></div>
+      <div class="fact"><h3>Scarce on purpose</h3><p>A hard supply cap and Bitcoin-style halvings. Final numbers are being locked in.</p></div>
+    </div>
+  </div>
+</section>
+
+<section style="padding-top:0">
+  <div class="wrap">
+    <h2>The voyage</h2>
+    <ol class="road">
+      <li><span><b>Pick the chain</b>EVM-compatible proof of work, built for GPU and CPU miners.</span></li>
+      <li><span><b>Lock the tokenomics</b>Supply cap, block reward, halving schedule.</span></li>
+      <li><span><b>Public testnet</b>Miners test the algorithm and try to break it.</span></li>
+      <li><span><b>Mainnet launch</b>Fair launch and miner onboarding guide.</span></li>
+      <li><span><b>Casino opens</b>Deposits and withdrawals in $BNH.</span></li>
+    </ol>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p><b>boatsnhoes.meme</b></p>
+    <p>Draft project. Chain, supply, and launch details are not final and can change. This is a meme coin, not an investment, and nothing here is financial advice. Gambling is age-restricted and may be illegal where you live. Only play where it is legal, and only with money you can afford to lose.</p>
+  </div>
+</footer>
+
+<script>
+(function(){
+  var n=0,c=document.getElementById('count'),b=document.getElementById('hoe');
+  b.addEventListener('click',function(e){
+    n++; c.textContent=n.toLocaleString();
+    var p=document.createElement('div'); p.className='pop'; p.textContent='+1 $BNH';
+    var r=b.getBoundingClientRect();
+    p.style.left=(r.left+r.width/2-40+(Math.random()*60-30))+'px'; p.style.top=(r.top-10)+'px';
+    document.body.appendChild(p); setTimeout(function(){p.remove()},800);
+  });
+})();
+</script>
+</body>
+</html>

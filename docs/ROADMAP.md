@@ -2,7 +2,8 @@
 
 **Current phase:** hardware validation / early prototype  
 **Source:** [GitHub repository](https://github.com/turnflockoff/Boatsnhoes.meme)  
-**Public landing page:** `index.html` (static site; deployment is a separate step)
+**Public landing page:** `index.html` + `contribute.html` (Netlify project `boatsnhoes-dik6`; GitHub link pending)
+**Merged plan (meme coin + compute):** [`docs/plan/`](plan/README.md)
 
 This roadmap separates implemented repository assets from proposed work. A checked box means there is evidence in the repository or a reproducible test result—not merely an idea.
 
@@ -10,11 +11,11 @@ This roadmap separates implemented repository assets from proposed work. A check
 - [x] Publish an honest project README with current scope and non-claims.
 - [x] Add a responsive static landing page.
 - [x] Publish this master roadmap.
-- [ ] Review page on desktop and mobile browsers.
+- [x] Review page on desktop and mobile browsers (Playwright, 390/768/1440 px).
 - [x] Add SVG project favicon and social-sharing metadata.
-- [ ] Add custom social preview artwork.
+- [x] Add custom social preview artwork (`assets/og-image.png`).
 - [ ] Configure production domain and HTTPS.
-- [ ] Add a simple privacy-respecting contact / contribution path.
+- [x] Add a simple privacy-respecting contact / contribution path (`/contribute`, Netlify Forms).
 
 ## Track B — Hardware validation (highest priority)
 - [ ] Record Ubuntu release: `lsb_release -a`.
