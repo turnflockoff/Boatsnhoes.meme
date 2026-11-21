@@ -4,6 +4,10 @@
 
 > Status: early design and hardware-validation stage. No working miner, verified compute network, deployed token, audited contract, live rewards, or guaranteed payouts are claimed.
 
+## Project website
+
+A responsive static landing page is available at [`index.html`](index.html). The complete milestone checklist is in [`docs/ROADMAP.md`](docs/ROADMAP.md). Deploy the repository root as a static site (for example, with Netlify; see `netlify.toml`). A public deployment URL is not claimed until one is configured and verified.
+
 ## Current prototype direction
 
 The current research direction is an **RX 470 AI useful-compute prototype**: use available AMD GPUs to perform small AI inference tasks, validate results using task-specific checks and independent audits, and record accepted work in an off-chain ledger. Ethereum may be used later for ERC-20 reward settlement; it is not the compute network or mining algorithm.
