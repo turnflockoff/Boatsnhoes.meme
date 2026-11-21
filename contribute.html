@@ -25,7 +25,7 @@
 <a class="skip" href="#main">Skip to content</a>
 <header class="nav">
   <a class="brand" href="/" aria-label="Boats n Hoes home"><img src="/assets/mark.svg" alt="" width="40" height="40">$BNH</a>
-  <button class="menu" id="menubtn" aria-expanded="false" aria-controls="navlinks">Menu</button>
+  <button class="menu" id="menubtn" type="button" aria-expanded="false" aria-controls="navlinks">Menu</button>
   <nav class="links" id="navlinks" aria-label="Main">
     <a href="#check">1 · Browser check</a><a href="#linux">2 · Linux check</a><a href="#join">3 · Join testers</a><a href="#faq">FAQ</a><a href="/">← Home</a>
   </nav>
@@ -88,7 +88,7 @@
     </div>
     <form class="form" name="gpu-testers" method="POST" action="/thanks" data-netlify="true" netlify-honeypot="bot-field">
       <input type="hidden" name="form-name" value="gpu-testers">
-      <p class="hide"><label>Don't fill this out: <input name="bot-field" tabindex="-1" autocomplete="off"></label></p>
+      <p class="hide"><label>Don't fill this out: <input type="text" name="bot-field" tabindex="-1" autocomplete="off"></label></p>
       <label>Name or handle<input name="handle" type="text" maxlength="60" required autocomplete="nickname"></label>
       <label>Email<input name="email" type="email" required autocomplete="email"></label>
       <div class="row2">

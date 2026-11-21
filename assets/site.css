@@ -1,10 +1,10 @@
 /* Boats N Hoes — shared theme (merged v1 $BNH brand + compute project) */
 :root{
-  --bg:#fff1d9;--text:#14146b;--blue:#1f1fe0;--pink:#ff4f81;--sun:#ffc933;--card:#ffffff;--line:#14146b;--muted:#4a4a8a;
+  --bg:#fff1d9;--text:#14146b;--blue:#1f1fe0;--pink:#ff4f81;--sun:#ffc933;--card:#ffffff;--line:#14146b;--muted:#4a4a8a;--pink-ink:#c2185b;--green:#13804a;
   --display:"Bagel Fat One","Arial Rounded MT Bold",Impact,sans-serif;
   --body:"Space Grotesk",system-ui,-apple-system,"Segoe UI",sans-serif;
 }
-@media (prefers-color-scheme:dark){:root{--bg:#0d0d5c;--text:#fff1d9;--card:#17178a;--line:#fff1d9;--muted:#c9c4f0}}
+@media (prefers-color-scheme:dark){:root{--bg:#0d0d5c;--text:#fff1d9;--card:#17178a;--line:#fff1d9;--muted:#c9c4f0;--pink-ink:#ff8fb0;--green:#5ee39a}}
 *,*::before,*::after{box-sizing:border-box}
 html{scroll-behavior:smooth}
 body{margin:0;background:var(--bg);color:var(--text);font-family:var(--body);font-size:18px;line-height:1.55;overflow-x:hidden;padding-bottom:env(safe-area-inset-bottom,0)}
@@ -27,7 +27,7 @@ img,svg{max-width:100%}
 /* buttons */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;font:inherit;font-family:var(--display);font-size:22px;text-decoration:none;background:var(--sun);color:#14146b;border:4px solid #14146b;border-radius:999px;padding:12px 28px;cursor:pointer;box-shadow:0 6px 0 #14146b;transition:transform .08s,box-shadow .08s;touch-action:manipulation}
 .btn:active{transform:translateY(5px);box-shadow:0 1px 0 #14146b}
-.btn.alt{background:var(--pink);color:#fff}
+.btn.alt{background:var(--pink);color:#14146b}
 .btn.ghost{background:var(--card);color:var(--text);border-color:var(--line);box-shadow:0 6px 0 var(--line);font-family:var(--body);font-weight:700;font-size:16px}
 .btn[disabled]{opacity:.6;cursor:progress}
 .actions{display:flex;flex-wrap:wrap;justify-content:center;gap:14px;margin-top:26px}
@@ -55,13 +55,13 @@ img,svg{max-width:100%}
 section{padding:72px 0}
 h2{font-size:clamp(40px,8vw,72px);margin-bottom:24px}
 .lead{max-width:60ch}
-.kicker{font-weight:700;letter-spacing:.12em;text-transform:uppercase;font-size:14px;color:var(--pink);margin-bottom:10px}
+.kicker{font-weight:700;letter-spacing:.12em;text-transform:uppercase;font-size:14px;color:var(--pink-ink);margin-bottom:10px}
 
 /* mine demo */
 .mine{background:var(--blue);color:#fff1d9;border-block:4px solid var(--line);text-align:center}
 .mine h2{color:var(--sun)}
 .count{font-family:var(--display);font-size:clamp(56px,16vw,130px);line-height:1;margin:14px 0}
-.note{font-size:15px;opacity:.85;margin-top:18px}
+.note{font-size:15px;margin-top:18px}
 .pop{position:fixed;pointer-events:none;font-family:var(--display);color:var(--sun);font-size:28px;animation:pop .8s ease-out forwards;z-index:5}
 @keyframes pop{to{transform:translateY(-70px) scale(1.4);opacity:0}}
 
@@ -72,14 +72,14 @@ h2{font-size:clamp(40px,8vw,72px);margin-bottom:24px}
 .fact:nth-child(3n+3){box-shadow:8px 8px 0 var(--blue);transform:rotate(-1deg)}
 .fact h3{font-size:30px;margin-bottom:10px}
 .fact p{margin:0}
-.fact .tagline{display:block;font-weight:700;font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:var(--pink);margin-bottom:8px}
+.fact .tagline{display:block;font-weight:700;font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:var(--pink-ink);margin-bottom:8px}
 
 /* status */
 .status{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:10px}
 .stat{background:var(--card);border:3px solid var(--line);border-radius:20px;padding:16px 18px}
 .stat strong{display:block;font-family:var(--display);font-size:28px;font-weight:400}
 .stat span{font-size:14px;font-weight:600;color:var(--muted)}
-.stat.done strong{color:#1a9a55}.stat.wait strong{color:var(--pink)}
+.stat.done strong{color:var(--green)}.stat.wait strong{color:var(--pink-ink)}
 @media(max-width:760px){.status{grid-template-columns:repeat(2,1fr)}}
 .callout{border:4px solid var(--line);border-radius:22px;background:var(--sun);color:#14146b;padding:18px 22px;margin-top:24px;font-size:16px}
 
@@ -89,7 +89,7 @@ h2{font-size:clamp(40px,8vw,72px);margin-bottom:24px}
 .road li::before{content:counter(s);flex:none;display:grid;place-items:center;width:44px;height:44px;border-radius:50%;background:var(--sun);color:#14146b;font-family:var(--display);font-size:22px}
 .road li.now::before{background:var(--pink);color:#fff}
 .road b{display:block}
-.road small{display:inline-block;margin-left:6px;font-weight:700;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--pink)}
+.road small{display:inline-block;margin-left:6px;font-weight:700;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--pink-ink)}
 
 /* faq */
 .faq{display:grid;gap:12px}
@@ -135,3 +135,5 @@ footer{padding:40px 0 60px;font-size:14px;border-top:4px solid var(--line)}
 footer p{max-width:70ch}
 .footlinks{display:flex;flex-wrap:wrap;gap:16px;font-weight:700}
 @media (prefers-reduced-motion:reduce){.boat,.ticker div{animation:none}.pop{animation-duration:.01s}html{scroll-behavior:auto}}
+/* Navy outline on big pink headline words: keeps brand pink, adds legibility on cream */
+.hero h1 .b,.c-hero h1 span{-webkit-text-stroke:3px #14146b;paint-order:stroke fill}
