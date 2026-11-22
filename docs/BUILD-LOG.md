@@ -34,3 +34,16 @@
 2. **Idempotent means safe to repeat.** If a rig's Wi-Fi drops and it sends the same result twice, it's paid once and gets the same receipt both times.
 3. **Signatures protect the miners.** Each job is signed with a secret key. A worker checks the signature before running anything, so a fake coordinator can't make your GPU run its code.
 4. **Test the bad days, not just the good one.** Most of the new tests cover failures: crashes, timeouts, cheaters, duplicates, and 20 workers grabbing jobs at the same moment.
+
+## 2026-11-22: GPU worker Phase 2 (job types + pinned AI models)
+
+**Shipped**
+- A plug-in system for job types. Each type knows how to check its input, run, and grade its results.
+- The first real AI job type, `llm:generate`: short text generation on a small model through llama.cpp, the software that will drive the RX 470s.
+- A model registry that records where each model comes from, its license and its size. A model can't be used until its exact fingerprint (sha256) is pinned from a real download. Nothing downloads unless you add `--yes-download`.
+- 32 tests pass, up from 13. An hourly scheduled build session now continues this work and saves to your drafts branch.
+
+**What you learned**
+1. **A fingerprint (hash) proves a file is exactly the one you meant.** Change one byte of a 400 MB model and the sha256 changes completely, so a worker can detect a swapped or corrupted model before running it.
+2. **Not every check proves the same thing.** For the SHA job the coordinator redoes the math, which is exact proof. For AI text it can only check that the answer looks right, which is "schema-only". Real proof needs another rig to re-run the same job and compare (Phase 4).
+3. **Licenses matter before launch.** The model we picked (Qwen2.5-0.5B) is Apache-2.0, which allows commercial use. That's recorded right next to it in the registry.

@@ -23,7 +23,9 @@
 
 ## Phase 3: Chain and Mining
 - [x] GPU worker backend, Phase 1: durable SQLite job queue, leases and retries, signed manifests verified by workers, audit log (13 tests passing)
-- [ ] GPU worker Phase 2: real AI inference task interface; Phase 3: RX 470 hardware validation
+- [x] GPU worker Phase 2: pluggable task executors, `llm:generate` task, pinned model registry with licenses, opt-in download (32 tests)
+- [ ] Pin the first model (download on the GPU box, then `model_registry pin`)
+- [ ] GPU worker Phase 3: RX 470 hardware validation; Phase 4: re-run audits
 - [ ] Memory-hard, ASIC-resistant algorithm (pseudocode, reference miner)
 - [ ] Per-block difficulty adjustment
 - [ ] Testnet, then public testnet

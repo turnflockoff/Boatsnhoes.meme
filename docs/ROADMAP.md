@@ -31,7 +31,7 @@ This roadmap separates implemented repository assets from proposed work. A check
 
 ## Track C — Single-node inference
 - [ ] Select a small, reproducible workload that fits the 4 GB card.
-- [ ] Pin model files and cryptographic hashes.
+- [ ] Pin model files and cryptographic hashes. *(Registry and `pin` tool built; first model listed but not yet downloaded or pinned.)*
 - [ ] Build or obtain a compatible llama.cpp Vulkan runtime (only after hardware validation).
 - [ ] Run inference separately on each GPU.
 - [ ] Record model, quantization, prompt/input, output, timing, and resource use.
@@ -49,7 +49,7 @@ This roadmap separates implemented repository assets from proposed work. A check
 ## Track E — Verification and accounting
 - [ ] Implement schema, input hash, model hash, and job-version checks.
 - [x] Reject duplicate and expired submissions.
-- [ ] Define deterministic task checks and tolerances for nondeterministic tasks.
+- [ ] Define deterministic task checks and tolerances for nondeterministic tasks. *(Verdict confidence levels in place: `exact` vs `schema-only`.)*
 - [ ] Add independent re-run / spot-audit flow.
 - [x] Record queued, leased, accepted, rejected, expired and failed results with an audit trail (disputes not yet).
 - [x] Keep rewards simulated and off-chain.

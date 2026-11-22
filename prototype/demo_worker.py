@@ -13,10 +13,15 @@ from typing import Any
 import httpx
 from dotenv import load_dotenv
 
+from app import tasks
 from app.security import sha256_text, verify_manifest
 
 SIGNED_FIELDS = ("job_id", "task_type", "payload", "payload_hash", "reward_points", "expires_at")
-SUPPORTED_TASKS = {"demo:sha256"}
+
+
+def supported_tasks() -> set[str]:
+    """Task types this machine can actually run right now."""
+    return {name for name, ex in tasks.EXECUTORS.items() if ex.available()[0]}
 
 
 class ManifestError(Exception):
@@ -32,15 +37,14 @@ def check_manifest(job: dict[str, Any], secret: str, now: float | None = None) -
         raise ManifestError("bad signature: job was not signed by this coordinator")
     if sha256_text(job["payload"]) != job["payload_hash"]:
         raise ManifestError("payload hash mismatch")
-    if job["task_type"] not in SUPPORTED_TASKS:
+    if job["task_type"] not in supported_tasks():
         raise ManifestError(f"unsupported task type {job['task_type']!r}")
     if int(job["expires_at"]) <= int(now if now is not None else time.time()):
         raise ManifestError("job already expired")
 
 
 def execute(job: dict[str, Any]) -> str:
-    # Deterministic CPU fixture task. Real GPU inference adapters come in Phase 2/3.
-    return sha256_text(job["payload"])
+    return tasks.get(job["task_type"]).execute(job["payload"])
 
 
 def main() -> None:
@@ -56,7 +60,7 @@ def main() -> None:
 
     with httpx.Client(base_url=args.url, timeout=10) as client:
         client.post("/v1/workers/register", json={
-            "worker_id": args.worker_id, "capabilities": sorted(SUPPORTED_TASKS)
+            "worker_id": args.worker_id, "capabilities": sorted(supported_tasks())
         }).raise_for_status()
         while True:
             response = client.post("/v1/jobs/next", params={"worker_id": args.worker_id})

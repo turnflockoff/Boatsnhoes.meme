@@ -50,7 +50,9 @@ CREATE TABLE IF NOT EXISTS submissions (
     worker_id TEXT NOT NULL,
     result_hash TEXT NOT NULL,
     reward_points INTEGER NOT NULL,
-    accepted_at INTEGER NOT NULL
+    accepted_at INTEGER NOT NULL,
+    verifier_method TEXT NOT NULL DEFAULT 'deterministic-recompute',
+    confidence TEXT NOT NULL DEFAULT 'exact'
 );
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,6 +72,14 @@ class Ledger:
         with closing(self._connect()) as db:
             db.execute("PRAGMA journal_mode=WAL")
             db.executescript(SCHEMA)
+            cols = {r["name"] for r in db.execute("PRAGMA table_info(submissions)").fetchall()}
+            # Migrate Phase 1 databases in place.
+            if "verifier_method" not in cols:
+                db.execute("ALTER TABLE submissions ADD COLUMN verifier_method TEXT NOT NULL "
+                           "DEFAULT 'deterministic-recompute'")
+            if "confidence" not in cols:
+                db.execute("ALTER TABLE submissions ADD COLUMN confidence TEXT NOT NULL "
+                           "DEFAULT 'exact'")
 
     # -- plumbing -----------------------------------------------------------------
     def _connect(self) -> sqlite3.Connection:
@@ -180,7 +190,8 @@ class Ledger:
                               (job_id,)).fetchone()[0])
 
     def submit(self, job_id: str, worker_id: str, result_hash: str, correct: bool,
-               now: int) -> tuple[str, dict[str, Any] | None]:
+               now: int, verifier_method: str = "deterministic-recompute",
+               confidence: str = "exact") -> tuple[str, dict[str, Any] | None]:
         """Record a result. Returns (outcome, job) where outcome is one of:
         accepted, duplicate (same accepted result again), conflict, unknown, not_leased,
         wrong_worker, expired, rejected_requeued, rejected_final."""
@@ -214,11 +225,14 @@ class Ledger:
                 job["status"] = "rejected" if final else "queued"
                 return ("rejected_final" if final else "rejected_requeued"), job
             db.execute(
-                "INSERT INTO submissions(job_id, worker_id, result_hash, reward_points, accepted_at) "
-                "VALUES(?,?,?,?,?)", (job_id, worker_id, result_hash, job["reward_points"], now))
+                "INSERT INTO submissions(job_id, worker_id, result_hash, reward_points, accepted_at, "
+                "verifier_method, confidence) VALUES(?,?,?,?,?,?,?)",
+                (job_id, worker_id, result_hash, job["reward_points"], now, verifier_method,
+                 confidence))
             db.execute("UPDATE jobs SET status='accepted', lease_expires_at=NULL, updated_at=? "
                        "WHERE job_id=?", (now, job_id))
-            self._event(db, now, "result_accepted", job_id, worker_id)
+            self._event(db, now, "result_accepted", job_id, worker_id,
+                        f"{verifier_method}/{confidence}")
             job["status"] = "accepted"
             return "accepted", job
 
@@ -226,8 +240,8 @@ class Ledger:
     def entries(self) -> list[dict[str, Any]]:
         with closing(self._connect()) as db:
             rows = db.execute(
-                "SELECT job_id, worker_id, result_hash, reward_points, accepted_at "
-                "FROM submissions ORDER BY accepted_at, job_id"
+                "SELECT job_id, worker_id, result_hash, reward_points, accepted_at, "
+                "verifier_method, confidence FROM submissions ORDER BY accepted_at, job_id"
             ).fetchall()
             return [dict(row) for row in rows]
 

@@ -9,6 +9,7 @@ from typing import Any, Callable
 from fastapi import FastAPI, HTTPException
 
 from .config import Settings, get_settings
+from . import tasks
 from .ledger import Ledger
 from .models import JobCreate, JobEnvelope, ResultSubmission, WorkerRegistration
 from .security import sha256_text, sign_manifest
@@ -24,7 +25,7 @@ def create_app(settings: Settings | None = None,
     """Build the coordinator. `clock` is injectable so tests can move time forward."""
     settings = settings or get_settings()
     ledger = Ledger(settings.database_path)
-    app = FastAPI(title="Boats N Hoes Useful-Compute MVP", version="0.2.0")
+    app = FastAPI(title="Boats N Hoes Useful-Compute MVP", version="0.3.0")
     app.state.ledger = ledger
     app.state.settings = settings
 
@@ -46,6 +47,10 @@ def create_app(settings: Settings | None = None,
 
     @app.post("/v1/jobs", response_model=JobEnvelope)
     def create_job(body: JobCreate) -> JobEnvelope:
+        try:
+            tasks.get(body.task_type).validate(body.payload)
+        except tasks.TaskError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         t = now()
         fields = {
             "job_id": str(uuid.uuid4()),
@@ -87,11 +92,13 @@ def create_app(settings: Settings | None = None,
         job = ledger.get_job(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="unknown job")
-        # Deterministic demo verifier: the task is SHA256(payload). This checks the
-        # answer, not that the assigned GPU executed the task.
-        correct = body.result == sha256_text(job["payload"])
-        outcome, job = ledger.submit(job_id, body.worker_id, body.result_hash, correct, t)
-        receipt = {"job_id": job_id, "verification": "deterministic-answer-check",
+        # Task-specific verifier. It checks the answer (or only its shape, for tasks
+        # marked "schema-only"); it never proves which hardware executed the task.
+        verdict = tasks.get(job["task_type"]).verify(job["payload"], body.result)
+        outcome, job = ledger.submit(job_id, body.worker_id, body.result_hash, verdict.ok, t,
+                                     verdict.method, verdict.confidence)
+        receipt = {"job_id": job_id, "verification": verdict.method,
+                   "confidence": verdict.confidence, "needs_audit": verdict.needs_audit,
                    "execution_proof": False}
         if outcome in ("accepted", "duplicate"):
             return receipt | {"status": "accepted", "reward_points": job["reward_points"],
