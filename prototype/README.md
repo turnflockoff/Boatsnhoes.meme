@@ -338,6 +338,17 @@ It reads `/etc/os-release`, runs only `uname -r`, `lspci -nnk` and `vulkaninfo -
 
 Hostname, username and UUIDs are replaced with `[host]`, `[user]` and `[uuid]`. It refuses to overwrite an existing file and always says `"proves_inference": false`. Missing tools are reported with the Ubuntu package name; installing them, changing drivers or groups is the owner's decision. Tested only against format samples of command output (`tests/test_hw_inventory.py`), not on the real rig yet. Then test each GPU separately.
 
+### GPU sensor readings (temperature, power, VRAM, clocks)
+
+While a test runs on one card, record how hot, busy and full it gets:
+
+    python -m app.gpu_sensors                                   # one snapshot of every card
+    python -m app.gpu_sensors --card card1 --samples 120 --interval 1 --out gpu1-run1-sensors.json
+
+It only **reads** the files the amdgpu driver already publishes under `/sys/class/drm/cardN/device` (`mem_info_vram_*`, `gpu_busy_percent`, `pp_dpm_sclk`/`pp_dpm_mclk`) and its `hwmon` folder (`temp1_*`, `power1_average` or `power1_input`, `power1_cap`, `fan1_input`). No commands, no sudo, never writes to sysfs (no overclocking, fan or power changes), never reads serial numbers or `unique_id`. Connectors (`card0-DP-1`) and render nodes are skipped.
+
+The JSON report (`bnh-gpu-sensors/1`) has each card's PCI slot (to match the inventory), driver, last reading and, over the watch, the lowest/highest/average temperature, power, VRAM use, busy %, core/memory clock and fan speed. Findings warn when a card reaches 85 °C or comes within 5 °C of the driver's own critical limit, when VRAM use reaches 90 %, when a card isn't on `amdgpu`, when a sensor is missing, or when a card stayed at 0 % busy for the whole watch (so the test didn't run there). `--samples` is 1-3600 and `--interval` 0.5-60 s; Ctrl-C keeps the readings taken so far (`stopped_early`). It refuses to overwrite a file, checked before the watch starts, and always says `"proves_inference": false`. Tested only against fake sysfs trees laid out like amdgpu's (`tests/test_gpu_sensors.py`), not on the real rig yet. Throughput and errors still come from the test itself.
+
 ## Not implemented
 
 - Real model inference on RX 470.

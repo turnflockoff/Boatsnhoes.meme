@@ -27,7 +27,7 @@ This roadmap separates implemented repository assets from proposed work. A check
 - [ ] Confirm both RX 470 cards enumerate independently.
 - [ ] Run a minimal Vulkan compute smoke test on GPU 0.
 - [ ] Repeat on GPU 1.
-- [ ] Record temperature, power, VRAM use, throughput, errors, and stability.
+- [ ] Record temperature, power, VRAM use, throughput, errors, and stability. *(Sensor tool built: `python -m app.gpu_sensors` reads temperature, power, VRAM, busy %, clocks and fan from amdgpu sysfs, read-only, with min/max/avg over a watch. 47 tests against fake sysfs trees; never run on the real rig. Throughput and errors come from the test itself.)*
 - [ ] Document exact working driver/runtime versions.
 
 ## Track C — Single-node inference
