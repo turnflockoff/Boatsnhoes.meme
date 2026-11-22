@@ -56,7 +56,7 @@ This roadmap separates implemented repository assets from proposed work. A check
 - [x] Keep rewards simulated and off-chain.
 - [x] Export an auditable reward report. *(`python -m app.rewards report` / `verify`: versioned scoring `sim-points-v1`, per-worker points, sha256 over canonical JSON. Simulated points only.)*
 - [x] Document collusion, fabrication, and verification limitations. *([`VERIFICATION-THREAT-MODEL.md`](VERIFICATION-THREAT-MODEL.md))*
-- [ ] Assign audits to a randomly chosen eligible worker instead of first-come.
+- [x] Assign audits to a randomly chosen eligible worker instead of first-come. *(Audits and tie-breakers go to one random active, eligible worker; re-assigned if it doesn't show up. 9 tests, software only.)*
 
 ## Track F — Two-GPU proof of concept
 - [ ] Run two independent workers on the two RX 470 cards.

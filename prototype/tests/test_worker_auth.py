@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import random
 import sqlite3
 import time
 from pathlib import Path
@@ -19,7 +18,7 @@ from app import model_registry, workers
 from app.config import Settings
 from app.ledger import Ledger
 from app.main import create_app
-from tests.auth_helpers import OP, OPERATOR
+from tests.auth_helpers import OP, OPERATOR, FirstPickRng
 
 SECRET = "test-secret-that-is-long-enough-123"
 T0 = 1_800_000_000
@@ -42,7 +41,7 @@ def make(tmp_path: Path, audit_rate: float = 0.0, operator_token: str | None = O
     clock = Clock()
     settings = Settings(secret=SECRET, database_path=tmp_path / "db.sqlite3", lease_seconds=30,
                         max_attempts=2, audit_rate=audit_rate, operator_token=operator_token)
-    app = create_app(settings, clock=clock, rng=random.Random(1))
+    app = create_app(settings, clock=clock, rng=FirstPickRng(1))
     return TestClient(app), clock, app.state.ledger
 
 

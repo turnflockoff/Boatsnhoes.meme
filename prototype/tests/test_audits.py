@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import random
 import sqlite3
 from pathlib import Path
 
@@ -14,7 +13,7 @@ from app import model_registry, tasks
 from app.config import Settings
 from app.ledger import Ledger
 from app.main import create_app
-from tests.auth_helpers import WorkerClient, enroll
+from tests.auth_helpers import FirstPickRng, WorkerClient, enroll
 
 SECRET = "test-secret-that-is-long-enough-123"
 OPERATOR = "operator-token-that-is-long-enough-456"
@@ -51,7 +50,7 @@ def make(tmp_path: Path, audit_rate: float = 1.0, operator_token: str | None = O
     clock = Clock()
     settings = Settings(secret=SECRET, database_path=tmp_path / "db.sqlite3", lease_seconds=30,
                         max_attempts=2, audit_rate=audit_rate, operator_token=operator_token)
-    app = create_app(settings, clock=clock, rng=random.Random(1))
+    app = create_app(settings, clock=clock, rng=FirstPickRng(1))
     client = WorkerClient(app)
     for w in ("wk-a", "wk-b", "wk-c"):
         enroll(client, w)
@@ -325,7 +324,7 @@ def test_tiebreak_can_be_switched_off(pinned, tmp_path: Path) -> None:
     clock = Clock()
     settings = Settings(secret=SECRET, database_path=tmp_path / "db.sqlite3", lease_seconds=30,
                         max_attempts=2, audit_rate=1.0, operator_token=OPERATOR, tiebreak=False)
-    client = WorkerClient(create_app(settings, clock=clock, rng=random.Random(1)))
+    client = WorkerClient(create_app(settings, clock=clock, rng=FirstPickRng(1)))
     for w in ("wk-a", "wk-b", "wk-c"):
         enroll(client, w)
     make_dispute(client)

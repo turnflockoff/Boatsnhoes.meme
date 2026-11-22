@@ -19,7 +19,14 @@ Phase 4 verification. Every job has a `job_kind`:
     challenge  a hidden known-answer job created by the operator (`expected_result`)
     tiebreak   a hidden third run of a disputed job, excluded from both the original worker
                and the auditor; `audit_of` points at the original work job
-Workers see the same envelope for all four. Each accepted submission carries an
+Workers see the same envelope for all four.
+
+Auditor assignment (threat model #4). An audit or tie-breaker is not first-come: the
+coordinator hands it, as soon as it is queued, to one eligible worker chosen at random from
+the workers seen in the last `active_seconds` (`assigned_worker`). Only that worker can claim it, so polling faster
+does not win more audits. If the chosen worker doesn't claim it within `assign_seconds`, is
+revoked, or gives it back (lease timeout, rejected result), it is re-assigned at random,
+avoiding the previous pick when anyone else is eligible. Each accepted submission carries an
 `audit_status`:
     not-needed        the coordinator checked the answer exactly
     unaudited         unproven and not re-run (not sampled, or the re-run never happened)
@@ -33,6 +40,7 @@ Workers see the same envelope for all four. Each accepted submission carries an
 """
 from __future__ import annotations
 
+import random
 import sqlite3
 from contextlib import closing, contextmanager
 from pathlib import Path
@@ -56,6 +64,7 @@ CREATE TABLE IF NOT EXISTS workers (
     capabilities TEXT NOT NULL,
     registered_at INTEGER NOT NULL,
     key_hash TEXT,
+    last_seen_at INTEGER,
     owner TEXT,
     revoked_at INTEGER
 );
@@ -85,7 +94,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     updated_at INTEGER NOT NULL,
     job_kind TEXT NOT NULL DEFAULT 'work',
     audit_of TEXT,
-    expected_result TEXT
+    expected_result TEXT,
+    assigned_worker TEXT,
+    assigned_until INTEGER
 );
 CREATE TABLE IF NOT EXISTS job_exclusions (
     job_id TEXT NOT NULL REFERENCES jobs(job_id),
@@ -120,6 +131,7 @@ MIGRATIONS = {
         ("key_hash", "TEXT"),
         ("owner", "TEXT"),
         ("revoked_at", "INTEGER"),
+        ("last_seen_at", "INTEGER"),
     ),
     "submissions": (
         ("verifier_method", "TEXT NOT NULL DEFAULT 'deterministic-recompute'"),
@@ -131,13 +143,27 @@ MIGRATIONS = {
         ("job_kind", "TEXT NOT NULL DEFAULT 'work'"),
         ("audit_of", "TEXT"),
         ("expected_result", "TEXT"),
+        ("assigned_worker", "TEXT"),
+        ("assigned_until", "INTEGER"),
     ),
 }
 
 
+# Job kinds that go to a randomly chosen worker instead of whoever asks first.
+ASSIGNED_KINDS = ("audit", "tiebreak")
+
+
 class Ledger:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, rng: random.Random | None = None,
+                 active_seconds: int = 300, assign_seconds: int = 120):
+        """`rng` picks auditors; the default uses the OS's secure randomness so workers
+        can't predict who gets an audit. A worker counts as active for `active_seconds`
+        after it last asked for a job, sent a result, or enrolled. An assigned worker has
+        `assign_seconds` to claim its audit before someone else gets it."""
         self.path = Path(path)
+        self.rng = rng or random.SystemRandom()
+        self.active_seconds = active_seconds
+        self.assign_seconds = assign_seconds
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._connect()) as db:
             db.execute("PRAGMA journal_mode=WAL")
@@ -206,11 +232,12 @@ class Ledger:
             owner = code["owner"]
             if worker is None:
                 db.execute("INSERT INTO workers(worker_id, capabilities, registered_at, "
-                           "key_hash, owner) VALUES(?,?,?,?,?)",
-                           (worker_id, capabilities, now, key_hash, owner))
+                           "key_hash, owner, last_seen_at) VALUES(?,?,?,?,?,?)",
+                           (worker_id, capabilities, now, key_hash, owner, now))
             else:  # a keyless worker from an older (pre-auth) database
-                db.execute("UPDATE workers SET capabilities=?, key_hash=?, owner=? "
-                           "WHERE worker_id=?", (capabilities, key_hash, owner, worker_id))
+                db.execute("UPDATE workers SET capabilities=?, key_hash=?, owner=?, "
+                           "last_seen_at=? WHERE worker_id=?",
+                           (capabilities, key_hash, owner, now, worker_id))
             db.execute("UPDATE enrollments SET used_at=?, worker_id=? WHERE code_hash=?",
                        (now, worker_id, code_hash))
             self._event(db, now, "worker_enrolled", worker_id=worker_id, detail=f"owner={owner}")
@@ -257,8 +284,8 @@ class Ledger:
                                   (worker_id,)).fetchall():
                 final = row["attempts"] >= row["max_attempts"]
                 db.execute("UPDATE jobs SET status=?, worker_id=NULL, lease_expires_at=NULL, "
-                           "updated_at=? WHERE job_id=?",
-                           ("failed" if final else "queued", now, row["job_id"]))
+                           "updated_at=?, assigned_until=? WHERE job_id=?",
+                           ("failed" if final else "queued", now, now, row["job_id"]))
                 self._event(db, now, "lease_revoked_failed" if final else
                             "lease_revoked_requeued", row["job_id"], worker_id)
                 if final:
@@ -328,8 +355,9 @@ class Ledger:
         ).fetchall():
             final = row["attempts"] >= row["max_attempts"]
             db.execute(
-                "UPDATE jobs SET status=?, worker_id=NULL, lease_expires_at=NULL, updated_at=? "
-                "WHERE job_id=?", ("failed" if final else "queued", now, row["job_id"]))
+                "UPDATE jobs SET status=?, worker_id=NULL, lease_expires_at=NULL, updated_at=?, "
+                "assigned_until=? WHERE job_id=?",
+                ("failed" if final else "queued", now, now, row["job_id"]))
             self._event(db, now, "lease_timeout_failed" if final else "lease_timeout_requeued",
                         row["job_id"], row["worker_id"])
             if final:
@@ -339,10 +367,50 @@ class Ledger:
         with self._tx() as db:
             self._sweep(db, now)
 
+    def _eligible_auditors(self, db: sqlite3.Connection, job_id: str, now: int) -> list[str]:
+        """Active, unrevoked workers that are not excluded from `job_id`, directly or by
+        sharing an owner with an excluded worker. Sorted, so a seeded rng is repeatable."""
+        rows = db.execute(
+            "SELECT w.worker_id FROM workers w WHERE w.revoked_at IS NULL "
+            "AND w.last_seen_at IS NOT NULL AND w.last_seen_at>? AND NOT EXISTS ("
+            "SELECT 1 FROM job_exclusions x LEFT JOIN workers xw ON xw.worker_id=x.worker_id "
+            "WHERE x.job_id=? AND (x.worker_id=w.worker_id OR "
+            "(xw.owner IS NOT NULL AND xw.owner=w.owner))) ORDER BY w.worker_id",
+            (now - self.active_seconds, job_id)).fetchall()
+        return [r["worker_id"] for r in rows]
+
+    def _assign_auditors(self, db: sqlite3.Connection, now: int) -> None:
+        """Give every queued audit/tie-breaker that has no live assignment to one eligible
+        worker picked at random. A live assignment is one that hasn't run out and whose
+        worker isn't revoked. The previous pick is avoided when anyone else is eligible."""
+        kinds = ",".join("?" * len(ASSIGNED_KINDS))
+        for row in db.execute(
+            f"SELECT j.job_id, j.assigned_worker FROM jobs j LEFT JOIN workers w "
+            f"ON w.worker_id=j.assigned_worker WHERE j.status='queued' "
+            f"AND j.job_kind IN ({kinds}) AND (j.assigned_worker IS NULL "
+            f"OR j.assigned_until IS NULL OR j.assigned_until<=? OR w.revoked_at IS NOT NULL) "
+            f"ORDER BY j.created_at, j.job_id", (*ASSIGNED_KINDS, now)).fetchall():
+            candidates = self._eligible_auditors(db, row["job_id"], now)
+            previous = row["assigned_worker"]
+            if previous in candidates and len(candidates) > 1:
+                candidates.remove(previous)
+            pick = self.rng.choice(candidates) if candidates else None
+            if pick is None and previous is None:
+                continue  # nobody eligible yet; try again on the next request
+            db.execute("UPDATE jobs SET assigned_worker=?, assigned_until=? WHERE job_id=?",
+                       (pick, now + self.assign_seconds if pick else None, row["job_id"]))
+            # Private event: it names which worker was handed an audit.
+            self._event(db, now, "auditor_assigned" if pick else "auditor_unassigned",
+                        row["job_id"], pick, detail=f"candidates={len(candidates)}")
+
     def claim_next(self, worker_id: str, lease_seconds: int, now: int) -> dict[str, Any] | None:
-        """Atomically lease the oldest queued job to `worker_id`, or return None."""
+        """Atomically lease the oldest queued job `worker_id` may take, or return None.
+        Work and challenge jobs are first-come; audits and tie-breakers only go to the
+        worker they were randomly assigned to (see _assign_auditors)."""
         with self._tx() as db:
             self._sweep(db, now)
+            db.execute("UPDATE workers SET last_seen_at=? WHERE worker_id=?", (now, worker_id))
+            self._assign_auditors(db, now)
             # An excluded worker's owner is excluded too, so one person's rigs never
             # audit or break ties on each other's results.
             owner = db.execute("SELECT owner FROM workers WHERE worker_id=?",
@@ -352,8 +420,10 @@ class Ledger:
                 "SELECT 1 FROM job_exclusions x LEFT JOIN workers w ON w.worker_id=x.worker_id "
                 "WHERE x.job_id=j.job_id AND (x.worker_id=? OR "
                 "(w.owner IS NOT NULL AND w.owner=?))) "
+                f"AND (j.job_kind NOT IN ({','.join('?' * len(ASSIGNED_KINDS))}) "
+                "OR j.assigned_worker=?) "
                 "ORDER BY created_at, job_id LIMIT 1",
-                (worker_id, owner["owner"] if owner else None)
+                (worker_id, owner["owner"] if owner else None, *ASSIGNED_KINDS, worker_id)
             ).fetchone()
             if row is None:
                 return None
@@ -394,6 +464,7 @@ class Ledger:
         agree = agree or (lambda a, b: a == b)
         with self._tx() as db:
             self._sweep(db, now)
+            db.execute("UPDATE workers SET last_seen_at=? WHERE worker_id=?", (now, worker_id))
             job = db.execute("SELECT * FROM jobs WHERE job_id=?", (job_id,)).fetchone()
             if job is None:
                 return "unknown", None
@@ -415,8 +486,9 @@ class Ledger:
             if not correct:
                 final = job["attempts"] >= job["max_attempts"]
                 db.execute(
-                    "UPDATE jobs SET status=?, worker_id=NULL, lease_expires_at=NULL, updated_at=? "
-                    "WHERE job_id=?", ("rejected" if final else "queued", now, job_id))
+                    "UPDATE jobs SET status=?, worker_id=NULL, lease_expires_at=NULL, updated_at=?, "
+                    "assigned_until=? WHERE job_id=?",
+                    ("rejected" if final else "queued", now, now, job_id))
                 self._event(db, now, "result_rejected_final" if final else "result_rejected_requeued",
                             job_id, worker_id)
                 if final:
@@ -451,6 +523,9 @@ class Ledger:
                 self._resolve_audit(db, job, result, agree, now, tiebreak_job)
             elif kind == "tiebreak":
                 self._resolve_tiebreak(db, job, result, agree, now)
+            # Hand any audit or tie-breaker just queued to a random worker right away, so
+            # the pick never depends on who happens to ask next.
+            self._assign_auditors(db, now)
             job["status"] = "accepted"
             return "accepted", job
 
@@ -537,6 +612,7 @@ class Ledger:
         with closing(self._connect()) as db:
             rows = db.execute(
                 "SELECT j.job_id, j.job_kind, j.audit_of, j.task_type, j.status, j.created_at, "
+                "j.assigned_worker, "
                 "s.worker_id, s.audit_status FROM jobs j LEFT JOIN submissions s USING(job_id) "
                 "WHERE j.job_kind IN ('audit','challenge','tiebreak') ORDER BY j.created_at, j.job_id"
             ).fetchall()
@@ -667,4 +743,8 @@ class Ledger:
                        "WHERE t.job_kind='tiebreak' AND t.audit_of="
                        "CASE WHEN j.job_kind='work' THEN j.job_id ELSE j.audit_of END)"):
                 problems.append(f"tie-breaker outcome without a tie-breaker {r['job_id']}")
+            for r in q("SELECT j.job_id FROM jobs j WHERE j.job_kind IN ('audit','tiebreak') "
+                       "AND j.worker_id IS NOT NULL AND j.status IN ('leased','accepted') "
+                       "AND j.assigned_worker IS NOT NULL AND j.worker_id!=j.assigned_worker"):
+                problems.append(f"audit taken by a worker it wasn't assigned to {r['job_id']}")
         return problems

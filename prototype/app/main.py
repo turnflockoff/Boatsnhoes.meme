@@ -26,7 +26,8 @@ SIGNED_FIELDS = ("job_id", "task_type", "payload", "payload_hash", "reward_point
 # They stay in the database for the operator but are hidden from the public job view.
 PRIVATE_EVENTS = {"audit_scheduled", "audit_match", "audit_mismatch", "audit_not_run",
                   "passed_challenge", "failed_challenge", "tiebreak_scheduled",
-                  "tiebreak_majority", "tiebreak_unresolved", "tiebreak_not_run"}
+                  "tiebreak_majority", "tiebreak_unresolved", "tiebreak_not_run",
+                  "auditor_assigned", "auditor_unassigned"}
 
 
 def create_app(settings: Settings | None = None,
@@ -36,7 +37,9 @@ def create_app(settings: Settings | None = None,
     The default `rng` uses the OS's secure randomness, so workers can't predict audits."""
     rng = rng or random.SystemRandom()
     settings = settings or get_settings()
-    ledger = Ledger(settings.database_path)
+    ledger = Ledger(settings.database_path, rng=rng,
+                    active_seconds=settings.auditor_active_seconds,
+                    assign_seconds=settings.audit_assign_seconds)
     app = FastAPI(title="Boats N Hoes Useful-Compute MVP", version="0.5.0")
     app.state.ledger = ledger
     app.state.settings = settings

@@ -33,11 +33,12 @@ A result hash is not proof that a GPU ran a model. Phase 4 adds the ways the coo
 - **Tolerance rules** (`results_agree` on each task): SHA must match byte for byte; AI text must match after collapsing whitespace. Anything else (one word, letter case) is a disagreement.
 - **Outcomes.** Agreement marks both results `confirmed` with confidence `replicated`. Disagreement marks both `disputed` and their points are held. An audit that never runs (expires, fails, or is rejected) leaves the original `unaudited`. Audits never spawn audits.
 - **Hidden tie-breakers** (`TIEBREAK`, default on). When an audit disagrees, the coordinator queues the same job for a *third* worker that is neither side of the dispute, in the same transaction and with the same time window. Majority of three: if the tie-breaker agrees with exactly one side, that side and the tie-breaker become `confirmed` and the other side becomes `outvoted` (points stay held). If it agrees with neither (or both), all three are `unresolved` and held for a person. If no third worker picks it up, the dispute stays held and a `tiebreak_not_run` event is recorded. Tie-breakers never spawn more audits or tie-breakers.
+- **Random auditor assignment** (closes threat #4). An audit or tie-breaker is not first-come. The moment it is queued, the coordinator picks one eligible worker at random (OS secure randomness) and only that worker can claim it. Eligible means: not revoked, not excluded (directly or through its owner), and active, i.e. it asked for a job, sent a result or enrolled within `AUDITOR_ACTIVE_SECONDS` (default 300). If the pick doesn't claim it within `AUDIT_ASSIGN_SECONDS` (default 120), is revoked, or gives it back (lease timeout, rejected result), it is re-assigned at random, avoiding the previous pick when anyone else is eligible. If nobody is eligible yet, the audit waits and is assigned on the next request. Polling faster no longer wins more audits. The pick is recorded as a private `auditor_assigned` event and shown to the operator in `/v1/audits`; workers never see it.
 - **Hidden challenge jobs.** The operator queues a known-answer job with `POST /v1/challenges`. Workers get the same envelope, the same receipt and the same audit-trail events as normal work. A wrong (but well-formed) answer is accepted on the surface, so a cheater can't tell they were caught, and recorded as `failed-challenge` with points held.
 - **Operator endpoints** (`/v1/challenges`, `/v1/audits`, `/v1/workers/{id}/trust`) require the `X-Operator-Token` header to match `OPERATOR_TOKEN`. If the token isn't set, they are disabled.
 - **Public ledger** (`GET /v1/ledger`) adds `points_by_status`: confirmed, pending, unverified, held. Challenge outcomes are folded into confirmed/held so the public view doesn't reveal which jobs were challenges. The public job view hides audit and challenge events.
-- New consistency checks: a pending audit with no open audit job, a job leased to an excluded worker, a worker auditing its own result, a worker breaking a tie on its own dispute, and an outvoted/unresolved result with no tie-breaker behind it.
-- 19 tests for Phase 4 (51 in total), including an in-place migration of a Phase 2 database and a tampered-database check.
+- New consistency checks: a pending audit with no open audit job, a job leased to an excluded worker, a worker auditing its own result, a worker breaking a tie on its own dispute, an outvoted/unresolved result with no tie-breaker behind it, and an audit or tie-breaker taken by a worker it wasn't assigned to.
+- 19 tests for Phase 4 plus 9 for random assignment (82 in total), including an in-place migration of a Phase 2 database and a tampered-database check.
 - **Written threat model:** [`docs/VERIFICATION-THREAT-MODEL.md`](../docs/VERIFICATION-THREAT-MODEL.md) lists each attack, today's defense, what is still open, and the order of fixes.
 
 ## Implemented (Phase 5: simulated reward reports)
@@ -166,7 +167,6 @@ This checks whether `vulkaninfo --summary` can run. Device enumeration is not pr
 ## Not implemented
 
 - Real model inference on RX 470.
-- Random (rather than first-come) auditor assignment.
 - Public deployment security, TLS, rate limits, and abuse prevention. Workers authenticate with per-worker keys; job creation does not require a login yet.
 - Ethereum ERC-20 integration or reward distribution.
 

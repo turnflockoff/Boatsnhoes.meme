@@ -21,6 +21,11 @@ class Settings:
     operator_token: str | None = None
     # Phase 4: when a re-run disagrees, ask a third worker to break the tie.
     tiebreak: bool = True
+    # Threat model #4: audits go to a random active worker, not whoever polls first.
+    # A worker counts as active this long after its last job request.
+    auditor_active_seconds: int = 300
+    # How long the chosen worker has to pick up its audit before it is re-assigned.
+    audit_assign_seconds: int = 120
 
 
 def _int_env(name: str, default: int, low: int, high: int) -> int:
@@ -72,4 +77,6 @@ def get_settings() -> Settings:
         audit_rate=_rate_env("AUDIT_RATE", 0.25),
         operator_token=operator_token,
         tiebreak=_bool_env("TIEBREAK", True),
+        auditor_active_seconds=_int_env("AUDITOR_ACTIVE_SECONDS", 300, 10, 86400),
+        audit_assign_seconds=_int_env("AUDIT_ASSIGN_SECONDS", 120, 5, 86400),
     )

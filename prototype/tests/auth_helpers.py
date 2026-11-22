@@ -7,7 +7,8 @@ worker. The auth rules themselves are tested without this helper in test_worker_
 """
 from __future__ import annotations
 
-from typing import Any
+import random
+from typing import Any, Sequence
 
 from fastapi.testclient import TestClient
 
@@ -15,6 +16,16 @@ from app import workers
 
 OPERATOR = "operator-token-that-is-long-enough-456"
 OP = {"X-Operator-Token": OPERATOR}
+
+
+class FirstPickRng(random.Random):
+    """Seeded rng whose auditor pick is always the alphabetically first eligible worker.
+    Tests that aren't about auditor assignment use it so "who audits" is spelled out by
+    worker names (wk-b before wk-c) instead of depending on a random seed. Audit sampling
+    (`random()`) still comes from the seed. test_assignment.py tests the real random pick."""
+
+    def choice(self, seq: Sequence[Any]) -> Any:
+        return sorted(seq)[0]
 
 
 class WorkerClient(TestClient):

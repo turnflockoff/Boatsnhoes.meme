@@ -109,3 +109,19 @@
 2. **Store fingerprints of passwords, not the passwords.** The coordinator saves only the sha256 of each key. When a rig sends its key, the coordinator fingerprints it and compares. If someone steals the database, they get fingerprints that can't be turned back into keys.
 3. **A name isn't a person.** Keys stop one rig from pretending to be another, but they can't tell you whether two rigs belong to the same person. That's what the owner label is for, and it's only as honest as the person handing out invites. One invite per real person is your job.
 4. **Your own two cards count as one owner.** If both RX 470s get the same owner label, they'll never re-check each other, so with just those two online no re-check would ever run. For your two-card test, give them two labels and keep in mind that your cards agreeing proves less than strangers agreeing.
+
+## 2026-11-22 (overnight): Audits now go to a random rig, not the fastest one
+
+**Shipped**
+- **Random auditor pick.** Before, a hidden re-check went to whichever rig asked for work next. A group of cheaters who asked very often got more re-checks, including re-checks of each other. Now, the moment a re-check (or tie-breaker) is created, the coordinator draws one rig at random from the rigs that are allowed to do it, and only that rig can pick it up. Asking faster doesn't help anymore.
+- **Who's allowed:** not the rig that did the original, not any rig with the same owner, not a revoked rig, and only rigs that have checked in during the last 5 minutes (`AUDITOR_ACTIVE_SECONDS`), so a re-check isn't handed to a rig that's switched off.
+- **If the pick doesn't show up** within 2 minutes (`AUDIT_ASSIGN_SECONDS`), gets revoked, or drops the job, the coordinator draws again and skips the previous pick when someone else is available. If nobody is allowed yet, the re-check waits and is drawn when the next rig checks in.
+- The pick is private: rigs can't see it in the job view or the job they receive. You see it as `assigned_worker` in the operator audits list.
+- A new self-check flags any re-check that was done by a rig it wasn't assigned to. A test tampers with the database to prove it fires.
+- Tests went from 73 to 82, all passing. One test gives 60 re-checks to three rigs where the same rig always asks first: under the old rule it would get all 60; now each gets a fair share. I also broke the new rule on purpose (let anyone grab a re-check again) and 4 of the new tests failed, so they really catch the old behavior. Still software only: no real GPU yet.
+
+**What you learned**
+1. **Fair isn't the same as first-come.** First-come rewards whoever is fastest, and in a network the fastest asker can be a script. A random draw gives every eligible rig the same chance, no matter how often it asks.
+2. **Random has to mean unpredictable.** The draw uses the computer's secure randomness (the same kind used to make passwords), so nobody can guess the next pick from the last ones. Tests use a fixed "seed" instead, so the same test always plays out the same way.
+3. **Every assignment needs a timeout.** If you hand a job to one rig and that rig unplugs, the job would sit forever. So each pick has a 2-minute window, then someone else gets a turn.
+4. **This makes cheating rings weaker, not impossible.** If 2 of 10 active rigs are in a ring, a ring member checks a friend's work only about 2 times in 10. Getting more chances means getting more invite codes, which is why handing out one code per real person matters.
