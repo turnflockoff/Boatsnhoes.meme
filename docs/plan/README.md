@@ -2,7 +2,7 @@
 
 > **Canonical source of truth.** If a chat conflicts with this file, this file wins until deliberately updated.
 
-**Version:** 0.5 | **Last updated:** 2026-11-21 | **Status:** Planning + merged site built (deploy pending Netlify link)
+**Version:** 0.5 | **Last updated:** 2026-11-21 | **Status:** Site LIVE at boatsnhoes.meme (Netlify); GPU worker backend Phase 1 built
 
 ## SESSION PROTOCOL (Claude must follow every session)
 1. **Start:** Read README.md, TASKS.md, and USER_TODO.md. Summarize status in 3 lines.
@@ -70,6 +70,7 @@ Threats and defenses. Status: planned unless marked done.
 - Not built: Litepaper, Casino coming-soon, Meme Lab, AgentWiki.
 
 ## Changelog
+- **0.5.2 (2026-11-21):** boatsnhoes.meme is live on Netlify. Domain and DNS connected (Cloudflare CNAMEs, DNS only), HTTPS requested, subpages restyled orange/black, GPU job queue Phase 1 built.
 - **0.5.1 (2026-11-21):** Homepage switched to the orange/black orbital version you picked. Footer links fixed, GPU-page link and orange share image added, mobile icon overlap fixed.
 - **0.5 (2026-11-21):** Merged meme-coin plan with GitHub GPU-compute repo. Built Home v2, Contribute a GPU page with Netlify Forms waitlist, custom graphics (logo, boat art, favicon, 1200x630 share card). Desktop/mobile tested (390/768/1440 px, real fonts, `_headers` CSP applied). Hosting switched to Netlify (supersedes Cloudflare Pages). Netlify project created; GitHub link pending.
 - **0.4 (2026-11-20):** Added Security section, DDoS plan, Stay Safe page, `_headers`, USER_TODO.md. Logged 60s blocks, 3.5-year halving, ~100M cap, AgentWiki idea. Confirmed ETC is still proof of work.

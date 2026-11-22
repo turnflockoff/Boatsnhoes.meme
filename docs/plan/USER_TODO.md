@@ -4,9 +4,11 @@ Never share passwords, API keys, or recovery phrases with anyone, including Clau
 
 ## This week
 - [ ] ~~Cloudflare Pages upload~~ superseded 2026-11-21: hosting is Netlify
-- [ ] Merge the GitHub pull request into main
-- [ ] Netlify: project `boatsnhoes-dik6` > Project configuration > Build & deploy > Link repository > GitHub > turnflockoff/Boatsnhoes.meme, branch `main`, publish directory `.`, no build command
-- [ ] Netlify: Domain management > Add domain `boatsnhoes.meme` (+ www), then set the DNS records Netlify shows at your registrar
+- [x] Merge the GitHub pull requests into main (#2, #3)
+- [x] Netlify linked to GitHub (branch `main`, auto-deploys on merge)
+- [x] Domain live: `boatsnhoes.meme` primary, `www` redirects. Cloudflare DNS: `@` CNAME → apex-loadbalancer.netlify.com, `www` CNAME → boatsnhoes-dik6.netlify.app, both DNS only (grey cloud). Unused Netlify DNS zone deleted
+- [x] HTTPS certificate requested (Let's Encrypt via Netlify)
+- [ ] Optional: block email spoofing with Cloudflare TXT records `@` = `v=spf1 -all` and `_dmarc` = `v=DMARC1; p=reject;`
 - [ ] Netlify: Forms > `gpu-testers` > add an email notification to your Netlify account email
 - [ ] Upload mine.html, tokenomics.html, stay-safe.html (not on GitHub yet)
 - [ ] Turn on hardware-key or authenticator 2FA for Netlify, GitHub, your registrar, email, and every social account

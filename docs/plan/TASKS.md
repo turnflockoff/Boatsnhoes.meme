@@ -62,8 +62,9 @@
 - [ ] Litepaper, Casino coming-soon, Meme Lab
 - [x] Waitlist backend: Netlify Forms (`gpu-testers`)
 - [x] Netlify project created (`boatsnhoes-dik6`), form detection on
-- [ ] Link Netlify to GitHub and confirm live deploy
-- [ ] Point boatsnhoes.meme DNS at Netlify, verify HTTPS
+- [x] Link Netlify to GitHub and confirm live deploy
+- [x] Point boatsnhoes.meme DNS at Netlify (Cloudflare CNAMEs, DNS only)
+- [ ] Verify HTTPS, security headers and share card on the live URL
 
 ## Phase 7: Launch
 - [ ] Mainnet plan, miner onboarding, listings outreach
