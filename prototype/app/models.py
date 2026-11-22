@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from typing import Literal
+
+from pydantic import BaseModel, Field, model_validator
 
 
 class WorkerRegistration(BaseModel):
@@ -26,8 +28,30 @@ class JobCreate(BaseModel):
 
 
 class ChallengeCreate(JobCreate):
-    """A hidden known-answer job. `expected_result` is stored but never sent to workers."""
+    """A hidden known-answer job. `expected_result` is stored but never sent to workers.
+
+    By default any worker may take it (first-come). To aim it (threat model #1 and #8),
+    set at most one of:
+      target_worker  only this worker can take it, until the job's own deadline
+      target_tier    a random active worker in this trust tier (`audit-tier-v1`:
+                     new, suspect or established), worked out when it is handed out
+    Workers can't tell an aimed test from normal work either."""
     expected_result: str = Field(min_length=1, max_length=8192)
+    target_worker: str | None = Field(default=None, min_length=3, max_length=80)
+    target_tier: Literal["new", "suspect", "established"] | None = None
+
+    @model_validator(mode="after")
+    def _one_target(self) -> "ChallengeCreate":
+        if self.target_worker is not None and self.target_tier is not None:
+            raise ValueError("set target_worker or target_tier, not both")
+        return self
+
+    def target(self) -> str | None:
+        if self.target_worker is not None:
+            return f"worker:{self.target_worker}"
+        if self.target_tier is not None:
+            return f"tier:{self.target_tier}"
+        return None
 
 
 class JobEnvelope(BaseModel):

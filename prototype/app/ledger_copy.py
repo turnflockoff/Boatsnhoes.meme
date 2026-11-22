@@ -14,7 +14,9 @@ report and `check_consistency` give the same answers as on the coordinator. It r
 everything that is secret or not needed:
 
     removed     worker keys (hashes), enrollment codes, prompts/payloads, job signatures,
-                answers and answer hashes, expected answers of hidden tests, event details
+                answers and answer hashes, expected answers of hidden tests, what a hidden
+                test was aimed at (a rig or a trust tier; trust tiers are operator-only),
+                event details
                 (they can contain owner names), worker capabilities and last-seen times
     replaced    owner labels -> owner-1, owner-2, ... (same owner = same label)
                 payload hashes -> HMAC with a random key that is thrown away, so equal
@@ -114,7 +116,7 @@ def _redact(db: sqlite3.Connection, until: int, now: int, salt: bytes) -> dict[s
     for (job_id, payload_hash) in db.execute("SELECT job_id, payload_hash FROM jobs").fetchall():
         masked = hmac.new(salt, payload_hash.encode("utf-8"), hashlib.sha256).hexdigest()
         db.execute("UPDATE jobs SET payload = '', signature = '', expected_result = NULL, "
-                   "payload_hash = ? WHERE job_id = ?", (masked, job_id))
+                   "target = NULL, payload_hash = ? WHERE job_id = ?", (masked, job_id))
     db.execute("UPDATE submissions SET result = NULL, result_hash = ''")
 
     db.execute("CREATE TABLE copy_info (format TEXT NOT NULL, until INTEGER NOT NULL, "

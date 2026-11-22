@@ -100,7 +100,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     assigned_worker TEXT,
     assigned_until INTEGER,
     schema_version TEXT NOT NULL DEFAULT 'bnh-job/0',
-    model_sha256 TEXT
+    model_sha256 TEXT,
+    target TEXT
 );
 CREATE TABLE IF NOT EXISTS job_exclusions (
     job_id TEXT NOT NULL REFERENCES jobs(job_id),
@@ -153,6 +154,8 @@ MIGRATIONS = {
         # so workers refuse them instead of failing on a confusing signature error.
         ("schema_version", "TEXT NOT NULL DEFAULT 'bnh-job/0'"),
         ("model_sha256", "TEXT"),
+        # Aimed hidden tests: 'worker:<id>' or 'tier:<new|suspect|established>'.
+        ("target", "TEXT"),
     ),
 }
 
@@ -160,22 +163,48 @@ MIGRATIONS = {
 # Job kinds that go to a randomly chosen worker instead of whoever asks first.
 ASSIGNED_KINDS = ("audit", "tiebreak")
 
+# Aimed hidden tests (threat model #1 and #8): a challenge with a `target` goes only to the
+# worker it names, or to a random active worker in the named trust tier, instead of to
+# whoever asks first. Their private events have their own names, so they never count
+# towards a rig's audit follow-through.
+TARGET_TIERS = ("new", "suspect", "established")
+_EVENTS = {
+    "audit": ("auditor_assigned", "auditor_unassigned", "audit_assignment_expired"),
+    "challenge": ("test_assigned", "test_unassigned", "test_assignment_expired"),
+}
+
+
+def parse_target(target: str | None) -> tuple[str, str] | None:
+    """'worker:wk-a' -> ('worker', 'wk-a'); 'tier:new' -> ('tier', 'new'); None -> None."""
+    if target is None:
+        return None
+    kind, _, value = target.partition(":")
+    if kind == "worker" and value:
+        return kind, value
+    if kind == "tier" and value in TARGET_TIERS:
+        return kind, value
+    raise ValueError(f"bad target {target!r}")
+
 
 class Ledger:
     def __init__(self, path: Path, rng: random.Random | None = None,
                  active_seconds: int = 300, assign_seconds: int = 120,
-                 read_only: bool = False):
+                 read_only: bool = False,
+                 tier_of: Callable[[dict[str, int]], str] | None = None):
         """`rng` picks auditors; the default uses the OS's secure randomness so workers
         can't predict who gets an audit. A worker counts as active for `active_seconds`
         after it last asked for a job, sent a result, or enrolled. An assigned worker has
         `assign_seconds` to claim its audit before someone else gets it.
         `read_only` opens an existing file without changing a single byte (no WAL switch,
-        no migrations), for checking a shared ledger copy whose sha256 was published."""
+        no migrations), for checking a shared ledger copy whose sha256 was published.
+        `tier_of` maps a worker's audit_history() counts to its trust tier (see
+        app/audit_policy.py); without it, hidden tests aimed at a tier find nobody."""
         self.path = Path(path)
         self.rng = rng or random.SystemRandom()
         self.active_seconds = active_seconds
         self.assign_seconds = assign_seconds
         self.read_only = read_only
+        self.tier_of = tier_of
         if read_only:
             if not self.path.exists():
                 raise FileNotFoundError(self.path)
@@ -314,24 +343,32 @@ class Ledger:
 
     # -- jobs -----------------------------------------------------------------------
     def create_job(self, fields: dict[str, Any], signature: str, max_attempts: int,
-                   now: int, job_kind: str = "work", expected_result: str | None = None) -> None:
+                   now: int, job_kind: str = "work", expected_result: str | None = None,
+                   target: str | None = None) -> None:
+        """`target` (hidden tests only, see parse_target) aims the job at one worker or at
+        a trust tier; it is assigned in the same transaction, like an audit."""
+        if target is not None and (job_kind != "challenge" or parse_target(target) is None):
+            raise ValueError("only hidden test jobs can have a target")
         with self._tx() as db:
             self._insert_job(db, fields, signature, max_attempts, now, job_kind,
-                             expected_result=expected_result)
+                             expected_result=expected_result, target=target)
+            if target is not None:
+                self._assign_auditors(db, now)
 
     def _insert_job(self, db: sqlite3.Connection, fields: dict[str, Any], signature: str,
                     max_attempts: int, now: int, job_kind: str, audit_of: str | None = None,
                     expected_result: str | None = None,
-                    exclude_workers: tuple[str, ...] = ()) -> None:
+                    exclude_workers: tuple[str, ...] = (),
+                    target: str | None = None) -> None:
         db.execute(
             "INSERT INTO jobs(job_id, task_type, payload, payload_hash, reward_points, "
             "expires_at, signature, status, max_attempts, created_at, updated_at, job_kind, "
-            "audit_of, expected_result, schema_version, model_sha256) "
-            "VALUES(?,?,?,?,?,?,?,'queued',?,?,?,?,?,?,?,?)",
+            "audit_of, expected_result, schema_version, model_sha256, target) "
+            "VALUES(?,?,?,?,?,?,?,'queued',?,?,?,?,?,?,?,?,?)",
             (fields["job_id"], fields["task_type"], fields["payload"], fields["payload_hash"],
              fields["reward_points"], fields["expires_at"], signature, max_attempts, now, now,
              job_kind, audit_of, expected_result, fields["schema_version"],
-             fields["model_sha256"]),
+             fields["model_sha256"], target),
         )
         for worker_id in exclude_workers:
             db.execute("INSERT INTO job_exclusions(job_id, worker_id) VALUES(?,?)",
@@ -419,47 +456,96 @@ class Ledger:
             (now - self.active_seconds, job_id)).fetchall()
         return [r["worker_id"] for r in rows]
 
+    def _audit_history_rows(self, db: sqlite3.Connection,
+                            worker_id: str | None = None) -> dict[str, dict[str, int]]:
+        """Per worker: results that passed an independent check, and strikes."""
+        passed = ",".join("?" * len(PASSED_STATUSES))
+        strikes = ",".join("?" * len(STRIKE_STATUSES))
+        sql = (f"SELECT w.worker_id, "
+               f"COALESCE(SUM(s.audit_status IN ({passed})), 0) AS checks_passed, "
+               f"COALESCE(SUM(s.audit_status IN ({strikes})), 0) AS strikes "
+               f"FROM workers w LEFT JOIN submissions s ON s.worker_id=w.worker_id "
+               f"{'WHERE w.worker_id=? ' if worker_id else ''}"
+               f"GROUP BY w.worker_id ORDER BY w.worker_id")
+        args = (*PASSED_STATUSES, *STRIKE_STATUSES, *((worker_id,) if worker_id else ()))
+        return {r["worker_id"]: {"checks_passed": int(r["checks_passed"]),
+                                 "strikes": int(r["strikes"])}
+                for r in db.execute(sql, args).fetchall()}
+
+    def _target_candidates(self, db: sqlite3.Connection, target: tuple[str, str],
+                           now: int) -> list[str]:
+        """Who an aimed hidden test may go to. A named worker gets it as long as it isn't
+        revoked (active or not: the operator chose it). A tier target goes to active,
+        unrevoked workers whose tier, worked out now from their record, matches."""
+        kind, value = target
+        if kind == "worker":
+            row = db.execute("SELECT revoked_at FROM workers WHERE worker_id=?",
+                             (value,)).fetchone()
+            return [value] if row is not None and row["revoked_at"] is None else []
+        if self.tier_of is None:
+            return []
+        active = [r["worker_id"] for r in db.execute(
+            "SELECT worker_id FROM workers WHERE revoked_at IS NULL AND last_seen_at IS NOT "
+            "NULL AND last_seen_at>? ORDER BY worker_id", (now - self.active_seconds,))]
+        history = self._audit_history_rows(db)
+        return [w for w in active if self.tier_of(history[w]) == value]
+
     def _assign_auditors(self, db: sqlite3.Connection, now: int) -> None:
-        """Give every queued audit/tie-breaker that has no live assignment to one eligible
-        worker picked at random. A live assignment is one that hasn't run out and whose
-        worker isn't revoked. The previous pick is avoided when anyone else is eligible."""
+        """Give every queued audit/tie-breaker (and every aimed hidden test) that has no live
+        assignment to one eligible worker picked at random. A live assignment is one that
+        hasn't run out and whose worker isn't revoked. The previous pick is avoided when
+        anyone else is eligible. A test aimed at one named worker stays with it until the
+        job's own deadline."""
         kinds = ",".join("?" * len(ASSIGNED_KINDS))
         for row in db.execute(
-            f"SELECT j.job_id, j.assigned_worker, j.assigned_until, w.revoked_at "
+            f"SELECT j.job_id, j.job_kind, j.target, j.expires_at, j.assigned_worker, "
+            f"j.assigned_until, w.revoked_at "
             f"FROM jobs j LEFT JOIN workers w "
             f"ON w.worker_id=j.assigned_worker WHERE j.status='queued' "
-            f"AND j.job_kind IN ({kinds}) AND (j.assigned_worker IS NULL "
+            f"AND (j.job_kind IN ({kinds}) OR j.target IS NOT NULL) "
+            f"AND (j.assigned_worker IS NULL "
             f"OR j.assigned_until IS NULL OR j.assigned_until<=? OR w.revoked_at IS NOT NULL) "
             f"ORDER BY j.created_at, j.job_id", (*ASSIGNED_KINDS, now)).fetchall():
-            candidates = self._eligible_auditors(db, row["job_id"], now)
+            target = parse_target(row["target"]) if row["job_kind"] == "challenge" else None
+            assigned_ev, unassigned_ev, expired_ev = _EVENTS["challenge" if target else "audit"]
+            if target:
+                candidates = self._target_candidates(db, target, now)
+            else:
+                candidates = self._eligible_auditors(db, row["job_id"], now)
             previous = row["assigned_worker"]
             if previous is not None and row["revoked_at"] is None \
-                    and not self._leased_since_assignment(db, row["job_id"], previous):
+                    and not self._leased_since_assignment(db, row["job_id"], previous,
+                                                          assigned_ev):
                 # The pick's time ran out and it never picked the job up. (A pick that took
                 # the job and then let the lease run out, or had its result refused, already
                 # has its own event; a revoked pick is the operator's doing, not a drop.)
-                # Private: it names who was handed an audit.
-                self._event(db, now, "audit_assignment_expired", row["job_id"], previous,
+                # Private: it names who was handed an audit or a test.
+                self._event(db, now, expired_ev, row["job_id"], previous,
                             detail="not picked up in time")
             if previous in candidates and len(candidates) > 1:
                 candidates.remove(previous)
             pick = self.rng.choice(candidates) if candidates else None
             if pick is None and previous is None:
                 continue  # nobody eligible yet; try again on the next request
+            until = None
+            if pick:
+                until = (int(row["expires_at"]) if target and target[0] == "worker"
+                         else now + self.assign_seconds)
             db.execute("UPDATE jobs SET assigned_worker=?, assigned_until=? WHERE job_id=?",
-                       (pick, now + self.assign_seconds if pick else None, row["job_id"]))
-            # Private event: it names which worker was handed an audit.
-            self._event(db, now, "auditor_assigned" if pick else "auditor_unassigned",
+                       (pick, until, row["job_id"]))
+            # Private event: it names which worker was handed an audit or a test.
+            self._event(db, now, assigned_ev if pick else unassigned_ev,
                         row["job_id"], pick, detail=f"candidates={len(candidates)}")
 
     @staticmethod
-    def _leased_since_assignment(db: sqlite3.Connection, job_id: str, worker_id: str) -> bool:
+    def _leased_since_assignment(db: sqlite3.Connection, job_id: str, worker_id: str,
+                                 assigned_event: str = "auditor_assigned") -> bool:
         """Did `worker_id` lease `job_id` after it was last assigned to it? Looked up in the
         audit trail, so a worker that is picked again for the same job is judged on its
         latest assignment only."""
         assigned_id = db.execute(
             "SELECT MAX(id) FROM events WHERE job_id=? AND worker_id=? "
-            "AND event='auditor_assigned'", (job_id, worker_id)).fetchone()[0]
+            "AND event=?", (job_id, worker_id, assigned_event)).fetchone()[0]
         if assigned_id is None:
             return False
         return db.execute(
@@ -468,8 +554,8 @@ class Ledger:
 
     def claim_next(self, worker_id: str, lease_seconds: int, now: int) -> dict[str, Any] | None:
         """Atomically lease the oldest queued job `worker_id` may take, or return None.
-        Work and challenge jobs are first-come; audits and tie-breakers only go to the
-        worker they were randomly assigned to (see _assign_auditors)."""
+        Work and challenge jobs are first-come; audits, tie-breakers and aimed hidden tests
+        only go to the worker they were assigned to (see _assign_auditors)."""
         with self._tx() as db:
             self._sweep(db, now)
             db.execute("UPDATE workers SET last_seen_at=? WHERE worker_id=?", (now, worker_id))
@@ -483,8 +569,8 @@ class Ledger:
                 "SELECT 1 FROM job_exclusions x LEFT JOIN workers w ON w.worker_id=x.worker_id "
                 "WHERE x.job_id=j.job_id AND (x.worker_id=? OR "
                 "(w.owner IS NOT NULL AND w.owner=?))) "
-                f"AND (j.job_kind NOT IN ({','.join('?' * len(ASSIGNED_KINDS))}) "
-                "OR j.assigned_worker=?) "
+                f"AND ((j.job_kind NOT IN ({','.join('?' * len(ASSIGNED_KINDS))}) "
+                "AND j.target IS NULL) OR j.assigned_worker=?) "
                 "ORDER BY created_at, job_id LIMIT 1",
                 (worker_id, owner["owner"] if owner else None, *ASSIGNED_KINDS, worker_id)
             ).fetchone()
@@ -675,7 +761,7 @@ class Ledger:
         with closing(self._connect()) as db:
             rows = db.execute(
                 "SELECT j.job_id, j.job_kind, j.audit_of, j.task_type, j.status, j.created_at, "
-                "j.assigned_worker, "
+                "j.assigned_worker, j.target, "
                 "s.worker_id, s.audit_status FROM jobs j LEFT JOIN submissions s USING(job_id) "
                 "WHERE j.job_kind IN ('audit','challenge','tiebreak') ORDER BY j.created_at, j.job_id"
             ).fetchall()
@@ -740,19 +826,8 @@ class Ledger:
         """Threat model #1: per worker, how many of its accepted results passed an
         independent check and how many are strikes (see app/audit_policy.py). With a
         `worker_id`, that worker's counts; without, a dict of every worker's counts."""
-        passed = ",".join("?" * len(PASSED_STATUSES))
-        strikes = ",".join("?" * len(STRIKE_STATUSES))
-        sql = (f"SELECT w.worker_id, "
-               f"COALESCE(SUM(s.audit_status IN ({passed})), 0) AS checks_passed, "
-               f"COALESCE(SUM(s.audit_status IN ({strikes})), 0) AS strikes "
-               f"FROM workers w LEFT JOIN submissions s ON s.worker_id=w.worker_id "
-               f"{'WHERE w.worker_id=? ' if worker_id else ''}"
-               f"GROUP BY w.worker_id ORDER BY w.worker_id")
-        args = (*PASSED_STATUSES, *STRIKE_STATUSES, *((worker_id,) if worker_id else ()))
         with closing(self._connect()) as db:
-            rows = {r["worker_id"]: {"checks_passed": int(r["checks_passed"]),
-                                     "strikes": int(r["strikes"])}
-                    for r in db.execute(sql, args).fetchall()}
+            rows = self._audit_history_rows(db, worker_id)
         if worker_id:
             return rows.get(worker_id, {"checks_passed": 0, "strikes": 0})
         return rows
@@ -887,6 +962,17 @@ class Ledger:
                         f"OR j.assigned_until IS NULL OR j.assigned_until<=? "
                         f"OR w.revoked_at IS NOT NULL)", *ASSIGNED_KINDS, now),
                 },
+                # Hidden tests aimed at one rig or a trust tier (operator-only numbers).
+                "aimed_tests": {
+                    "open": one("SELECT COUNT(*) FROM jobs WHERE status IN ('queued','leased') "
+                                "AND job_kind='challenge' AND target IS NOT NULL"),
+                    "waiting_for_rig": one(
+                        "SELECT COUNT(*) FROM jobs j LEFT JOIN workers w "
+                        "ON w.worker_id=j.assigned_worker WHERE j.status='queued' "
+                        "AND j.job_kind='challenge' AND j.target IS NOT NULL "
+                        "AND (j.assigned_worker IS NULL OR j.assigned_until IS NULL "
+                        "OR j.assigned_until<=? OR w.revoked_at IS NOT NULL)", now),
+                },
                 "recent_events": {r["event"]: int(r["n"]) for r in db.execute(
                     "SELECT event, COUNT(*) AS n FROM events WHERE at>? AND at<=? "
                     "GROUP BY event ORDER BY event", (now - window_seconds, now)).fetchall()},
@@ -965,6 +1051,18 @@ class Ledger:
                        "AND j.worker_id IS NOT NULL AND j.status IN ('leased','accepted') "
                        "AND j.assigned_worker IS NOT NULL AND j.worker_id!=j.assigned_worker"):
                 problems.append(f"audit taken by a worker it wasn't assigned to {r['job_id']}")
+            for r in q("SELECT j.job_id FROM jobs j WHERE j.job_kind='challenge' "
+                       "AND j.worker_id IS NOT NULL AND j.status IN ('leased','accepted') "
+                       "AND j.assigned_worker IS NOT NULL AND j.worker_id!=j.assigned_worker"):
+                problems.append(f"aimed hidden test taken by a worker it wasn't assigned to "
+                                f"{r['job_id']}")
+            # Ledger copies made before 0.5.21 are opened read-only and have no `target`.
+            has_target = any(c["name"] == "target"
+                             for c in db.execute("PRAGMA table_info(jobs)").fetchall())
+            for r in q("SELECT job_id FROM jobs WHERE target LIKE 'worker:%' AND worker_id "
+                       "IS NOT NULL AND worker_id!=substr(target, 8)") if has_target else ():
+                problems.append(f"hidden test aimed at one worker taken by another "
+                                f"{r['job_id']}")
             for r in q("SELECT j.job_id FROM jobs j JOIN jobs o ON o.job_id=j.audit_of "
                        "WHERE j.job_kind IN ('audit','tiebreak') AND "
                        "(j.schema_version!=o.schema_version OR j.payload_hash!=o.payload_hash "

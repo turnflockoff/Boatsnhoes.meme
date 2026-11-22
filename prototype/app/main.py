@@ -31,7 +31,8 @@ SIGNED_FIELDS = schemas.SIGNED_FIELDS
 PRIVATE_EVENTS = {"audit_scheduled", "audit_match", "audit_mismatch", "audit_not_run",
                   "passed_challenge", "failed_challenge", "tiebreak_scheduled",
                   "tiebreak_majority", "tiebreak_unresolved", "tiebreak_not_run",
-                  "auditor_assigned", "auditor_unassigned", "audit_assignment_expired"}
+                  "auditor_assigned", "auditor_unassigned", "audit_assignment_expired",
+                  "test_assigned", "test_unassigned", "test_assignment_expired"}
 
 
 class AuthRefused(HTTPException):
@@ -62,7 +63,9 @@ def create_app(settings: Settings | None = None,
                                                    "rotations": len(rotations)})
     ledger = Ledger(settings.database_path, rng=rng,
                     active_seconds=settings.auditor_active_seconds,
-                    assign_seconds=settings.audit_assign_seconds)
+                    assign_seconds=settings.audit_assign_seconds,
+                    # Hidden tests aimed at a trust tier use the same rule as the audit rate.
+                    tier_of=lambda h: audit_policy.decide_for(h, settings).tier)
     app = FastAPI(title="Boats N Hoes Useful-Compute MVP", version="0.5.0")
     app.state.ledger = ledger
     app.state.settings = settings
@@ -279,6 +282,10 @@ def create_app(settings: Settings | None = None,
         if waiting:
             warnings.append(f"{waiting} audit/tie-breaker job(s) waiting for an eligible "
                             "auditor: needs an active worker with a different owner")
+        aimed_waiting = snap["aimed_tests"]["waiting_for_rig"]
+        if aimed_waiting:
+            warnings.append(f"{aimed_waiting} aimed hidden test(s) waiting for a rig: no "
+                            "active rig in that trust tier, or the named rig is revoked")
         if snap["queue"]["overdue_leases"]:
             warnings.append(f"{snap['queue']['overdue_leases']} lease(s) past due; they are "
                             "requeued on the next worker request")
@@ -409,8 +416,15 @@ def create_app(settings: Settings | None = None,
     @app.post("/v1/challenges")
     def create_challenge(body: ChallengeCreate,
                          x_operator_token: str | None = Header(default=None)) -> dict[str, Any]:
-        """Operator-only: queue a hidden known-answer job. Workers can't tell it apart."""
+        """Operator-only: queue a hidden known-answer job. Workers can't tell it apart.
+        `target_worker` / `target_tier` aim it at one rig or a trust tier (see models)."""
         require_operator(x_operator_token)
+        if body.target_worker is not None:
+            aimed = ledger.get_worker(body.target_worker)
+            if aimed is None:
+                raise HTTPException(status_code=404, detail="no such worker")
+            if aimed.get("revoked_at") is not None:
+                raise HTTPException(status_code=409, detail="that worker is revoked")
         model_sha256 = validated_model_hash(body.task_type, body.payload)
         if not tasks.get(body.task_type).verify(body.payload, body.expected_result).ok:
             raise HTTPException(status_code=422,
@@ -419,10 +433,12 @@ def create_app(settings: Settings | None = None,
         fields, signature = new_job_fields(body.task_type, body.payload, body.reward_points,
                                            t + body.ttl_seconds, model_sha256)
         ledger.create_job(fields, signature, settings.max_attempts, t, job_kind="challenge",
-                          expected_result=body.expected_result)
+                          expected_result=body.expected_result, target=body.target())
         # Same line as a normal job: logs never say which jobs are hidden tests.
         log.info("job created", extra={"job_id": fields["job_id"], "task_type": body.task_type})
-        return {"job_id": fields["job_id"], "status": "queued", "job_kind": "challenge"}
+        job = ledger.get_job(fields["job_id"]) or {}
+        return {"job_id": fields["job_id"], "status": "queued", "job_kind": "challenge",
+                "target": body.target(), "assigned_worker": job.get("assigned_worker")}
 
     @app.get("/v1/audits")
     def list_audits(x_operator_token: str | None = Header(default=None)) -> dict[str, Any]:

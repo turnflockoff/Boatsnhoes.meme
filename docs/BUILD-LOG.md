@@ -321,3 +321,23 @@
 2. **Only believe a note from someone you trust.** `X-Forwarded-For` is just text anyone can type. It's only worth reading when it arrives straight from your own front door.
 3. **Read the note from the end.** Each front door adds what it saw to the right-hand end. Everything to the left could have been written by the visitor, so you walk back from the right and stop at the first address that isn't yours.
 4. **One switch, not two.** When two layers (uvicorn and the coordinator) both try to do the same job, they can quietly disagree. Turning one off makes the behaviour easy to reason about.
+
+## 2026-11-22 (18:20 UTC): Hidden tests you can aim at a particular rig
+
+**Shipped**
+- **Aimed hidden tests** (threat model #1 and #8). A hidden test is a job where you already know the right answer; a rig that gets it wrong is caught without knowing it. Until now any hidden test went to whichever rig asked first, so you couldn't make sure the brand-new rig, or the one you're suspicious of, was the one that got it. Now `POST /v1/challenges` takes one optional setting:
+  - **`target_worker`**: only that rig can take the test, until the test's own deadline, even if it's offline for a while. Nobody else can grab it.
+  - **`target_tier`**: `new`, `suspect` or `established` (the trust tiers from 0.5.15). The test goes to a random *active* rig in that tier, worked out when it's handed out. If that rig doesn't pick it up in time, another rig in the same tier gets it. If no rig is in that tier yet, it waits, and the health page tells you.
+  - Neither: the old first-come behaviour. Both: refused. An unknown rig gets `404`, a revoked one `409`.
+- **The rig still can't tell.** Same job envelope, nothing about the target in it, in the public job view or in the logs. Who was picked is recorded privately, under its own names, so a dodged test doesn't muddle the audit follow-through counts from 0.5.17.
+- **Operator view and health page.** `/v1/audits` shows each test's target. `/v1/operator/health` adds `aimed_tests` (open, waiting for a rig) and a warning like "1 aimed hidden test(s) waiting for a rig".
+- **Shared ledger copies don't show the aim.** Which tier a rig was in is your private information, so copies drop the target. Copies made with the previous version still check cleanly.
+- **Two new self-checks** catch an aimed test taken by the wrong rig (e.g. someone editing the database).
+- **It only changes who gets checked, never points.** Results of aimed tests count exactly like any other hidden test.
+- Tests went from 230 to 245, all passing. I switched off 19 rules one at a time (only the target may take it, keeping a named rig's test until the deadline, filtering by tier, active rigs only, skipping revoked rigs, separate event names, assigning right away, the old-copy guard, both self-checks, refusing targets on normal jobs, the database upgrade, hiding the events, the 409 and 404, the health warning, passing the target through, one target only, dropping it from copies) and a test failed every time. I also ran it for real: started the coordinator, enrolled three rigs, let rig-a pass a warm-up test (so it's `established`), then aimed a test at tier `new`. It went to rig-c, rig-a was turned away (404), rig-c passed it. A test aimed at the revoked rig-b was refused (409); one aimed at tier `suspect` (nobody there) waited and the health page warned. The public job view showed only `job_created`, `job_leased`, `result_accepted`, the ledger self-check was clean and the server log never mentioned a target. Still software only: no real GPU yet.
+
+**What you learned**
+1. **Random checks are fair, aimed checks are useful.** Random spot-checks keep everyone honest on average. Aiming lets you look harder exactly where you're unsure: a rig nobody has vouched for yet, or one that was just caught.
+2. **A friend's vouching isn't a test.** A new rig could "graduate" just by being re-checked by a friend's rig that gives the same fake answer. A hidden test with a known answer can't be faked that way, so aiming them at new rigs closes that gap (as long as you create the tests).
+3. **Hide the aim, not just the test.** If the rig, the logs or a shared copy revealed who a test was aimed at, a cheater could learn "they're watching me" and behave. So the aim stays in your private records only.
+4. **Keep numbers meaning one thing.** A dodged test and a dodged audit look alike, but mixing them would change what the audit follow-through numbers mean. Separate names keep each number honest.
