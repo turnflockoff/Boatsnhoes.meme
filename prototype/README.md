@@ -188,6 +188,22 @@ Tested in software only (0.5.12).
 
 **Limits:** logs go to stderr only (no rotation or shipping yet; use your service manager), and no metrics endpoint for graphs. The waiting-auditor warning is exactly what your two-card test will show if both RX 470s share one owner label.
 
+## Implemented: real client addresses behind a proxy (0.5.20)
+
+Tested in software only.
+
+Request limits and lock-outs count per address. Behind a reverse proxy (nginx, Caddy, a tunnel, a load balancer) every request arrives from the proxy, so all rigs shared one bucket and one rig with a bad key could lock everyone out. New in `app/client_address.py`:
+
+- **`TRUSTED_PROXIES`** (comma or space separated addresses or ranges, e.g. `127.0.0.1` or `10.0.0.0/8`; **empty by default**). Only a request whose connection comes from a listed proxy has its `X-Forwarded-For` header read. From anyone else the header is ignored, so a rig can't pick its own address to dodge a lock-out.
+- **Read from the right.** Each proxy appends the address it saw, so the rightmost entries were written by your proxies and anything further left may be made up by the client. The first entry from the right that isn't a listed proxy is the client. Ports (`1.2.3.4:5555`, `[2001:db8::7]:443`) and IPv4 seen over IPv6 (`::ffff:10.0.0.5`) are understood; at most 20 hops are read.
+- **No header, or an entry that isn't an address:** the request keeps the last address we can vouch for (usually the proxy) and shares its limits. `/v1/operator/health` → `rate_limits.proxies` counts these and adds a plain warning, because it usually means the proxy isn't set to send the header.
+- **"Trust everyone" is refused** (`0.0.0.0/0`, `::/0`): the coordinator won't start, because any client could then choose its address. Bad entries are refused the same way.
+- **The real client is what gets limited, locked out, tagged in logs (`client_tag`) and named on the operator health page**, so you can block that address rather than your own proxy. Addresses still never appear in log lines.
+- **Start uvicorn with `--no-proxy-headers`** (shown in the quick start). uvicorn has its own proxy-header handling, on by default for `127.0.0.1`; turning it off makes `TRUSTED_PROXIES` the one setting that decides.
+- 20 new tests (230 in total). Each rule was switched off once on purpose (12 changes: trusting any peer, reading left to right, allowing trust-everyone, counting missing headers, stopping at garbage, IPv4-over-IPv6, ports, the hop cap, working the address out once per request, the health warning, reading the setting, using the resolver at all) and a test failed every time. Also run end to end with a real coordinator and `TRUSTED_PROXIES=127.0.0.1`: three wrong keys from "rig A" (`X-Forwarded-For: 203.0.113.50`) locked A out (`429`), "rig B" behind the same proxy still got `200`, A sending a made-up `203.0.113.51` in front of its real address was still `429`, the operator health page named `203.0.113.50` and warned about one request with no header, and the log held no addresses.
+
+**Limits:** only `X-Forwarded-For` is read, not the newer `Forwarded` header (nginx, Caddy, Cloudflare and most load balancers send `X-Forwarded-For`). If a listed proxy doesn't overwrite or append the header correctly, a client could choose its address, so list only proxies you run and have configured. Rigs behind one home router still share one address (that's their real address). Same in-memory, single-process limits as 0.5.19.
+
 ## Implemented: who may queue jobs, request limits and lock-outs (0.5.19)
 
 Tested in software only.
@@ -199,7 +215,7 @@ Tested in software only.
 - **Logs never contain the address.** Limit and lock-out lines carry a short `client_tag` (a keyed hash with a random key made at start-up) so one client's lines can be grouped. Run uvicorn with `--no-access-log` as shown below, because uvicorn's own access log prints addresses. `/v1/operator/health` (operator only) adds `rate_limits`: totals since start, and each locked-out address with its tag and how long until it's let back in, plus a warning, so you can block it in a firewall if needed.
 - 20 new tests (210 in total). Each rule was switched off once on purpose (13 changes: the token check, counting each kind of wrong credential, not counting missing ones, the `/health` exemption, the lock-out, the bucket, the refill cap, forgetting old failures, the tag in logs, the health warning, a submitter header when no submitter token is set) and a test failed every time. Also run end to end with a real coordinator: no token `403`, submitter token `200` (and `403` on an operator endpoint), a demo worker finished the job, the worker's own 1000-point job refused, three wrong credentials locked `127.0.0.1` out (`429`, `Retry-After: 600`) while `/health` still answered, and the operator health page, reached from a second address, named it. A second run at 5 requests a minute gave `429` on the 6th request with `Retry-After: 12`.
 
-**Limits:** counts and lock-outs live in memory, so a restart clears them, and one coordinator process is assumed. "Client" means the connecting address: behind a reverse proxy or a home router, many machines share one address and its limits, and one rig with a bad key can lock the others on that address out for the window. Someone with many addresses gets many buckets; this slows a flood, it doesn't stop a distributed one (that needs the host's DDoS protection). A submitter can still queue jobs with up to 1000 points for a friend's rig to claim, so give the submitter token only to programs you run.
+**Limits:** counts and lock-outs live in memory, so a restart clears them, and one coordinator process is assumed. "Client" means the connecting address: behind a home router, many machines share one address and its limits, and one rig with a bad key can lock the others on that address out for the window. (Behind your own reverse proxy, set `TRUSTED_PROXIES`; see 0.5.20 above.) Someone with many addresses gets many buckets; this slows a flood, it doesn't stop a distributed one (that needs the host's DDoS protection). A submitter can still queue jobs with up to 1000 points for a friend's rig to claim, so give the submitter token only to programs you run.
 
 ## Safety and correctness boundaries
 
@@ -219,7 +235,7 @@ are research references only. Their PoW/consensus implementations are not integr
     pip install -r requirements.txt
     cp .env.example .env
     python -m app.signing   # creates the signing key; share the printed public key
-    uvicorn app.main:app --host 127.0.0.1 --port 8000 --no-access-log
+    uvicorn app.main:app --host 127.0.0.1 --port 8000 --no-access-log --no-proxy-headers
 
 In another terminal, make a one-time code for the rig and start the worker with it:
 

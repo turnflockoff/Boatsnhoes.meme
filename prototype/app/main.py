@@ -12,7 +12,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from .config import Settings, get_settings
-from . import (audit_policy, key_rotation, observability, rate_limit, review, rewards, schemas,
+from . import (audit_policy, client_address, key_rotation, observability, rate_limit, review, rewards, schemas,
                tasks, workers)
 from .ledger import Ledger
 from .models import (ChallengeCreate, EnrollmentCreate, JobCreate, JobEnvelope, ResultSubmission,
@@ -70,9 +70,22 @@ def create_app(settings: Settings | None = None,
     limiter = rate_limit.RateLimiter(settings.rate_limit_per_minute, settings.auth_failure_limit,
                                      settings.auth_failure_window_seconds, limiter_clock)
     app.state.limiter = limiter
+    # Threat model #17 follow-up: behind a listed proxy, limits apply to the real client.
+    resolver = client_address.ClientResolver(
+        client_address.parse_trusted_proxies(settings.trusted_proxies))
+    app.state.client_resolver = resolver
+    if resolver.trusted:
+        log.info("trusted proxies configured", extra={"trusted_proxies": len(resolver.trusted)})
 
     def client_of(request: Request) -> str:
-        return request.client.host if request.client else "unknown"
+        """The client's address, worked out once per request (it is counted for the
+        operator health page) and kept in the request scope for later lookups."""
+        cached = request.scope.get("bnh_client")
+        if cached is None:
+            peer = request.client.host if request.client else "unknown"
+            cached = resolver.resolve(peer, request.headers.getlist("x-forwarded-for"))
+            request.scope["bnh_client"] = cached
+        return cached
 
     def now() -> int:
         return int(clock())
@@ -293,7 +306,8 @@ def create_app(settings: Settings | None = None,
                             "(stuck dispute, three different answers, or a failed hidden "
                             "test): see /v1/operator/review")
         # app/rate_limit.py: someone keeps sending wrong keys/tokens/codes.
-        limits = limiter.snapshot()
+        limits = limiter.snapshot() | {"proxies": resolver.snapshot()}
+        warnings.extend(resolver.warnings())
         if limits["locked_out_clients"]:
             warnings.append(f"{len(limits['locked_out_clients'])} client address(es) locked out "
                             "after repeated wrong keys, tokens or enrollment codes: see "

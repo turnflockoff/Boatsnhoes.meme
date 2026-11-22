@@ -20,8 +20,9 @@ only need to be 24 characters.
 `/health` is never limited, so a monitor can't be locked out by someone else's traffic.
 
 Limits:
-- "Client" means the address the connection came from. Behind a reverse proxy or a home
-  router doing NAT, many machines share one address and share its limits. One rig with a
+- "Client" means the address the connection came from, or, behind a reverse proxy listed
+  in `TRUSTED_PROXIES`, the address that proxy reports (app/client_address.py). Behind a
+  home router doing NAT, many machines share one address and share its limits. One rig with a
   bad key could lock out the other rigs on the same address for the window.
 - Someone with many addresses gets a bucket per address. This slows a flood; it doesn't
   stop a distributed one (that needs the hosting provider's DDoS protection).

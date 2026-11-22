@@ -7,6 +7,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from .client_address import parse_trusted_proxies
+
 load_dotenv()
 
 log = logging.getLogger("bnh.config")
@@ -49,6 +51,9 @@ class Settings:
     rate_limit_per_minute: int = 240
     auth_failure_limit: int = 10
     auth_failure_window_seconds: int = 600
+    # app/client_address.py: reverse proxies whose X-Forwarded-For header is believed, so
+    # limits apply to the real client. Empty = the header is ignored (the safe default).
+    trusted_proxies: tuple[str, ...] = ()
 
     def resolved_signing_key_path(self) -> Path:
         return self.signing_key_path or self.database_path.parent / "coordinator-signing.key"
@@ -128,4 +133,6 @@ def get_settings() -> Settings:
         rate_limit_per_minute=_int_env("RATE_LIMIT_PER_MINUTE", 240, 0, 100000),
         auth_failure_limit=_int_env("AUTH_FAILURE_LIMIT", 10, 0, 10000),
         auth_failure_window_seconds=_int_env("AUTH_FAILURE_WINDOW_SECONDS", 600, 10, 86400),
+        trusted_proxies=tuple(str(n) for n in
+                              parse_trusted_proxies(os.getenv("TRUSTED_PROXIES"))),
     )
