@@ -61,6 +61,9 @@ class Settings:
     # app/points.py (`points-table-v1`): fixed simulated points per task type, as sorted
     # (task_type, points) pairs. Empty = whoever queues a job picks its points (0-1000).
     points_table: tuple[tuple[str, int], ...] = ()
+    # app/key_rotation.py (`handover-key-v1`): PUBLIC half of the offline key that must also
+    # sign every key handover. None = handovers only need the old and new coordinator key.
+    handover_public_key: str | None = None
 
     def resolved_signing_key_path(self) -> Path:
         return self.signing_key_path or self.database_path.parent / "coordinator-signing.key"
@@ -106,6 +109,20 @@ def _database_path() -> Path:
 def default_signing_key_path() -> Path:
     raw = os.getenv("COORDINATOR_SIGNING_KEY_FILE")
     return Path(raw) if raw else _database_path().parent / "coordinator-signing.key"
+
+
+def handover_public_key_env() -> str | None:
+    """COORDINATOR_HANDOVER_PUBLIC_KEY: 64 hex characters, or unset."""
+    from .signing import parse_public_key
+
+    raw = (os.getenv("COORDINATOR_HANDOVER_PUBLIC_KEY") or "").strip().lower()
+    if not raw:
+        return None
+    try:
+        parse_public_key(raw)
+    except ValueError as exc:
+        raise ValueError(f"COORDINATOR_HANDOVER_PUBLIC_KEY: {exc}") from exc
+    return raw
 
 
 def _auditor_pick_env() -> str:
@@ -155,4 +172,5 @@ def get_settings() -> Settings:
         trusted_proxies=tuple(str(n) for n in
                               parse_trusted_proxies(os.getenv("TRUSTED_PROXIES"))),
         points_table=parse_points_table(os.getenv("POINTS_TABLE"), EXECUTORS),
+        handover_public_key=handover_public_key_env(),
     )

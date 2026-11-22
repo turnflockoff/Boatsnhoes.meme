@@ -1,5 +1,5 @@
 # BOATS N HOES: Project Task List (Claude + dev work)
-**Version:** 0.5.23 | **Last updated:** 2026-11-22 | Personal to-dos live in USER_TODO.md.
+**Version:** 0.5.24 | **Last updated:** 2026-11-22 | Personal to-dos live in USER_TODO.md.
 
 ## Phase 0: Foundation
 - [x] Buy boatsnhoes.meme
@@ -50,6 +50,8 @@
 - [x] Fixed points per task type (threat model #16 follow-up, `points-table-v1`): optional `POINTS_TABLE`; when set, every new job and hidden test gets the table's points and any other number is refused, operator included; health warning while a submitter token has no table (270 tests)
 - [x] Trust-aware auditor pick (threat model #4, #6, `auditor-pick-v1`): optional `AUDITOR_PICK=trusted-first` sends audits and tie-breakers to established rigs first, then new, and a rig with a strike only when nobody else is eligible; off by default; health warning while a caught rig can still audit (281 tests)
 - [ ] Decide whether to switch on `AUDITOR_PICK=trusted-first` (owner decision: it shifts who earns audit points)
+- [x] Offline handover key (threat model #9 follow-up, `handover-key-v1`): `python -m app.key_rotation make-handover-key`; coordinator announces its public half (signed by the current key), workers pin it and then only follow key handovers it also signed, so a stolen signing key file can't move them; `rotate` refuses without it once set (294 tests)
+- [ ] Make the offline handover key and keep it on a USB stick (owner step, before rigs go online)
 - [ ] Pick the numbers for `POINTS_TABLE` (owner decision; e.g. 1 for the demo task, 10 for an AI job)
 - [ ] GPU worker Phase 3: RX 470 hardware validation (needs the real rig; start by running the inventory tool there)
 - [ ] Memory-hard, ASIC-resistant algorithm (pseudocode, reference miner)

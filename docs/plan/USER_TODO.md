@@ -1,5 +1,5 @@
 # YOUR Personal To-Do List (things only you can do)
-**Version:** 0.5.23 | **Last updated:** 2026-11-22
+**Version:** 0.5.24 | **Last updated:** 2026-11-22
 Never share passwords, API keys, or recovery phrases with anyone, including Claude.
 
 ## This week
@@ -26,6 +26,7 @@ Never share passwords, API keys, or recovery phrases with anyone, including Clau
 - [ ] Optional, when rigs are running: `python -m app.review` lists held results that need a person (side by side). It changes nothing. Decide, together with the scoring v2 question above, what your verdict on a case should do to its points
 - [ ] Before you give a program the `SUBMITTER_TOKEN`: pick fixed points per job type and put them in `prototype/.env`, e.g. `POINTS_TABLE=demo:sha256=1,llm:generate=10` (whole numbers 0-1000, every job type listed). Then nobody, you included, can queue a job worth more than that. Simulated points only
 - [ ] Decide: should rigs caught cheating stop being picked to check other rigs' work? Setting `AUDITOR_PICK=trusted-first` in `prototype/.env` does that (they're only used when nobody else is around). Downside: checking work pays points, so trusted rigs earn a bigger share of those. Default stays `uniform` until you choose
+- [ ] Before rigs go online: plug in a USB stick and run `python -m app.key_rotation make-handover-key --out <stick>/bnh-handover.key` from `prototype/`. Put the printed `COORDINATOR_HANDOVER_PUBLIC_KEY=...` line in `prototype/.env`, restart the coordinator, then unplug the stick and put it somewhere safe. You only need it again to change the signing key. Losing it means re-pinning every rig by hand, so a second copy on another stick (kept elsewhere) is a good idea
 - [ ] Decide where signed reward reports and ledger copies get posted (for example a `reports/` page on boatsnhoes.meme, or GitHub releases) and how long to wait after a period closes before sharing a copy
 - [ ] Find a blockchain developer or team to build the chain and miner
 - [ ] Set up a project email and a shared password manager

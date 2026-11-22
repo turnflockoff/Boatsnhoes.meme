@@ -129,7 +129,21 @@ Tested in software only (0.5.16).
 - Operator health shows `signing_key_rotations`.
 - 10 new tests (168 in total). I switched off ten rules one at a time (old-key signature, new-key signature, numbering, linking, no reuse, the start-up history check, finishing an interrupted rotation, the worker's chain check, re-signing on claim, refusing to re-sign a foreign signature) and a test failed every time. Also run end to end: coordinator + demo worker pinned key A, a job queued, coordinator stopped, `rotate`, restarted on key B; the worker followed the handover, the queued job was re-signed and accepted.
 
-**Limits:** a handover only helps for a **planned** rotation. Whoever holds the old private key can sign a handover, so if that key may have been stolen, give every worker the new key directly (`--coordinator-key`) and delete its old pin instead. Workers started with `--coordinator-key` don't follow handovers; give them the new key. Old signed reward reports still check out against the old public key, which stays listed in the history file.
+**Limits:** a handover only helps for a **planned** rotation. Whoever holds the old private key can sign a handover (since 0.5.24 the optional offline handover key below closes this for workers that pinned it), so if that key may have been stolen, give every worker the new key directly (`--coordinator-key`) and delete its old pin instead. Workers started with `--coordinator-key` don't follow handovers; give them the new key. Old signed reward reports still check out against the old public key, which stays listed in the history file.
+
+## Implemented: offline handover key (threat model #9 follow-up, `handover-key-v1`)
+
+Tested in software only (0.5.24).
+
+- **Why.** A handover signed by the old and new key works for planned rotations, but anyone who steals the coordinator's key file can sign one too, to a key of their own, and every worker would follow it. Now you can add a second key that **only signs handovers** and lives offline (a USB stick in a drawer), never on the coordinator machine.
+- **`python -m app.key_rotation make-handover-key --out /media/usb/bnh-handover.key`** makes it (readable by you only). It refuses to overwrite a file and refuses the coordinator key's own folder (a key sitting next to the signing key is stolen together with it). It prints a line to add to `prototype/.env`: `COORDINATOR_HANDOVER_PUBLIC_KEY=<hex>` (public half only).
+- **Workers pin it.** With that setting, `GET /v1/coordinator/key` adds `handover_key`: the handover public key, vouched for by a signature from the current coordinator key (`purpose: bnh-handover-key-announcement/1`). A demo worker that already trusts the served coordinator key checks that signature and pins the handover key in `coordinator-handover.pub` next to its other pin, on first contact or on a later run. A tampered announcement is ignored with a warning; a different announced key never replaces a pinned one (a person has to). The operator can also hand it out directly: `--handover-key` / `BNH_HANDOVER_KEY`.
+- **From then on, every handover the worker follows must also be signed by that key.** `follow_chain` checks a third signature (`signatures.handover`) on each step after the worker's pinned key. Older handovers from before the key existed aren't checked. The coordinator key file alone can no longer move the worker.
+- **Rotating needs the stick.** `python -m app.key_rotation rotate --handover-key-file /media/usb/bnh-handover.key`. With `COORDINATOR_HANDOVER_PUBLIC_KEY` set, `rotate` refuses to run without the file, or with a different one, because workers would refuse the handover and stop. `show` marks handovers that carry the third signature.
+- The coordinator refuses to start if the handover key is one of its own signing keys (current or retired). Operator health shows `handover_key` (`rule` and `fingerprint`), or `null` when off.
+- 13 new tests (294 in total). I switched off 21 rules one at a time (requiring the third signature, refusing a handover key that's on the chain, the announcement's purpose, coordinator key, signature and self-check, `rotate` needing the stick, needing the right stick, refusing a coordinator key as the stick, adding the signature, the key-making folder and overwrite checks, loading never creating a key, the coordinator's start-up check, serving the announcement, reading the setting, the worker passing its pin to the chain check, pinning on a later run, the given-vs-pinned conflict, never replacing a pin, checking the announcement) and a test failed every time. Also run end to end with the real server and `demo_worker.py`: the worker pinned the coordinator key, then the announced handover key after a restart; `rotate` without the stick was refused, with it the worker followed and a job was accepted; a "thief" server with a copy of the current key file and a handover to its own key (signed by both keys) was refused, and the pin stayed put. No keys or tokens in the server log.
+
+**Limits:** off until you make the key and set it. A thief with the coordinator key file can still sign **jobs** until you rotate, so rotate (with the stick) as soon as you suspect a theft. Workers that never pinned a handover key (or were started with `--coordinator-key`) still follow any handover signed by the old and new key; give them the new key directly. If the stick is lost, workers that pinned it can't follow any further rotation: re-pin them by hand. The first pin is still trust on first use, unless you hand out the key directly.
 
 ## Implemented: signed reward reports (threat model #10, first step)
 
@@ -285,8 +299,8 @@ A GitHub Actions workflow runs these tests on pushes and pull requests affecting
 
 ## API outline
 
-- `GET /v1/coordinator/key` — public: the coordinator's Ed25519 public key, fingerprint and signed key handovers (`rotations`).
-- `python -m app.key_rotation rotate|show` — CLI only: planned key rotation with a handover signed by both keys (see above).
+- `GET /v1/coordinator/key` — public: the coordinator's Ed25519 public key, fingerprint, signed key handovers (`rotations`) and, if set, the announced offline handover key (`handover_key`).
+- `python -m app.key_rotation rotate|show|make-handover-key` — CLI only: planned key rotation with a handover signed by both keys, and optionally by the offline handover key (see above).
 - `POST /v1/enrollments` — operator only: make a one-time enrollment code for an owner.
 - `POST /v1/workers/register` — new worker: send the enrollment code, get a key once. Existing worker: send its key to update capabilities.
 - `POST /v1/workers/{worker_id}/revoke` — operator only: block a worker's key and requeue its job.

@@ -18,7 +18,7 @@ from .ledger import Ledger
 from .models import (ChallengeCreate, EnrollmentCreate, JobCreate, JobEnvelope, ResultSubmission,
                      WorkerRegistration)
 from .security import sha256_text
-from .signing import ManifestSigner, fingerprint, verify_manifest
+from .signing import ManifestSigner, SigningKeyError, fingerprint, verify_manifest
 
 log = logging.getLogger("bnh.coordinator")
 access_log = logging.getLogger("bnh.access")
@@ -61,6 +61,13 @@ def create_app(settings: Settings | None = None,
     rotations = key_rotation.check_current_key(settings.resolved_signing_key_path(),
                                                signer.public_key_hex)
     retired = key_rotation.retired_keys(rotations)
+    # `handover-key-v1`: the offline key's PUBLIC half, announced so workers can pin it.
+    handover_key = (settings.handover_public_key or "").strip().lower() or None
+    if handover_key and handover_key in retired | {signer.public_key_hex}:
+        raise SigningKeyError("COORDINATOR_HANDOVER_PUBLIC_KEY must be a separate offline key, "
+                              "not a coordinator signing key")
+    handover_announcement = (key_rotation.announcement(signer, handover_key)
+                             if handover_key else None)
     log.info("manifest signing key loaded", extra={"fingerprint": signer.fingerprint,
                                                    "rotations": len(rotations)})
     ledger = Ledger(settings.database_path, rng=rng,
@@ -348,6 +355,9 @@ def create_app(settings: Settings | None = None,
         return {"status": "attention" if warnings else "ok", "checked_at": t,
                 "uptime_seconds": t - started_at, "signing_key_fingerprint": signer.fingerprint,
                 "signing_key_rotations": len(rotations),
+                "handover_key": {"rule": key_rotation.HANDOVER_RULE,
+                                 "fingerprint": fingerprint(handover_key)} if handover_key
+                else None,
                 **snap, "audit_dropouts": {w: f["dropped"] for w, f in follow.items()
                                            if f["dropped"]},
                 "review": queue["counts"] | {"points_held": queue["points_held"]},
@@ -373,7 +383,8 @@ def create_app(settings: Settings | None = None,
         Workers should pin it once (compare the fingerprint with the operator) and refuse
         any later change, so a fake coordinator can't just serve its own key."""
         return {"algorithm": "ed25519", "public_key": signer.public_key_hex,
-                "fingerprint": signer.fingerprint, "rotations": rotations}
+                "fingerprint": signer.fingerprint, "rotations": rotations,
+                "handover_key": handover_announcement}
 
     @app.post("/v1/enrollments")
     def create_enrollment(body: EnrollmentCreate,

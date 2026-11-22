@@ -68,6 +68,15 @@ class ManifestSigner:
         return SIGNATURE_PREFIX + self._key.sign(canonical_json(fields)).hex()
 
     @classmethod
+    def load(cls, path: Path) -> ManifestSigner:
+        """Load an existing key; never create one. Used for the offline handover key, where a
+        missing file means "plug in the USB stick", not "make a new key"."""
+        path = Path(path)
+        if not path.exists():
+            raise SigningKeyError(f"{path} does not exist")
+        return cls.load_or_create(path)
+
+    @classmethod
     def load_or_create(cls, path: Path) -> ManifestSigner:
         """Load the key at `path`, or create it (readable by this user only) if absent.
         Refuses a key file that other users on the machine can read."""
