@@ -47,3 +47,18 @@
 1. **A fingerprint (hash) proves a file is exactly the one you meant.** Change one byte of a 400 MB model and the sha256 changes completely, so a worker can detect a swapped or corrupted model before running it.
 2. **Not every check proves the same thing.** For the SHA job the coordinator redoes the math, which is exact proof. For AI text it can only check that the answer looks right, which is "schema-only". Real proof needs another rig to re-run the same job and compare (Phase 4).
 3. **Licenses matter before launch.** The model we picked (Qwen2.5-0.5B) is Apache-2.0, which allows commercial use. That's recorded right next to it in the registry.
+
+## 2026-11-22 (later): GPU worker Phase 4, first slice (catching cheaters)
+
+**Shipped**
+- **Hidden re-runs.** When an AI result can only be checked for shape, the coordinator now quietly hands the same job to a *different* rig (25% of the time by default). If both answers match, both are marked confirmed. If they don't, both are held. A rig can never re-check its own work.
+- **Hidden test jobs ("challenges").** You can slip in a job where you already know the answer. To the rig it looks exactly like normal work, and a wrong answer even looks accepted, so a cheater can't tell they were caught. You see the failure in a private trust report.
+- **Points split by status:** confirmed, pending, unverified, held. The public view hides which jobs were tests.
+- The private views (challenges, audits, trust report) are locked behind an operator password (`OPERATOR_TOKEN`). If you don't set one, they're switched off.
+- Tests went from 32 to 44, all passing. Still software only: no real GPU has run any of this.
+
+**What you learned**
+1. **You can't prove a GPU did the work, but you can make cheating expensive.** If 1 in 4 answers gets re-checked by someone else, a rig that fakes answers gets caught fast. That's spot-checking, the same idea as a random bag check.
+2. **A test only works if it's invisible.** My first version gave re-check jobs a longer deadline than normal jobs. That's a tell: a cheater could fake normal jobs and only work honestly on the long ones. I fixed it so re-checks copy the original's time window.
+3. **"Close enough" needs a rule written down.** Two honest rigs can print the same AI answer with different spacing. The rule now: ignore spacing and line breaks, but any different word or capital letter counts as a mismatch. We'll adjust it once two real RX 470s produce answers.
+4. **Agreement isn't proof.** If one person runs two rigs, they can agree on a fake answer. That's why per-worker identity (logins/keys) is one of the next jobs.

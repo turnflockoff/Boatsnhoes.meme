@@ -25,6 +25,26 @@ This directory contains an early local coordinator/worker scaffold for the RX 47
 - Older Phase 1 databases are migrated in place.
 - 32 tests in total.
 
+## Implemented (Phase 4, first slice: audits and challenges)
+
+A result hash is not proof that a GPU ran a model. Phase 4 adds the ways the coordinator gathers evidence anyway. Every check is tested in software only; none has run against real GPU output yet.
+
+- **Hidden re-run audits.** When an unproven (`schema-only`) result is accepted, the coordinator re-queues the same job for a *different* worker at rate `AUDIT_RATE` (default 0.25, chosen with the OS's secure randomness). The original worker can never claim its own audit. The audit job is created in the same database transaction as the acceptance, and it gets the same time window as the original, so its deadline doesn't give it away.
+- **Tolerance rules** (`results_agree` on each task): SHA must match byte for byte; AI text must match after collapsing whitespace. Anything else (one word, letter case) is a disagreement.
+- **Outcomes.** Agreement marks both results `confirmed` with confidence `replicated`. Disagreement marks both `disputed` and their points are held. An audit that never runs (expires, fails, or is rejected) leaves the original `unaudited`. Audits never spawn audits.
+- **Hidden challenge jobs.** The operator queues a known-answer job with `POST /v1/challenges`. Workers get the same envelope, the same receipt and the same audit-trail events as normal work. A wrong (but well-formed) answer is accepted on the surface, so a cheater can't tell they were caught, and recorded as `failed-challenge` with points held.
+- **Operator endpoints** (`/v1/challenges`, `/v1/audits`, `/v1/workers/{id}/trust`) require the `X-Operator-Token` header to match `OPERATOR_TOKEN`. If the token isn't set, they are disabled.
+- **Public ledger** (`GET /v1/ledger`) adds `points_by_status`: confirmed, pending, unverified, held. Challenge outcomes are folded into confirmed/held so the public view doesn't reveal which jobs were challenges. The public job view hides audit and challenge events.
+- New consistency checks: a pending audit with no open audit job, a job leased to an excluded worker, and a worker auditing its own result.
+- 12 new tests (44 in total), including an in-place migration of a Phase 2 database.
+
+**Fraud risks that remain (be honest about these):**
+- **Collusion.** Two workers run by the same person can agree on a wrong answer. Agreement is evidence, not proof. Worker identity is not authenticated yet, so one person can register many workers.
+- **Repeated payloads.** An audit has the same payload as the original. Colluding workers who compare notes could spot it.
+- **Trusted coordinator.** The coordinator picks auditors, stores expected answers, and could lie about all of it.
+- **Real GPU nondeterminism is unknown.** The whitespace-only tolerance is a guess until two real rigs produce output for the same job. It may need loosening (or a different check) after Phase 3.
+- **No tie-breaker yet.** A dispute stays held until a person looks at it.
+
 **Not done yet:** `llm:generate` has **never run** on project hardware: no llama.cpp build, no downloaded model and no RX 470 test yet (Phase 3). Inference results are only checked for shape (`schema-only`). Phase 4 re-run audits are needed before they mean anything.
 
 To try inference on a GPU box later:
@@ -33,7 +53,7 @@ To try inference on a GPU box later:
     python -m app.model_registry pin qwen2.5-0.5b-instruct-q4_k_m ./models/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf
     LLAMA_CLI=/path/to/llama-cli MODEL_DIR=./models python demo_worker.py
 
-**Still missing (honest limits):** workers register without authentication, and anyone who can reach the API can create jobs. The coordinator is trusted, and the shared secret is symmetric, so a worker that knows it could forge manifests. Per-worker keys or asymmetric signatures are the fix. An inference adapter exists (Phase 2) but is untested on real hardware, and there is no RX 470 validation yet (Phase 3).
+**Still missing (honest limits):** workers register without authentication, and anyone who can reach the API can create normal jobs. The coordinator is trusted, and the shared secret is symmetric, so a worker that knows it could forge manifests. Per-worker keys or asymmetric signatures are the fix. An inference adapter exists (Phase 2) but is untested on real hardware, and there is no RX 470 validation yet (Phase 3).
 
 ## Safety and correctness boundaries
 
@@ -80,7 +100,11 @@ A GitHub Actions workflow runs these tests on pushes and pull requests affecting
 - `POST /v1/jobs` — create a deterministic demo job.
 - `POST /v1/jobs/next` — worker claims the next queued job.
 - `POST /v1/jobs/{job_id}/submit` — submit a result.
-- `GET /v1/ledger` — view simulated accepted-work entries.
+- `GET /v1/ledger` — view simulated accepted-work entries and points by status.
+- `GET /v1/jobs/{job_id}` — job status and its public audit trail.
+- `POST /v1/challenges` — operator only: queue a hidden known-answer job.
+- `GET /v1/audits` — operator only: every audit and challenge with its outcome.
+- `GET /v1/workers/{worker_id}/trust` — operator only: how a worker's results held up.
 - `GET /health` — local health check.
 
 ## GPU diagnostic
@@ -93,10 +117,8 @@ This checks whether `vulkaninfo --summary` can run. Device enumeration is not pr
 
 ## Not implemented
 
-- Persistent job queue and leases across API restarts.
-- Worker-side manifest signature verification.
 - Real model inference on RX 470.
-- Independent task verifiers and audit sampling.
+- A tie-breaker re-run for disputed audits.
 - Public deployment security, client authentication, TLS, rate limits, and abuse prevention.
 - Ethereum ERC-20 integration or reward distribution.
 

@@ -15,6 +15,11 @@ class JobCreate(BaseModel):
     ttl_seconds: int = Field(default=300, ge=10, le=3600)
 
 
+class ChallengeCreate(JobCreate):
+    """A hidden known-answer job. `expected_result` is stored but never sent to workers."""
+    expected_result: str = Field(min_length=1, max_length=8192)
+
+
 class JobEnvelope(BaseModel):
     job_id: str
     task_type: str

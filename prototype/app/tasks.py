@@ -5,6 +5,7 @@ Every job type plugs in by implementing `TaskExecutor`:
   - available()        -> (bool, reason)                    (worker, before advertising it)
   - execute(payload)   -> result string                     (worker)
   - verify(payload, result) -> Verdict                      (coordinator, at submission)
+  - results_agree(a, b) -> bool                             (coordinator, Phase 4 audits)
 
 `Verdict.confidence` is explicit about how much a check proves:
   "exact"          the coordinator recomputed / fully checked the answer
@@ -55,6 +56,10 @@ class TaskExecutor:
 
     def verify(self, payload: str, result: str) -> Verdict:
         raise NotImplementedError
+
+    def results_agree(self, a: str, b: str) -> bool:
+        """Tolerance rule for comparing two independent runs. Default: byte-exact."""
+        return a == b
 
 
 def _sha(value: str) -> str:
@@ -169,8 +174,14 @@ class LlmGenerateTask(TaskExecutor):
             return Verdict(False, "schema-check", "schema-only", "empty output")
         if len(result) > self.MAX_OUTPUT_CHARS:
             return Verdict(False, "schema-check", "schema-only", "output too long")
-        # Well-formed, but this does NOT prove the model ran. Phase 4 adds re-run audits.
+        # Well-formed, but this does NOT prove the model ran. Phase 4 re-run audits do that.
         return Verdict(True, "schema-check", "schema-only")
+
+    def results_agree(self, a: str, b: str) -> bool:
+        """Greedy decoding with a fixed seed should repeat token-for-token, but runtimes can
+        differ in spacing/newlines. Tolerance: equal after collapsing whitespace. Any other
+        difference (a single word or letter case) is a disagreement."""
+        return " ".join(a.split()) == " ".join(b.split())
 
 
 EXECUTORS: dict[str, TaskExecutor] = {t.task_type: t for t in (Sha256Task(), LlmGenerateTask())}

@@ -49,9 +49,10 @@ This roadmap separates implemented repository assets from proposed work. A check
 ## Track E — Verification and accounting
 - [ ] Implement schema, input hash, model hash, and job-version checks.
 - [x] Reject duplicate and expired submissions.
-- [ ] Define deterministic task checks and tolerances for nondeterministic tasks. *(Verdict confidence levels in place: `exact` vs `schema-only`.)*
-- [ ] Add independent re-run / spot-audit flow.
-- [x] Record queued, leased, accepted, rejected, expired and failed results with an audit trail (disputes not yet).
+- [x] Define deterministic task checks and tolerances for nondeterministic tasks. *(`exact` recompute for SHA; AI text must match after collapsing whitespace. Tolerance not yet tested against real GPU output.)*
+- [x] Add independent re-run / spot-audit flow. *(Hidden re-runs by a different worker at `AUDIT_RATE`, plus hidden known-answer challenge jobs. Tested in software only.)*
+- [ ] Add a tie-breaker re-run when an audit disagrees.
+- [x] Record queued, leased, accepted, rejected, expired and failed results with an audit trail, plus audit outcomes (confirmed, disputed, held).
 - [x] Keep rewards simulated and off-chain.
 - [ ] Export an auditable reward report.
 - [ ] Document collusion, fabrication, and verification limitations.
