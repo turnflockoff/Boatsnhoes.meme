@@ -59,7 +59,7 @@ Build and check a report:
     python -m app.rewards verify report.json --db ./data/prototype.sqlite3
 
 **Fraud risks that remain (be honest about these):**
-- **Collusion.** Two workers run by the same person can agree on a wrong answer. Agreement is evidence, not proof. Worker identity is not authenticated yet, so one person can register many workers. In a tie-breaker, two colluders can even outvote an honest auditor.
+- **Collusion.** Two workers run by the same person can agree on a wrong answer. Agreement is evidence, not proof. Workers now need an operator code and a per-worker key, and same-owner workers never audit each other, but a person who gets codes under several names is still a ring. In a tie-breaker, two colluders can even outvote an honest auditor.
 - **First-come auditors.** An audit goes to whichever eligible worker asks next, so a ring that polls quickly gets more audits than chance would give it.
 - **Repeated payloads.** An audit has the same payload as the original. Colluding workers who compare notes could spot it.
 - **Trusted coordinator.** The coordinator picks auditors, stores expected answers, and could lie about all of it.
@@ -74,7 +74,26 @@ To try inference on a GPU box later:
     python -m app.model_registry pin qwen2.5-0.5b-instruct-q4_k_m ./models/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf
     LLAMA_CLI=/path/to/llama-cli MODEL_DIR=./models python demo_worker.py
 
-**Still missing (honest limits):** workers register without authentication, and anyone who can reach the API can create normal jobs. The coordinator is trusted, and the shared secret is symmetric, so a worker that knows it could forge manifests. Per-worker keys or asymmetric signatures are the fix. An inference adapter exists (Phase 2) but is untested on real hardware, and there is no RX 470 validation yet (Phase 3).
+**Still missing (honest limits):** anyone who can reach the API can create normal jobs, and owner labels depend on the operator handing out codes carefully. The coordinator is trusted, and the shared secret is symmetric, so a worker that knows it could forge manifests. Per-worker keys or asymmetric signatures are the fix. An inference adapter exists (Phase 2) but is untested on real hardware, and there is no RX 470 validation yet (Phase 3).
+
+## Implemented: per-worker keys and authenticated registration
+
+Closes threat-model item #2 *as far as the operator hands out codes carefully*. Tested in software only.
+
+- **One-time enrollment codes.** The operator makes a code tied to an `owner` label (the person or group running the rig) with `POST /v1/enrollments` (needs `X-Operator-Token`) or `python -m app.workers enroll --owner <label>`. A code works once and expires (default 24 h, at most 7 days).
+- **Per-worker keys.** A rig sends the code once to `POST /v1/workers/register` and gets its own random key back (`bnhw_…`, 256 bits). The key is shown once; the coordinator stores only its sha256, and never stores codes in plain text either.
+- **Every claim and submit needs the key** (`Authorization: Bearer <key>`). The worker id comes from the key. Naming a different worker id gets `403`, a missing or unknown key gets `401`. One rig can't claim or submit as another.
+- **No take-overs.** A code can't be used to grab a worker id that already has a key (`409`, and the code is not used up). An existing worker changes its capabilities by registering again with its own key, and gets no new key.
+- **Revocation.** `POST /v1/workers/{id}/revoke` (operator) or `python -m app.workers revoke <id>` blocks the key at once and puts any job the worker is holding back in the queue. Its past results stay for the operator to review. A revoked worker id can't re-enroll.
+- **One owner never checks itself.** Hidden re-runs and tie-breakers are closed to every worker with the same owner as the worker(s) they exclude, not just the same worker id. A new consistency check flags any job given to a same-owner worker.
+- `python -m app.workers list` shows each worker's owner and whether it is active, revoked, or keyless. The trust report shows `owner` and `revoked`. Keys never appear in any API response, listing or log.
+- Older databases are migrated in place. Workers registered before this change have no key and must enroll with a code (same worker id is fine).
+- The demo worker saves its key to `./data/worker-<id>.key` (owner-only file permissions, git-ignored) on the first run and reuses it after.
+- 12 new tests (73 in total). Also run end to end with a real coordinator process: one code from the API, one from the CLI, two demo workers, a reused code refused, a saved key reused, and a revoked worker refused.
+
+**What this does not fix:** owner labels are only as honest as the operator's hand-out. One person who talks the operator into several codes under different names is still a Sybil ring. There is no proof of personhood, no rate limit on the API, and creating normal jobs (`POST /v1/jobs`) still needs no login.
+
+**Your two RX 470s:** if both cards get the same owner label, they will never audit each other, so with only those two rigs online no audit ever runs. For a two-card test, enroll them under two labels (for example `owner-gpu0` and `owner-gpu1`) and remember that agreement between two cards you own proves less than agreement between strangers.
 
 ## Safety and correctness boundaries
 
@@ -96,11 +115,16 @@ are research references only. Their PoW/consensus implementations are not integr
     # Set PROTOTYPE_SECRET to a long random value.
     uvicorn app.main:app --host 127.0.0.1 --port 8000
 
-In another terminal:
+In another terminal, make a one-time code for the rig and start the worker with it:
 
     cd prototype
     . .venv/bin/activate
-    python demo_worker.py --url http://127.0.0.1:8000
+    CODE=$(python -m app.workers enroll --owner owner-gpu0)
+    python demo_worker.py --url http://127.0.0.1:8000 --worker-id rig-gpu0 --enrollment-code "$CODE"
+
+Later runs reuse the saved key, so the code isn't needed again:
+
+    python demo_worker.py --url http://127.0.0.1:8000 --worker-id rig-gpu0
 
 Create a demo job using the API docs at http://127.0.0.1:8000/docs:
 - POST /v1/jobs with {"payload":"hello from Boats N Hoes","task_type":"demo:sha256"}.
@@ -117,10 +141,12 @@ A GitHub Actions workflow runs these tests on pushes and pull requests affecting
 
 ## API outline
 
-- `POST /v1/workers/register` — register a worker identifier.
+- `POST /v1/enrollments` — operator only: make a one-time enrollment code for an owner.
+- `POST /v1/workers/register` — new worker: send the enrollment code, get a key once. Existing worker: send its key to update capabilities.
+- `POST /v1/workers/{worker_id}/revoke` — operator only: block a worker's key and requeue its job.
 - `POST /v1/jobs` — create a deterministic demo job.
-- `POST /v1/jobs/next` — worker claims the next queued job.
-- `POST /v1/jobs/{job_id}/submit` — submit a result.
+- `POST /v1/jobs/next` — worker claims the next queued job (needs its key).
+- `POST /v1/jobs/{job_id}/submit` — submit a result (needs its key).
 - `GET /v1/ledger` — view simulated accepted-work entries and points by status.
 - `GET /v1/jobs/{job_id}` — job status and its public audit trail.
 - `POST /v1/challenges` — operator only: queue a hidden known-answer job.
@@ -141,7 +167,7 @@ This checks whether `vulkaninfo --summary` can run. Device enumeration is not pr
 
 - Real model inference on RX 470.
 - Random (rather than first-come) auditor assignment.
-- Public deployment security, client authentication, TLS, rate limits, and abuse prevention.
+- Public deployment security, TLS, rate limits, and abuse prevention. Workers authenticate with per-worker keys; job creation does not require a login yet.
 - Ethereum ERC-20 integration or reward distribution.
 
 Treat this as an engineering starter, not production infrastructure.

@@ -54,7 +54,18 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS workers (
     worker_id TEXT PRIMARY KEY,
     capabilities TEXT NOT NULL,
-    registered_at INTEGER NOT NULL
+    registered_at INTEGER NOT NULL,
+    key_hash TEXT,
+    owner TEXT,
+    revoked_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS enrollments (
+    code_hash TEXT PRIMARY KEY,
+    owner TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    used_at INTEGER,
+    worker_id TEXT
 );
 CREATE TABLE IF NOT EXISTS jobs (
     job_id TEXT PRIMARY KEY,
@@ -105,6 +116,11 @@ CREATE TABLE IF NOT EXISTS events (
 
 
 MIGRATIONS = {
+    "workers": (
+        ("key_hash", "TEXT"),
+        ("owner", "TEXT"),
+        ("revoked_at", "INTEGER"),
+    ),
     "submissions": (
         ("verifier_method", "TEXT NOT NULL DEFAULT 'deterministic-recompute'"),
         ("confidence", "TEXT NOT NULL DEFAULT 'exact'"),
@@ -132,6 +148,8 @@ class Ledger:
                 for name, ddl in columns:
                     if name not in have:
                         db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+            # After the migration, so older databases have the column first.
+            db.execute("CREATE UNIQUE INDEX IF NOT EXISTS workers_key_hash ON workers(key_hash)")
 
     # -- plumbing -----------------------------------------------------------------
     def _connect(self) -> sqlite3.Connection:
@@ -160,20 +178,92 @@ class Ledger:
         db.execute("INSERT INTO events(job_id, worker_id, event, detail, at) VALUES(?,?,?,?,?)",
                    (job_id, worker_id, event, detail, now))
 
-    # -- workers --------------------------------------------------------------------
-    def register_worker(self, worker_id: str, capabilities: str, now: int) -> None:
+    # -- workers and enrollment ------------------------------------------------------
+    # Only sha256 hashes of enrollment codes and worker keys are stored. Both are 256-bit
+    # random tokens, so a fast hash is enough: there is nothing to brute-force.
+    def create_enrollment(self, code_hash: str, owner: str, now: int, expires_at: int) -> None:
         with self._tx() as db:
-            db.execute(
-                "INSERT INTO workers(worker_id, capabilities, registered_at) VALUES(?,?,?) "
-                "ON CONFLICT(worker_id) DO UPDATE SET capabilities=excluded.capabilities",
-                (worker_id, capabilities, now),
-            )
-            self._event(db, now, "worker_registered", worker_id=worker_id)
+            db.execute("INSERT INTO enrollments(code_hash, owner, created_at, expires_at) "
+                       "VALUES(?,?,?,?)", (code_hash, owner, now, expires_at))
+            self._event(db, now, "enrollment_created", detail=f"owner={owner}")
+
+    def enroll_worker(self, worker_id: str, capabilities: str, code_hash: str, key_hash: str,
+                      now: int) -> tuple[str, str | None]:
+        """Use a one-time enrollment code to register `worker_id` with a new key.
+        Returns (outcome, owner): outcome is enrolled, bad_code, taken or revoked.
+        A failed attempt never consumes the code."""
+        with self._tx() as db:
+            code = db.execute("SELECT * FROM enrollments WHERE code_hash=?",
+                              (code_hash,)).fetchone()
+            if code is None or code["used_at"] is not None or code["expires_at"] <= now:
+                return "bad_code", None
+            worker = db.execute("SELECT * FROM workers WHERE worker_id=?",
+                                (worker_id,)).fetchone()
+            if worker is not None and worker["revoked_at"] is not None:
+                return "revoked", None
+            if worker is not None and worker["key_hash"] is not None:
+                return "taken", None  # an enrollment code can't take over a keyed worker
+            owner = code["owner"]
+            if worker is None:
+                db.execute("INSERT INTO workers(worker_id, capabilities, registered_at, "
+                           "key_hash, owner) VALUES(?,?,?,?,?)",
+                           (worker_id, capabilities, now, key_hash, owner))
+            else:  # a keyless worker from an older (pre-auth) database
+                db.execute("UPDATE workers SET capabilities=?, key_hash=?, owner=? "
+                           "WHERE worker_id=?", (capabilities, key_hash, owner, worker_id))
+            db.execute("UPDATE enrollments SET used_at=?, worker_id=? WHERE code_hash=?",
+                       (now, worker_id, code_hash))
+            self._event(db, now, "worker_enrolled", worker_id=worker_id, detail=f"owner={owner}")
+            return "enrolled", owner
+
+    def update_capabilities(self, worker_id: str, capabilities: str, now: int) -> None:
+        with self._tx() as db:
+            db.execute("UPDATE workers SET capabilities=? WHERE worker_id=?",
+                       (capabilities, worker_id))
+            self._event(db, now, "worker_updated", worker_id=worker_id)
+
+    def worker_for_key(self, key_hash: str) -> dict[str, Any] | None:
+        with closing(self._connect()) as db:
+            row = db.execute("SELECT * FROM workers WHERE key_hash=?", (key_hash,)).fetchone()
+            return dict(row) if row else None
+
+    def get_worker(self, worker_id: str) -> dict[str, Any] | None:
+        with closing(self._connect()) as db:
+            row = db.execute("SELECT * FROM workers WHERE worker_id=?", (worker_id,)).fetchone()
+            return dict(row) if row else None
+
+    def list_workers(self) -> list[dict[str, Any]]:
+        """Operator view of every worker. Never includes key hashes."""
+        with closing(self._connect()) as db:
+            rows = db.execute("SELECT worker_id, owner, registered_at, revoked_at, "
+                              "key_hash IS NOT NULL AS has_key FROM workers "
+                              "ORDER BY worker_id").fetchall()
+            return [dict(r) | {"has_key": bool(r["has_key"])} for r in rows]
 
     def has_worker(self, worker_id: str) -> bool:
-        with closing(self._connect()) as db:
-            return db.execute("SELECT 1 FROM workers WHERE worker_id=?",
-                              (worker_id,)).fetchone() is not None
+        return self.get_worker(worker_id) is not None
+
+    def revoke_worker(self, worker_id: str, now: int) -> bool:
+        """Block a worker's key and take back any job it holds right now.
+        Its already-accepted results stay as they are, for the operator to review."""
+        with self._tx() as db:
+            cur = db.execute("UPDATE workers SET revoked_at=? WHERE worker_id=? "
+                             "AND revoked_at IS NULL", (now, worker_id))
+            if not cur.rowcount:
+                return False
+            self._event(db, now, "worker_revoked", worker_id=worker_id)
+            for row in db.execute("SELECT job_id, attempts, max_attempts FROM jobs "
+                                  "WHERE status='leased' AND worker_id=?",
+                                  (worker_id,)).fetchall():
+                final = row["attempts"] >= row["max_attempts"]
+                db.execute("UPDATE jobs SET status=?, worker_id=NULL, lease_expires_at=NULL, "
+                           "updated_at=? WHERE job_id=?",
+                           ("failed" if final else "queued", now, row["job_id"]))
+                self._event(db, now, "lease_revoked_failed" if final else
+                            "lease_revoked_requeued", row["job_id"], worker_id)
+                if final:
+                    self._audit_not_run(db, row["job_id"], now)
+            return True
 
     # -- jobs -----------------------------------------------------------------------
     def create_job(self, fields: dict[str, Any], signature: str, max_attempts: int,
@@ -253,10 +343,17 @@ class Ledger:
         """Atomically lease the oldest queued job to `worker_id`, or return None."""
         with self._tx() as db:
             self._sweep(db, now)
+            # An excluded worker's owner is excluded too, so one person's rigs never
+            # audit or break ties on each other's results.
+            owner = db.execute("SELECT owner FROM workers WHERE worker_id=?",
+                               (worker_id,)).fetchone()
             row = db.execute(
                 "SELECT job_id FROM jobs j WHERE status='queued' AND NOT EXISTS ("
-                "SELECT 1 FROM job_exclusions x WHERE x.job_id=j.job_id AND x.worker_id=?) "
-                "ORDER BY created_at, job_id LIMIT 1", (worker_id,)
+                "SELECT 1 FROM job_exclusions x LEFT JOIN workers w ON w.worker_id=x.worker_id "
+                "WHERE x.job_id=j.job_id AND (x.worker_id=? OR "
+                "(w.owner IS NOT NULL AND w.owner=?))) "
+                "ORDER BY created_at, job_id LIMIT 1",
+                (worker_id, owner["owner"] if owner else None)
             ).fetchone()
             if row is None:
                 return None
@@ -454,8 +551,12 @@ class Ledger:
             rejected = db.execute(
                 "SELECT COUNT(*) FROM events WHERE worker_id=? AND event LIKE 'result_rejected%'",
                 (worker_id,)).fetchone()[0]
+            worker = db.execute("SELECT owner, revoked_at FROM workers WHERE worker_id=?",
+                                (worker_id,)).fetchone()
         return {
             "worker_id": worker_id,
+            "owner": worker["owner"] if worker else None,
+            "revoked": bool(worker and worker["revoked_at"] is not None),
             "accepted": sum(counts.values()),
             "rejected": int(rejected),
             "audits_confirmed": counts.get("confirmed", 0),
@@ -544,6 +645,12 @@ class Ledger:
             for r in q("SELECT j.job_id FROM jobs j JOIN job_exclusions x USING(job_id) "
                        "WHERE j.worker_id=x.worker_id"):
                 problems.append(f"job leased to an excluded worker {r['job_id']}")
+            for r in q("SELECT DISTINCT j.job_id FROM jobs j JOIN job_exclusions x USING(job_id) "
+                       "JOIN workers ex ON ex.worker_id=x.worker_id "
+                       "JOIN workers w ON w.worker_id=j.worker_id "
+                       "WHERE ex.owner IS NOT NULL AND ex.owner=w.owner AND w.worker_id!=ex.worker_id"):
+                problems.append(f"job given to a worker with the same owner as an excluded "
+                                f"worker {r['job_id']}")
             for r in q("SELECT s.job_id FROM submissions s JOIN jobs j USING(job_id) "
                        "JOIN jobs o ON o.job_id=j.audit_of JOIN submissions os ON os.job_id=o.job_id "
                        "WHERE j.job_kind='audit' AND s.worker_id=os.worker_id"):

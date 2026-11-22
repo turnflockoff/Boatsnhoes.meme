@@ -11,6 +11,7 @@ from app.config import Settings
 from app.ledger import Ledger
 from app.main import create_app
 from demo_worker import ManifestError, check_manifest
+from tests.auth_helpers import OPERATOR, WorkerClient, enroll
 
 SECRET = "test-secret-that-is-long-enough-123"
 T0 = 1_800_000_000
@@ -32,14 +33,14 @@ class Clock:
 def env(tmp_path: Path):
     clock = Clock()
     settings = Settings(secret=SECRET, database_path=tmp_path / "db.sqlite3",
-                        lease_seconds=30, max_attempts=2)
+                        lease_seconds=30, max_attempts=2, operator_token=OPERATOR)
     app = create_app(settings, clock=clock)
-    return TestClient(app), clock, settings, app.state.ledger
+    return WorkerClient(app), clock, settings, app.state.ledger
 
 
-def register(client: TestClient, *workers: str) -> None:
+def register(client: WorkerClient, *workers: str) -> None:
     for w in workers:
-        assert client.post("/v1/workers/register", json={"worker_id": w}).status_code == 200
+        enroll(client, w)
 
 
 def submit(client: TestClient, job_id: str, worker: str, result: str, t: int = T0):
@@ -66,7 +67,7 @@ def test_worker_can_process_and_submit_job(env) -> None:
 def test_unregistered_worker_cannot_claim(env) -> None:
     client, *_ = env
     client.post("/v1/jobs", json={"payload": "hello"})
-    assert client.post("/v1/jobs/next", params={"worker_id": "nobody"}).status_code == 403
+    assert client.post("/v1/jobs/next", params={"worker_id": "nobody"}).status_code == 401
 
 
 def test_job_cannot_be_claimed_twice_while_leased(env) -> None:
@@ -96,7 +97,8 @@ def test_jobs_survive_coordinator_restart(env, tmp_path: Path) -> None:
     client, clock, settings, _ = env
     register(client, "wk-1")
     job = client.post("/v1/jobs", json={"payload": "persist me"}).json()
-    restarted = TestClient(create_app(settings, clock=clock))  # new process, same database
+    # New process, same database: the worker's key still works after the restart.
+    restarted = WorkerClient(create_app(settings, clock=clock), keys=client.worker_keys)
     claimed = restarted.post("/v1/jobs/next", params={"worker_id": "wk-1"})
     assert claimed.status_code == 200 and claimed.json()["job_id"] == job["job_id"]
     assert submit(restarted, job["job_id"], "wk-1", sha("persist me")).status_code == 200

@@ -39,7 +39,7 @@ This roadmap separates implemented repository assets from proposed work. A check
 
 ## Track D — Coordinator and workers
 - [x] Define job and receipt schemas (Pydantic models; versioning still to add).
-- [ ] Implement worker identity and authenticated registration.
+- [x] Implement worker identity and authenticated registration. *(One-time operator enrollment codes, per-worker bearer keys stored as sha256, owner labels that keep one person's rigs from auditing each other, revocation. Software only; `prototype/tests/test_worker_auth.py`.)*
 - [x] Implement coordinator job lifecycle and deadlines (SQLite state machine).
 - [x] Implement worker polling / job leasing / retries.
 - [ ] Add structured logs and health reporting.

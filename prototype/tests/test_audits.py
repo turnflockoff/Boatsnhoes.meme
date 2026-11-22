@@ -14,6 +14,7 @@ from app import model_registry, tasks
 from app.config import Settings
 from app.ledger import Ledger
 from app.main import create_app
+from tests.auth_helpers import WorkerClient, enroll
 
 SECRET = "test-secret-that-is-long-enough-123"
 OPERATOR = "operator-token-that-is-long-enough-456"
@@ -51,9 +52,9 @@ def make(tmp_path: Path, audit_rate: float = 1.0, operator_token: str | None = O
     settings = Settings(secret=SECRET, database_path=tmp_path / "db.sqlite3", lease_seconds=30,
                         max_attempts=2, audit_rate=audit_rate, operator_token=operator_token)
     app = create_app(settings, clock=clock, rng=random.Random(1))
-    client = TestClient(app)
+    client = WorkerClient(app)
     for w in ("wk-a", "wk-b", "wk-c"):
-        assert client.post("/v1/workers/register", json={"worker_id": w}).status_code == 200
+        enroll(client, w)
     return client, clock, app.state.ledger
 
 
@@ -280,7 +281,7 @@ def test_tiebreak_siding_with_original_confirms_it(pinned, tmp_path: Path) -> No
     assert body["consistency_problems"] == []
     assert client.get("/v1/workers/wk-b/trust", headers=OP).json()["audits_outvoted"] == 1
     # A tie-breaker never spawns another audit or tie-breaker.
-    client.post("/v1/workers/register", json={"worker_id": "wk-d"})
+    enroll(client, "wk-d")
     assert claim(client, "wk-d").status_code == 404
 
 
@@ -324,9 +325,9 @@ def test_tiebreak_can_be_switched_off(pinned, tmp_path: Path) -> None:
     clock = Clock()
     settings = Settings(secret=SECRET, database_path=tmp_path / "db.sqlite3", lease_seconds=30,
                         max_attempts=2, audit_rate=1.0, operator_token=OPERATOR, tiebreak=False)
-    client = TestClient(create_app(settings, clock=clock, rng=random.Random(1)))
+    client = WorkerClient(create_app(settings, clock=clock, rng=random.Random(1)))
     for w in ("wk-a", "wk-b", "wk-c"):
-        client.post("/v1/workers/register", json={"worker_id": w})
+        enroll(client, w)
     make_dispute(client)
     assert claim(client, "wk-c").status_code == 404
 

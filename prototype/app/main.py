@@ -11,9 +11,10 @@ from typing import Any, Callable
 from fastapi import FastAPI, Header, HTTPException
 
 from .config import Settings, get_settings
-from . import rewards, tasks
+from . import rewards, tasks, workers
 from .ledger import Ledger
-from .models import ChallengeCreate, JobCreate, JobEnvelope, ResultSubmission, WorkerRegistration
+from .models import (ChallengeCreate, EnrollmentCreate, JobCreate, JobEnvelope, ResultSubmission,
+                     WorkerRegistration)
 from .security import sha256_text, sign_manifest
 
 log = logging.getLogger("bnh.coordinator")
@@ -42,6 +43,7 @@ def create_app(settings: Settings | None = None,
 
     def now() -> int:
         return int(clock())
+    app.state.now = now
 
     def envelope(job: dict[str, Any]) -> JobEnvelope:
         return JobEnvelope(**{k: job[k] for k in JobEnvelope.model_fields})
@@ -66,15 +68,74 @@ def create_app(settings: Settings | None = None,
         if not token or not hmac.compare_digest(token.encode(), expected.encode()):
             raise HTTPException(status_code=403, detail="operator token required")
 
+    def authenticate_worker(authorization: str | None, claimed_id: str | None) -> str:
+        """Return the worker id that owns the bearer key, or raise 401/403.
+        If the request also names a worker id, it must be the key's own worker."""
+        scheme, _, key = (authorization or "").partition(" ")
+        if scheme.lower() != "bearer" or not key.strip():
+            raise HTTPException(status_code=401, detail="worker key required",
+                                headers={"WWW-Authenticate": "Bearer"})
+        worker = ledger.worker_for_key(sha256_text(key.strip()))
+        if worker is None:
+            raise HTTPException(status_code=401, detail="unknown worker key",
+                                headers={"WWW-Authenticate": "Bearer"})
+        if worker["revoked_at"] is not None:
+            raise HTTPException(status_code=403, detail="worker key revoked")
+        if claimed_id is not None and claimed_id != worker["worker_id"]:
+            raise HTTPException(status_code=403, detail="key belongs to a different worker")
+        return str(worker["worker_id"])
+
     @app.get("/health")
     def health() -> dict[str, Any]:
         return {"status": "ok", "mode": "local-prototype", "jobs": ledger.status_counts()}
 
+    @app.post("/v1/enrollments")
+    def create_enrollment(body: EnrollmentCreate,
+                          x_operator_token: str | None = Header(default=None)) -> dict[str, Any]:
+        """Operator-only: a one-time code that lets one new worker register.
+        Only its hash is stored, so this response is the only time it is shown."""
+        require_operator(x_operator_token)
+        code, expires_at = workers.issue_code(ledger, body.owner, body.ttl_seconds, now())
+        return {"enrollment_code": code, "owner": body.owner, "expires_at": expires_at,
+                "notice": "Single use. Give it to the rig owner privately."}
+
     @app.post("/v1/workers/register")
-    def register_worker(body: WorkerRegistration) -> dict[str, str]:
-        ledger.register_worker(body.worker_id, json.dumps(body.capabilities), now())
-        log.info("worker registered", extra={"worker_id": body.worker_id})
-        return {"worker_id": body.worker_id, "status": "registered"}
+    def register_worker(body: WorkerRegistration,
+                        authorization: str | None = Header(default=None)) -> dict[str, Any]:
+        capabilities = json.dumps(body.capabilities)
+        if authorization:  # an existing worker updating what it can run
+            worker_id = authenticate_worker(authorization, body.worker_id)
+            ledger.update_capabilities(worker_id, capabilities, now())
+            return {"worker_id": worker_id, "status": "updated"}
+        if not body.enrollment_code:
+            raise HTTPException(status_code=401, detail="enrollment code required "
+                                "(the operator creates one with POST /v1/enrollments)")
+        key = workers.new_worker_key()
+        outcome, owner = ledger.enroll_worker(body.worker_id, capabilities,
+                                              sha256_text(body.enrollment_code),
+                                              sha256_text(key), now())
+        if outcome == "bad_code":
+            raise HTTPException(status_code=403,
+                                detail="enrollment code is invalid, used or expired")
+        if outcome == "taken":
+            raise HTTPException(status_code=409, detail="worker id is already registered; "
+                                "send its key to update it")
+        if outcome == "revoked":
+            raise HTTPException(status_code=403, detail="worker is revoked")
+        log.info("worker enrolled", extra={"worker_id": body.worker_id})
+        return {"worker_id": body.worker_id, "status": "registered", "owner": owner,
+                "worker_key": key,
+                "notice": "Shown once. Keep it private; the coordinator stores only its hash."}
+
+    @app.post("/v1/workers/{worker_id}/revoke")
+    def revoke_worker(worker_id: str,
+                      x_operator_token: str | None = Header(default=None)) -> dict[str, Any]:
+        """Operator-only: block a worker's key and take back any job it is holding."""
+        require_operator(x_operator_token)
+        if not ledger.has_worker(worker_id):
+            raise HTTPException(status_code=404, detail="unknown worker")
+        changed = ledger.revoke_worker(worker_id, now())
+        return {"worker_id": worker_id, "status": "revoked", "already_revoked": not changed}
 
     @app.post("/v1/jobs", response_model=JobEnvelope)
     def create_job(body: JobCreate) -> JobEnvelope:
@@ -144,16 +205,18 @@ def create_app(settings: Settings | None = None,
         return {k: job[k] for k in public} | {"events": events}
 
     @app.post("/v1/jobs/next", response_model=JobEnvelope)
-    def next_job(worker_id: str) -> JobEnvelope:
-        if not ledger.has_worker(worker_id):
-            raise HTTPException(status_code=403, detail="worker is not registered")
+    def next_job(worker_id: str | None = None,
+                 authorization: str | None = Header(default=None)) -> JobEnvelope:
+        worker_id = authenticate_worker(authorization, worker_id)
         job = ledger.claim_next(worker_id, settings.lease_seconds, now())
         if job is None:
             raise HTTPException(status_code=404, detail="no queued jobs")
         return envelope(job)
 
     @app.post("/v1/jobs/{job_id}/submit")
-    def submit_result(job_id: str, body: ResultSubmission) -> dict[str, Any]:
+    def submit_result(job_id: str, body: ResultSubmission,
+                      authorization: str | None = Header(default=None)) -> dict[str, Any]:
+        worker_id = authenticate_worker(authorization, body.worker_id)
         t = now()
         if body.completed_at < body.started_at or body.completed_at > t + 30:
             raise HTTPException(status_code=422, detail="invalid worker timestamps")
@@ -179,7 +242,7 @@ def create_app(settings: Settings | None = None,
         if verdict.ok and job["job_kind"] == "audit" and settings.tiebreak:
             tiebreak_job = new_job_fields(job["task_type"], job["payload"],
                                           job["reward_points"], t + window)
-        outcome, job = ledger.submit(job_id, body.worker_id, body.result_hash, verdict.ok, t,
+        outcome, job = ledger.submit(job_id, worker_id, body.result_hash, verdict.ok, t,
                                      verdict.method, verdict.confidence, result=body.result,
                                      needs_audit=verdict.needs_audit, audit_job=audit_job,
                                      agree=executor.results_agree, tiebreak_job=tiebreak_job)

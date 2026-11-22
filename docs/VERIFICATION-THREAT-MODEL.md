@@ -60,11 +60,11 @@ This assumes the auditor is honest. The rest of this document is about when that
 | # | Attack | Defense today | Remaining risk | Planned fix |
 |---|--------|---------------|----------------|-------------|
 | 1 | **Lazy/fake answers** on AI jobs | Re-run audits, challenges, held points on mismatch | Survives `(1-p)^n` of the time; unaudited results show as "unverified", not "confirmed" | Raise audit rate for new or low-trust workers |
-| 2 | **Sybil: one person, many workers** | None. Worker IDs are free and unauthenticated | A ring can register as many workers as it likes | Per-worker keys and authenticated registration (next task) |
-| 3 | **Colluding auditor** confirms a friend's fake answer | Self-audit blocked; audit hidden among normal work | Two ring members agree on a fake: marked "confirmed" | Random auditor assignment, challenges sent to suspected rings, trust weighting |
+| 2 | **Sybil: one person, many workers** | One-time operator enrollment codes tied to an `owner` label; per-worker keys (stored as hashes) on every claim and submit; same-owner workers never audit or break ties for each other; revocation | A person who gets codes under several names is still a ring. Labels are only as good as the operator's hand-out | Hand out codes one per verified person; later, reputation built up over time that is costly to fake |
+| 3 | **Colluding auditor** confirms a friend's fake answer | Self-audit and same-owner audit blocked; audit hidden among normal work | Two ring members agree on a fake: marked "confirmed" | Random auditor assignment, challenges sent to suspected rings, trust weighting |
 | 4 | **Racing for audits.** Audits go to whichever eligible worker asks next, so a ring that polls fast gets more of them | None | A busy ring audits itself more often than chance | Coordinator assigns each audit to a randomly chosen eligible worker instead of first-come |
 | 5 | **Spotting an audit by its payload.** An audit carries the same prompt as the original | Same envelope, same deadline window, private events hidden | Colluders who compare notes can match prompts | Mix in duplicate normal jobs so a repeated prompt isn't a tell; later, re-run on a slightly different but equivalent input where the task allows |
-| 6 | **Two of three in the tie-breaker are colluding** | Tie-breaker excluded from both sides of the dispute | Majority of three can **outvote an honest auditor** if the original worker and the tie-breaker are in the same ring | Same as #2 and #4, plus never letting a single tie-breaker decide on low-trust workers |
+| 6 | **Two of three in the tie-breaker are colluding** | Tie-breaker excluded from both sides of the dispute and from their owners | Majority of three can **outvote an honest auditor** if the original worker and the tie-breaker are in the same ring | Same as #2 and #4, plus never letting a single tie-breaker decide on low-trust workers |
 | 7 | **Only two rigs online**, so no third worker exists | Tie-breaker expires, dispute stays held (`tiebreak_not_run`) | A person has to look at it | Operator review queue (manual for now) |
 | 8 | **Model swapping** (smaller or tampered model) | Fingerprint check runs on the worker, which the cheater controls | A cheating worker can skip the check entirely | Audits catch it only if the swapped model's output differs. Challenges with known outputs from the pinned model help |
 | 9 | **Shared secret leaks.** HMAC is symmetric, so every worker holds the signing key | Secret kept out of logs and API responses | Any worker could forge job manifests to other workers | Asymmetric signatures (coordinator signs, workers only verify) |
@@ -88,7 +88,7 @@ This assumes the auditor is honest. The rest of this document is about when that
 
 ## Order of the next fixes
 
-1. Per-worker keys and authenticated registration (closes #2, the root of #3 and #6).
+1. ~~Per-worker keys and authenticated registration~~ **Done (software only):** enrollment codes, per-worker keys, owner-aware exclusions, revocation. Narrows #2, #3 and #6 to "rings the operator was fooled into enrolling".
 2. Random auditor assignment instead of first-come (closes #4).
 3. Measure real GPU nondeterminism on the RX 470s and tune the tolerance (#13).
 4. Asymmetric manifest signatures (#9).

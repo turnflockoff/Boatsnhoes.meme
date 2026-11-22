@@ -6,6 +6,16 @@ from pydantic import BaseModel, Field
 class WorkerRegistration(BaseModel):
     worker_id: str = Field(min_length=3, max_length=80)
     capabilities: list[str] = Field(default_factory=lambda: ["demo:sha256"])
+    # One-time code from the operator. Needed for a new worker; an existing worker
+    # updates its capabilities by sending its key instead.
+    enrollment_code: str | None = Field(default=None, min_length=16, max_length=200)
+
+
+class EnrollmentCreate(BaseModel):
+    """Operator-only. `owner` names the person or group who runs the rig. Workers with the
+    same owner never audit or break ties on each other's results."""
+    owner: str = Field(pattern=r"^[A-Za-z0-9._-]{1,64}$")
+    ttl_seconds: int = Field(default=86400, ge=60, le=7 * 86400)
 
 
 class JobCreate(BaseModel):
@@ -31,7 +41,8 @@ class JobEnvelope(BaseModel):
 
 
 class ResultSubmission(BaseModel):
-    worker_id: str = Field(min_length=3, max_length=80)
+    # Optional: the worker is identified by its key. If sent, it must match the key.
+    worker_id: str | None = Field(default=None, min_length=3, max_length=80)
     result: str = Field(min_length=1, max_length=8192)
     result_hash: str = Field(pattern="^[0-9a-f]{64}$")
     started_at: int

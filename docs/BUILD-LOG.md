@@ -92,3 +92,20 @@
 2. **Version your rules like you version software.** A report says which scoring rule made it. Change the rule and old reports still re-check under the old one, instead of silently changing past numbers.
 3. **Deterministic means repeatable.** No clock time and no random numbers go into a report, just the database and the dates you pick. That's what lets anyone with a copy of the ledger reproduce the exact same fingerprint.
 4. **A report can leak secrets by timing.** A hidden test that a rig fails shows up as "held" right away. If rigs could watch a live report, they'd guess which jobs were tests. So reports are operator-only, and should be published only after the period ends.
+
+## 2026-11-22 (late night): Rigs now need an invite and their own key
+
+**Shipped**
+- **Invite codes.** A rig can't join on its own anymore. You (the operator) make a one-time code for it, tied to an owner name: `python -m app.workers enroll --owner owner-gpu0`, or through the API with your operator password. A code works once and expires after a day by default.
+- **Each rig gets its own key.** The rig trades the code for a private key, shown once. It sends that key with every "give me a job" and every answer. The coordinator only keeps a fingerprint (sha256) of each key, so even someone who copies the database can't log in as a rig.
+- **No pretending to be someone else.** A rig's key only works for its own name. Trying another rig's name, a made-up key or no key gets refused. An invite code can't be used to take over a name that's already taken.
+- **One owner never checks themselves.** Hidden re-checks and tie-breakers now skip every rig with the same owner, not just the same rig. A new self-check flags it if that ever happens anyway.
+- **Kick a rig out.** `python -m app.workers revoke <rig>` blocks its key right away and hands any job it was holding to someone else.
+- The demo worker saves its key in a private file (only your user can read it) on the first run and reuses it after.
+- Tests went from 61 to 73, all passing. I also ran it for real: a coordinator process, one invite from the API and one from the command line, two demo workers, a used invite refused, a saved key reused, and a revoked rig refused. Still software only: no real GPU yet.
+
+**What you learned**
+1. **Invite once, then use a key.** The invite proves the operator said yes. The key proves "this is the same rig as before" on every request after. Splitting the two means a leaked old invite is useless, and a leaked key only affects one rig, which you can revoke.
+2. **Store fingerprints of passwords, not the passwords.** The coordinator saves only the sha256 of each key. When a rig sends its key, the coordinator fingerprints it and compares. If someone steals the database, they get fingerprints that can't be turned back into keys.
+3. **A name isn't a person.** Keys stop one rig from pretending to be another, but they can't tell you whether two rigs belong to the same person. That's what the owner label is for, and it's only as honest as the person handing out invites. One invite per real person is your job.
+4. **Your own two cards count as one owner.** If both RX 470s get the same owner label, they'll never re-check each other, so with just those two online no re-check would ever run. For your two-card test, give them two labels and keep in mind that your cards agreeing proves less than strangers agreeing.

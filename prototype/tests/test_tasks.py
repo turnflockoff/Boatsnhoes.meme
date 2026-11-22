@@ -13,6 +13,7 @@ from app.config import Settings
 from app.ledger import Ledger
 from app.main import create_app
 from demo_worker import supported_tasks
+from tests.auth_helpers import OPERATOR, WorkerClient, enroll
 
 SECRET = "test-secret-that-is-long-enough-123"
 T0 = 1_800_000_000
@@ -45,8 +46,8 @@ def pinned_model(registry: Path, tmp_path: Path) -> Path:
 @pytest.fixture
 def client(tmp_path: Path) -> TestClient:
     settings = Settings(secret=SECRET, database_path=tmp_path / "db.sqlite3",
-                        lease_seconds=30, max_attempts=2)
-    return TestClient(create_app(settings, clock=lambda: T0))
+                        lease_seconds=30, max_attempts=2, operator_token=OPERATOR)
+    return WorkerClient(create_app(settings, clock=lambda: T0))
 
 
 def llm_payload(**overrides) -> str:
@@ -106,7 +107,7 @@ def test_unknown_task_type_is_rejected(client: TestClient) -> None:
 
 def test_inference_result_is_accepted_but_flagged_for_audit(pinned_model: Path,
                                                              client: TestClient, tmp_path: Path) -> None:
-    client.post("/v1/workers/register", json={"worker_id": "rig-gpu0"})
+    enroll(client, "rig-gpu0")
     job = client.post("/v1/jobs", json={"task_type": "llm:generate", "payload": llm_payload()}).json()
     client.post("/v1/jobs/next", params={"worker_id": "rig-gpu0"})
     text = "The Salty Hoe."
@@ -122,7 +123,7 @@ def test_inference_result_is_accepted_but_flagged_for_audit(pinned_model: Path,
 
 
 def test_empty_inference_output_is_rejected(pinned_model: Path, client: TestClient) -> None:
-    client.post("/v1/workers/register", json={"worker_id": "rig-gpu0"})
+    enroll(client, "rig-gpu0")
     job = client.post("/v1/jobs", json={"task_type": "llm:generate", "payload": llm_payload()}).json()
     client.post("/v1/jobs/next", params={"worker_id": "rig-gpu0"})
     r = client.post(f"/v1/jobs/{job['job_id']}/submit", json={
@@ -132,7 +133,7 @@ def test_empty_inference_output_is_rejected(pinned_model: Path, client: TestClie
 
 
 def test_sha_task_receipt_reports_exact_verification(client: TestClient) -> None:
-    client.post("/v1/workers/register", json={"worker_id": "rig-cpu"})
+    enroll(client, "rig-cpu")
     job = client.post("/v1/jobs", json={"payload": "ahoy"}).json()
     client.post("/v1/jobs/next", params={"worker_id": "rig-cpu"})
     r = client.post(f"/v1/jobs/{job['job_id']}/submit", json={
