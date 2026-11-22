@@ -24,7 +24,8 @@ SIGNED_FIELDS = ("job_id", "task_type", "payload", "payload_hash", "reward_point
 # Audit-trail events that would tell a worker which jobs are audits or challenges.
 # They stay in the database for the operator but are hidden from the public job view.
 PRIVATE_EVENTS = {"audit_scheduled", "audit_match", "audit_mismatch", "audit_not_run",
-                  "passed_challenge", "failed_challenge"}
+                  "passed_challenge", "failed_challenge", "tiebreak_scheduled",
+                  "tiebreak_majority", "tiebreak_unresolved", "tiebreak_not_run"}
 
 
 def create_app(settings: Settings | None = None,
@@ -35,7 +36,7 @@ def create_app(settings: Settings | None = None,
     rng = rng or random.SystemRandom()
     settings = settings or get_settings()
     ledger = Ledger(settings.database_path)
-    app = FastAPI(title="Boats N Hoes Useful-Compute MVP", version="0.4.0")
+    app = FastAPI(title="Boats N Hoes Useful-Compute MVP", version="0.4.1")
     app.state.ledger = ledger
     app.state.settings = settings
 
@@ -155,17 +156,21 @@ def create_app(settings: Settings | None = None,
         verdict = executor.verify(job["payload"], body.result)
         # Phase 4: an unproven work result is re-run by a different worker at `audit_rate`.
         # The audit job is prepared here and only stored if the result is accepted.
-        audit_job = None
+        # Same time window as the original, so the deadline doesn't give the audit away.
+        window = job["expires_at"] - job["created_at"]
+        audit_job = tiebreak_job = None
         if (verdict.ok and verdict.needs_audit and job["job_kind"] == "work"
                 and rng.random() < settings.audit_rate):
-            # Same time window as the original, so the deadline doesn't give the audit away.
-            window = job["expires_at"] - job["created_at"]
             audit_job = new_job_fields(job["task_type"], job["payload"], job["reward_points"],
                                        t + window)
+        # A tie-breaker is prepared for every audit result but only stored on a mismatch.
+        if verdict.ok and job["job_kind"] == "audit" and settings.tiebreak:
+            tiebreak_job = new_job_fields(job["task_type"], job["payload"],
+                                          job["reward_points"], t + window)
         outcome, job = ledger.submit(job_id, body.worker_id, body.result_hash, verdict.ok, t,
                                      verdict.method, verdict.confidence, result=body.result,
                                      needs_audit=verdict.needs_audit, audit_job=audit_job,
-                                     agree=executor.results_agree)
+                                     agree=executor.results_agree, tiebreak_job=tiebreak_job)
         receipt = {"job_id": job_id, "verification": verdict.method,
                    "confidence": verdict.confidence, "needs_audit": verdict.needs_audit,
                    "execution_proof": False}

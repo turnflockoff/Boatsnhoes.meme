@@ -19,6 +19,8 @@ class Settings:
     audit_rate: float = 0.25
     # Required for operator endpoints (challenges, audits, trust). Unset = those are disabled.
     operator_token: str | None = None
+    # Phase 4: when a re-run disagrees, ask a third worker to break the tie.
+    tiebreak: bool = True
 
 
 def _int_env(name: str, default: int, low: int, high: int) -> int:
@@ -43,6 +45,17 @@ def _rate_env(name: str, default: float) -> float:
     return value
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    if raw.lower() in ("1", "true", "yes", "on"):
+        return True
+    if raw.lower() in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(f"{name} must be true or false")
+
+
 def get_settings() -> Settings:
     secret = os.getenv("PROTOTYPE_SECRET", "local-demo-only-change-me")
     db = Path(os.getenv("DATABASE_PATH", "./data/prototype.sqlite3"))
@@ -58,4 +71,5 @@ def get_settings() -> Settings:
         max_attempts=_int_env("MAX_ATTEMPTS", 3, 1, 20),
         audit_rate=_rate_env("AUDIT_RATE", 0.25),
         operator_token=operator_token,
+        tiebreak=_bool_env("TIEBREAK", True),
     )

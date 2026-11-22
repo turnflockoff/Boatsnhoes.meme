@@ -236,3 +236,118 @@ def test_phase2_database_is_migrated(tmp_path: Path) -> None:
     assert ledger.submission("j1")["audit_status"] == "not-needed"
     assert ledger.get_job("j1")["job_kind"] == "work"
     assert ledger.check_consistency() == []
+
+
+# -- Phase 4 (rest): tie-breaker re-runs for disputed audits ---------------------------
+
+def make_dispute(client: TestClient, original_text: str = "The Salty Hoe",
+                 audit_text: str = "A totally different boat") -> tuple[str, str]:
+    original = run_llm_job(client, "wk-a", original_text)
+    audit_id = claim(client, "wk-b").json()["job_id"]
+    assert submit(client, audit_id, "wk-b", audit_text).status_code == 200
+    return original, audit_id
+
+
+def test_dispute_schedules_hidden_tiebreak_for_a_third_worker(pinned, tmp_path: Path) -> None:
+    client, _, ledger = make(tmp_path)
+    original, audit_id = make_dispute(client)
+    # Neither side of the dispute may break the tie.
+    assert claim(client, "wk-a").status_code == 404
+    assert claim(client, "wk-b").status_code == 404
+    tiebreak = claim(client, "wk-c").json()
+    assert tiebreak["payload"] == llm_payload()
+    assert tiebreak["job_id"] not in (original, audit_id)
+    assert tiebreak["expires_at"] - T0 == 300  # same window as normal work
+    for job_id in (original, audit_id, tiebreak["job_id"]):
+        public = json.dumps(client.get(f"/v1/jobs/{job_id}").json())
+        assert "tiebreak" not in public and "audit" not in public
+    # Both sides stay held while the tie-breaker runs.
+    assert client.get("/v1/ledger").json()["points_by_status"]["held"] == 2
+    assert ledger.check_consistency() == []
+
+
+def test_tiebreak_siding_with_original_confirms_it(pinned, tmp_path: Path) -> None:
+    client, _, ledger = make(tmp_path)
+    original, audit_id = make_dispute(client)
+    tb = claim(client, "wk-c").json()["job_id"]
+    assert submit(client, tb, "wk-c", "The  Salty Hoe\n").status_code == 200
+    for job_id in (original, tb):
+        sub = ledger.submission(job_id)
+        assert sub["audit_status"] == "confirmed" and sub["confidence"] == "replicated"
+    assert audit_status(ledger, audit_id) == "outvoted"
+    body = client.get("/v1/ledger").json()
+    assert body["points_by_status"] == {"confirmed": 2, "pending": 0, "unverified": 0, "held": 1}
+    assert body["consistency_problems"] == []
+    assert client.get("/v1/workers/wk-b/trust", headers=OP).json()["audits_outvoted"] == 1
+    # A tie-breaker never spawns another audit or tie-breaker.
+    client.post("/v1/workers/register", json={"worker_id": "wk-d"})
+    assert claim(client, "wk-d").status_code == 404
+
+
+def test_tiebreak_siding_with_auditor_outvotes_original(pinned, tmp_path: Path) -> None:
+    client, _, ledger = make(tmp_path)
+    original, audit_id = make_dispute(client)
+    tb = claim(client, "wk-c").json()["job_id"]
+    submit(client, tb, "wk-c", "A totally different boat")
+    assert audit_status(ledger, original) == "outvoted"
+    assert audit_status(ledger, audit_id) == "confirmed"
+    assert audit_status(ledger, tb) == "confirmed"
+    assert "tiebreak_majority" in [e["event"] for e in ledger.events(original)]
+    trust = client.get("/v1/workers/wk-a/trust", headers=OP).json()
+    assert trust["audits_outvoted"] == 1
+
+
+def test_three_way_disagreement_is_unresolved(pinned, tmp_path: Path) -> None:
+    client, _, ledger = make(tmp_path)
+    original, audit_id = make_dispute(client)
+    tb = claim(client, "wk-c").json()["job_id"]
+    submit(client, tb, "wk-c", "Yet another answer")
+    for job_id in (original, audit_id, tb):
+        assert audit_status(ledger, job_id) == "unresolved"
+    assert client.get("/v1/ledger").json()["points_by_status"]["held"] == 3
+    kinds = [a["job_kind"] for a in client.get("/v1/audits", headers=OP).json()["audits"]]
+    assert sorted(kinds) == ["audit", "tiebreak"]
+
+
+def test_tiebreak_that_never_runs_keeps_dispute_held(pinned, tmp_path: Path) -> None:
+    client, clock, ledger = make(tmp_path)
+    original, audit_id = make_dispute(client)
+    clock.t += 301  # nobody else picks up the tie-breaker (e.g. only two rigs online)
+    ledger.sweep(int(clock()))
+    assert audit_status(ledger, original) == "disputed"
+    assert audit_status(ledger, audit_id) == "disputed"
+    assert "tiebreak_not_run" in [e["event"] for e in ledger.events(original)]
+    assert ledger.check_consistency() == []
+
+
+def test_tiebreak_can_be_switched_off(pinned, tmp_path: Path) -> None:
+    clock = Clock()
+    settings = Settings(secret=SECRET, database_path=tmp_path / "db.sqlite3", lease_seconds=30,
+                        max_attempts=2, audit_rate=1.0, operator_token=OPERATOR, tiebreak=False)
+    client = TestClient(create_app(settings, clock=clock, rng=random.Random(1)))
+    for w in ("wk-a", "wk-b", "wk-c"):
+        client.post("/v1/workers/register", json={"worker_id": w})
+    make_dispute(client)
+    assert claim(client, "wk-c").status_code == 404
+
+
+def test_consistency_check_flags_bad_tiebreak_records(pinned, tmp_path: Path) -> None:
+    client, _, ledger = make(tmp_path)
+    original, audit_id = make_dispute(client)
+    tb = claim(client, "wk-c").json()["job_id"]
+    submit(client, tb, "wk-c", "The Salty Hoe")
+    assert ledger.check_consistency() == []
+    db = sqlite3.connect(ledger.path)
+    # Tamper: pretend the original worker broke its own tie...
+    db.execute("UPDATE submissions SET worker_id='wk-a' WHERE job_id=?", (tb,))
+    # ...and an unrelated result claims to be outvoted without any tie-breaker.
+    db.execute("INSERT INTO jobs(job_id, task_type, payload, payload_hash, reward_points, "
+               "expires_at, signature, status, max_attempts, created_at, updated_at) "
+               "VALUES('lonely','demo:sha256','p','h',1,9,'s','accepted',2,1,1)")
+    db.execute("INSERT INTO submissions(job_id, worker_id, result_hash, reward_points, "
+               "accepted_at, audit_status) VALUES('lonely','wk-c','r',1,1,'outvoted')")
+    db.commit()
+    db.close()
+    problems = ledger.check_consistency()
+    assert f"worker broke a tie on its own dispute {tb}" in problems
+    assert "tie-breaker outcome without a tie-breaker lonely" in problems

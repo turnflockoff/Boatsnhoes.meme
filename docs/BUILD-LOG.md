@@ -62,3 +62,18 @@
 2. **A test only works if it's invisible.** My first version gave re-check jobs a longer deadline than normal jobs. That's a tell: a cheater could fake normal jobs and only work honestly on the long ones. I fixed it so re-checks copy the original's time window.
 3. **"Close enough" needs a rule written down.** Two honest rigs can print the same AI answer with different spacing. The rule now: ignore spacing and line breaks, but any different word or capital letter counts as a mismatch. We'll adjust it once two real RX 470s produce answers.
 4. **Agreement isn't proof.** If one person runs two rigs, they can agree on a fake answer. That's why per-worker identity (logins/keys) is one of the next jobs.
+
+## 2026-11-22 (evening): Phase 4 finished: tie-breakers + written threat model
+
+**Shipped**
+- **Tie-breakers.** When a re-check disagrees with the original answer, the coordinator now quietly sends the same job to a *third* rig that wasn't on either side. Majority of three wins: the side it agrees with is confirmed, the other side is marked "outvoted" and its points stay held. If it agrees with neither, all three are held for a person to look at. Like audits, it looks exactly like normal work to the rig.
+- If no third rig is around (say only your two RX 470s are online), the dispute simply stays held and the log says the tie-breaker never ran.
+- Two new self-checks the ledger runs on itself: "did a rig break a tie on its own dispute?" and "is anything marked outvoted without a tie-breaker behind it?" A test tampers with the database on purpose to prove both checks fire.
+- **Threat model written** (`docs/VERIFICATION-THREAT-MODEL.md`): 13 ways someone could cheat, what stops each one today, what's still open, and the order to fix them.
+- Tests went from 44 to 51, all passing. Still software only: no real GPU output yet.
+
+**What you learned**
+1. **Two witnesses can only disagree; three can decide.** With two answers you know *something* is wrong but not who. A third independent run breaks the tie. That's the same reason juries and RAID storage use odd numbers.
+2. **Majority voting has a blind spot.** If one person secretly runs two of the three rigs, they can outvote the honest one. That's why per-worker identity is now the top item: voting only means something if the voters are really different people.
+3. **Who picks the checker matters as much as the check.** Right now an audit goes to whichever rig asks first. A cheater who asks very fast gets to check their own friends more often. The fix (random assignment) is on the list.
+4. **Spot-check math:** at a 25% audit rate, a rig faking 10 answers gets caught about 94% of the time, as long as the checker is honest. The chance of escaping is 0.75 multiplied by itself 10 times.

@@ -25,25 +25,28 @@ This directory contains an early local coordinator/worker scaffold for the RX 47
 - Older Phase 1 databases are migrated in place.
 - 32 tests in total.
 
-## Implemented (Phase 4, first slice: audits and challenges)
+## Implemented (Phase 4: audits, tie-breakers and challenges)
 
 A result hash is not proof that a GPU ran a model. Phase 4 adds the ways the coordinator gathers evidence anyway. Every check is tested in software only; none has run against real GPU output yet.
 
 - **Hidden re-run audits.** When an unproven (`schema-only`) result is accepted, the coordinator re-queues the same job for a *different* worker at rate `AUDIT_RATE` (default 0.25, chosen with the OS's secure randomness). The original worker can never claim its own audit. The audit job is created in the same database transaction as the acceptance, and it gets the same time window as the original, so its deadline doesn't give it away.
 - **Tolerance rules** (`results_agree` on each task): SHA must match byte for byte; AI text must match after collapsing whitespace. Anything else (one word, letter case) is a disagreement.
 - **Outcomes.** Agreement marks both results `confirmed` with confidence `replicated`. Disagreement marks both `disputed` and their points are held. An audit that never runs (expires, fails, or is rejected) leaves the original `unaudited`. Audits never spawn audits.
+- **Hidden tie-breakers** (`TIEBREAK`, default on). When an audit disagrees, the coordinator queues the same job for a *third* worker that is neither side of the dispute, in the same transaction and with the same time window. Majority of three: if the tie-breaker agrees with exactly one side, that side and the tie-breaker become `confirmed` and the other side becomes `outvoted` (points stay held). If it agrees with neither (or both), all three are `unresolved` and held for a person. If no third worker picks it up, the dispute stays held and a `tiebreak_not_run` event is recorded. Tie-breakers never spawn more audits or tie-breakers.
 - **Hidden challenge jobs.** The operator queues a known-answer job with `POST /v1/challenges`. Workers get the same envelope, the same receipt and the same audit-trail events as normal work. A wrong (but well-formed) answer is accepted on the surface, so a cheater can't tell they were caught, and recorded as `failed-challenge` with points held.
 - **Operator endpoints** (`/v1/challenges`, `/v1/audits`, `/v1/workers/{id}/trust`) require the `X-Operator-Token` header to match `OPERATOR_TOKEN`. If the token isn't set, they are disabled.
 - **Public ledger** (`GET /v1/ledger`) adds `points_by_status`: confirmed, pending, unverified, held. Challenge outcomes are folded into confirmed/held so the public view doesn't reveal which jobs were challenges. The public job view hides audit and challenge events.
-- New consistency checks: a pending audit with no open audit job, a job leased to an excluded worker, and a worker auditing its own result.
-- 12 new tests (44 in total), including an in-place migration of a Phase 2 database.
+- New consistency checks: a pending audit with no open audit job, a job leased to an excluded worker, a worker auditing its own result, a worker breaking a tie on its own dispute, and an outvoted/unresolved result with no tie-breaker behind it.
+- 19 tests for Phase 4 (51 in total), including an in-place migration of a Phase 2 database and a tampered-database check.
+- **Written threat model:** [`docs/VERIFICATION-THREAT-MODEL.md`](../docs/VERIFICATION-THREAT-MODEL.md) lists each attack, today's defense, what is still open, and the order of fixes.
 
 **Fraud risks that remain (be honest about these):**
-- **Collusion.** Two workers run by the same person can agree on a wrong answer. Agreement is evidence, not proof. Worker identity is not authenticated yet, so one person can register many workers.
+- **Collusion.** Two workers run by the same person can agree on a wrong answer. Agreement is evidence, not proof. Worker identity is not authenticated yet, so one person can register many workers. In a tie-breaker, two colluders can even outvote an honest auditor.
+- **First-come auditors.** An audit goes to whichever eligible worker asks next, so a ring that polls quickly gets more audits than chance would give it.
 - **Repeated payloads.** An audit has the same payload as the original. Colluding workers who compare notes could spot it.
 - **Trusted coordinator.** The coordinator picks auditors, stores expected answers, and could lie about all of it.
 - **Real GPU nondeterminism is unknown.** The whitespace-only tolerance is a guess until two real rigs produce output for the same job. It may need loosening (or a different check) after Phase 3.
-- **No tie-breaker yet.** A dispute stays held until a person looks at it.
+- **Two rigs aren't enough for a tie-breaker.** With only two workers online, a dispute stays held until a person looks at it.
 
 **Not done yet:** `llm:generate` has **never run** on project hardware: no llama.cpp build, no downloaded model and no RX 470 test yet (Phase 3). Inference results are only checked for shape (`schema-only`). Phase 4 re-run audits are needed before they mean anything.
 
@@ -118,7 +121,7 @@ This checks whether `vulkaninfo --summary` can run. Device enumeration is not pr
 ## Not implemented
 
 - Real model inference on RX 470.
-- A tie-breaker re-run for disputed audits.
+- Random (rather than first-come) auditor assignment.
 - Public deployment security, client authentication, TLS, rate limits, and abuse prevention.
 - Ethereum ERC-20 integration or reward distribution.
 

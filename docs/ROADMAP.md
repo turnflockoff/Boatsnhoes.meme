@@ -51,11 +51,12 @@ This roadmap separates implemented repository assets from proposed work. A check
 - [x] Reject duplicate and expired submissions.
 - [x] Define deterministic task checks and tolerances for nondeterministic tasks. *(`exact` recompute for SHA; AI text must match after collapsing whitespace. Tolerance not yet tested against real GPU output.)*
 - [x] Add independent re-run / spot-audit flow. *(Hidden re-runs by a different worker at `AUDIT_RATE`, plus hidden known-answer challenge jobs. Tested in software only.)*
-- [ ] Add a tie-breaker re-run when an audit disagrees.
+- [x] Add a tie-breaker re-run when an audit disagrees. *(Third worker, excluded from both sides; majority of three. Software only.)*
 - [x] Record queued, leased, accepted, rejected, expired and failed results with an audit trail, plus audit outcomes (confirmed, disputed, held).
 - [x] Keep rewards simulated and off-chain.
 - [ ] Export an auditable reward report.
-- [ ] Document collusion, fabrication, and verification limitations.
+- [x] Document collusion, fabrication, and verification limitations. *([`VERIFICATION-THREAT-MODEL.md`](VERIFICATION-THREAT-MODEL.md))*
+- [ ] Assign audits to a randomly chosen eligible worker instead of first-come.
 
 ## Track F — Two-GPU proof of concept
 - [ ] Run two independent workers on the two RX 470 cards.

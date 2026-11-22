@@ -1,5 +1,5 @@
 # BOATS N HOES: Project Task List (Claude + dev work)
-**Version:** 0.5.4 | **Last updated:** 2026-11-22 | Personal to-dos live in USER_TODO.md.
+**Version:** 0.5.5 | **Last updated:** 2026-11-22 | Personal to-dos live in USER_TODO.md.
 
 ## Phase 0: Foundation
 - [x] Buy boatsnhoes.meme
@@ -26,7 +26,8 @@
 - [x] GPU worker Phase 2: pluggable task executors, `llm:generate` task, pinned model registry with licenses, opt-in download (32 tests)
 - [ ] Pin the first model (download on the GPU box, then `model_registry pin`)
 - [x] GPU worker Phase 4 (first slice): hidden re-run audits, hidden known-answer challenges, tolerance rule, worker trust report (44 tests)
-- [ ] GPU worker Phase 4 (rest): tie-breaker re-run for disputes, written fraud/collusion threat model
+- [x] GPU worker Phase 4 (rest): tie-breaker re-run for disputes, written fraud/collusion threat model (`docs/VERIFICATION-THREAT-MODEL.md`, 51 tests)
+- [ ] Random (not first-come) auditor assignment (threat model #4)
 - [ ] GPU worker Phase 5: simulated reward reports (off-chain points, versioned scoring formula)
 - [ ] Authenticated worker registration / per-worker keys
 - [ ] GPU worker Phase 3: RX 470 hardware validation (needs the real rig)

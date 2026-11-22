@@ -17,13 +17,18 @@ Phase 4 verification. Every job has a `job_kind`:
     audit      a hidden re-run of an accepted "schema-only" work result, which can never be
                leased to the worker that produced the original (`job_exclusions`)
     challenge  a hidden known-answer job created by the operator (`expected_result`)
-Workers see the same envelope for all three. Each accepted submission carries an
+    tiebreak   a hidden third run of a disputed job, excluded from both the original worker
+               and the auditor; `audit_of` points at the original work job
+Workers see the same envelope for all four. Each accepted submission carries an
 `audit_status`:
     not-needed        the coordinator checked the answer exactly
     unaudited         unproven and not re-run (not sampled, or the re-run never happened)
     pending           a re-run is queued
     confirmed         an independent re-run agreed (confidence becomes "replicated")
-    disputed          an independent re-run disagreed; both results are held
+    disputed          an independent re-run disagreed; both results are held while a
+                      tie-breaker runs (or until a person looks, if it never runs)
+    outvoted          the tie-breaker agreed with the other side; this result stays held
+    unresolved        the tie-breaker agreed with neither side (or with both); all held
     passed-challenge / failed-challenge   outcome of a hidden known-answer job
 """
 from __future__ import annotations
@@ -40,7 +45,7 @@ FINAL_STATES = ("accepted", "rejected", "expired", "failed")
 SETTLEMENT = {
     "not-needed": "confirmed", "confirmed": "confirmed", "passed-challenge": "confirmed",
     "pending": "pending", "unaudited": "unverified",
-    "disputed": "held", "failed-challenge": "held",
+    "disputed": "held", "failed-challenge": "held", "outvoted": "held", "unresolved": "held",
 }
 
 Agree = Callable[[str, str], bool]
@@ -196,10 +201,16 @@ class Ledger:
         self._event(db, now, "job_created", job_id=fields["job_id"])
 
     def _audit_not_run(self, db: sqlite3.Connection, job_id: str, now: int) -> None:
-        """An audit job ended without a usable result: the original stays unproven."""
+        """An audit or tie-breaker job ended without a usable result.
+        Audit: the original stays unproven. Tie-breaker: the dispute stays held."""
         row = db.execute("SELECT job_kind, audit_of FROM jobs WHERE job_id=?",
                          (job_id,)).fetchone()
-        if row is None or row["job_kind"] != "audit" or row["audit_of"] is None:
+        if row is None or row["audit_of"] is None:
+            return
+        if row["job_kind"] == "tiebreak":
+            self._event(db, now, "tiebreak_not_run", row["audit_of"], detail=job_id)
+            return
+        if row["job_kind"] != "audit":
             return
         cur = db.execute("UPDATE submissions SET audit_status='unaudited' "
                          "WHERE job_id=? AND audit_status='pending'", (row["audit_of"],))
@@ -268,7 +279,8 @@ class Ledger:
                now: int, verifier_method: str = "deterministic-recompute",
                confidence: str = "exact", result: str | None = None, needs_audit: bool = False,
                audit_job: tuple[dict[str, Any], str] | None = None,
-               agree: Agree | None = None) -> tuple[str, dict[str, Any] | None]:
+               agree: Agree | None = None,
+               tiebreak_job: tuple[dict[str, Any], str] | None = None) -> tuple[str, dict[str, Any] | None]:
         """Record a result. Returns (outcome, job) where outcome is one of:
         accepted, duplicate (same accepted result again), conflict, unknown, not_leased,
         wrong_worker, expired, rejected_requeued, rejected_final.
@@ -276,7 +288,10 @@ class Ledger:
         Phase 4 (all inside the same transaction as the acceptance):
           - `audit_job` (fields, signature): schedule a hidden re-run of an accepted work
             result that `needs_audit`, excluded from this worker.
-          - accepting an audit job compares it with the original using `agree`.
+          - accepting an audit job compares it with the original using `agree`. If they
+            disagree and `tiebreak_job` (fields, signature) is given, a hidden tie-breaker
+            is queued for a worker that is neither side of the dispute.
+          - accepting a tie-breaker settles the dispute by majority (see _resolve_tiebreak).
           - accepting a challenge job compares it with the operator's expected answer.
         """
         agree = agree or (lambda a, b: a == b)
@@ -336,12 +351,15 @@ class Ledger:
                 self._event(db, now, audit_status.replace("-challenge", "_challenge"),
                             job_id, worker_id)
             elif kind == "audit":
-                self._resolve_audit(db, job, result, agree, now)
+                self._resolve_audit(db, job, result, agree, now, tiebreak_job)
+            elif kind == "tiebreak":
+                self._resolve_tiebreak(db, job, result, agree, now)
             job["status"] = "accepted"
             return "accepted", job
 
     def _resolve_audit(self, db: sqlite3.Connection, audit: dict[str, Any], result: str | None,
-                       agree: Agree, now: int) -> None:
+                       agree: Agree, now: int,
+                       tiebreak_job: tuple[dict[str, Any], str] | None = None) -> None:
         original = db.execute("SELECT * FROM submissions WHERE job_id=?",
                               (audit["audit_of"],)).fetchone()
         if original is None or original["audit_status"] != "pending":
@@ -356,6 +374,43 @@ class Ledger:
             self._event(db, now, "audit_match" if match else "audit_mismatch", job_id,
                         detail=audit["job_id"] if job_id == original["job_id"]
                         else original["job_id"])
+        if not match and tiebreak_job:
+            fields, signature = tiebreak_job
+            self._insert_job(db, fields, signature, audit["max_attempts"], now, "tiebreak",
+                             audit_of=original["job_id"],
+                             exclude_workers=(original["worker_id"], audit["worker_id"]))
+            self._event(db, now, "tiebreak_scheduled", original["job_id"],
+                        detail=fields["job_id"])
+
+    def _resolve_tiebreak(self, db: sqlite3.Connection, tb: dict[str, Any], result: str | None,
+                          agree: Agree, now: int) -> None:
+        """Majority of three. The tie-breaker sides with exactly one of the two disputed
+        results: that result and the tie-breaker are confirmed, the other is outvoted.
+        Siding with neither (or, under a loose tolerance, with both) settles nothing."""
+        original = db.execute("SELECT * FROM submissions WHERE job_id=?",
+                              (tb["audit_of"],)).fetchone()
+        audit = db.execute(
+            "SELECT s.* FROM submissions s JOIN jobs j USING(job_id) "
+            "WHERE j.audit_of=? AND j.job_kind='audit'", (tb["audit_of"],)).fetchone()
+        if original is None or audit is None or original["audit_status"] != "disputed":
+            return
+        sides = [s for s in (original, audit)
+                 if result is not None and s["result"] is not None and agree(s["result"], result)]
+        if len(sides) == 1:
+            winner = sides[0]
+            loser = audit if winner is original else original
+            updates = {winner["job_id"]: "confirmed", tb["job_id"]: "confirmed",
+                       loser["job_id"]: "outvoted"}
+            event = "tiebreak_majority"
+        else:
+            updates = dict.fromkeys((original["job_id"], audit["job_id"], tb["job_id"]),
+                                    "unresolved")
+            event = "tiebreak_unresolved"
+        for job_id, status in updates.items():
+            db.execute("UPDATE submissions SET audit_status=?, "
+                       "confidence=CASE WHEN ?='confirmed' THEN 'replicated' ELSE confidence END "
+                       "WHERE job_id=?", (status, status, job_id))
+            self._event(db, now, event, job_id, detail=f"{status} (tie-breaker {tb['job_id']})")
 
     # -- reporting --------------------------------------------------------------------
     def entries(self) -> list[dict[str, Any]]:
@@ -386,7 +441,7 @@ class Ledger:
             rows = db.execute(
                 "SELECT j.job_id, j.job_kind, j.audit_of, j.task_type, j.status, j.created_at, "
                 "s.worker_id, s.audit_status FROM jobs j LEFT JOIN submissions s USING(job_id) "
-                "WHERE j.job_kind IN ('audit','challenge') ORDER BY j.created_at, j.job_id"
+                "WHERE j.job_kind IN ('audit','challenge','tiebreak') ORDER BY j.created_at, j.job_id"
             ).fetchall()
             return [dict(r) for r in rows]
 
@@ -406,6 +461,8 @@ class Ledger:
             "audits_confirmed": counts.get("confirmed", 0),
             "audits_disputed": counts.get("disputed", 0),
             "audits_pending": counts.get("pending", 0),
+            "audits_outvoted": counts.get("outvoted", 0),
+            "audits_unresolved": counts.get("unresolved", 0),
             "challenges_passed": counts.get("passed-challenge", 0),
             "challenges_failed": counts.get("failed-challenge", 0),
             "note": "Agreement between workers is evidence, not proof: colluding workers "
@@ -461,4 +518,16 @@ class Ledger:
                        "JOIN jobs o ON o.job_id=j.audit_of JOIN submissions os ON os.job_id=o.job_id "
                        "WHERE j.job_kind='audit' AND s.worker_id=os.worker_id"):
                 problems.append(f"worker audited its own result {r['job_id']}")
+            for r in q("SELECT t.job_id FROM jobs t JOIN submissions ts USING(job_id) "
+                       "JOIN submissions os ON os.job_id=t.audit_of "
+                       "JOIN jobs a ON a.audit_of=t.audit_of AND a.job_kind='audit' "
+                       "JOIN submissions s_a ON s_a.job_id=a.job_id "
+                       "WHERE t.job_kind='tiebreak' AND ts.worker_id IN (os.worker_id, s_a.worker_id)"):
+                problems.append(f"worker broke a tie on its own dispute {r['job_id']}")
+            for r in q("SELECT s.job_id FROM submissions s JOIN jobs j USING(job_id) "
+                       "WHERE s.audit_status IN ('outvoted','unresolved') AND NOT EXISTS ("
+                       "SELECT 1 FROM jobs t JOIN submissions ts ON ts.job_id=t.job_id "
+                       "WHERE t.job_kind='tiebreak' AND t.audit_of="
+                       "CASE WHEN j.job_kind='work' THEN j.job_id ELSE j.audit_of END)"):
+                problems.append(f"tie-breaker outcome without a tie-breaker {r['job_id']}")
         return problems
