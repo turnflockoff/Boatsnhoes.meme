@@ -1,5 +1,5 @@
 # YOUR Personal To-Do List (things only you can do)
-**Version:** 0.5.3 | **Last updated:** 2026-11-22
+**Version:** 0.5.4 | **Last updated:** 2026-11-22
 Never share passwords, API keys, or recovery phrases with anyone, including Claude.
 
 ## This week
@@ -18,6 +18,7 @@ Never share passwords, API keys, or recovery phrases with anyone, including Clau
 - [ ] Register the same handle on X, Telegram, Discord, GitHub; pin official links
 
 ## Before the testnet
+- [ ] On the RX 470 rig (Ubuntu): from `prototype/`, run `python -m app.hw_inventory --out inventory.json`. No sudo needed; it only reads. Look over the file (hostname and username are already blanked) and share it or commit it so the next step (a Vulkan smoke test on each card) can be planned. If it says a tool is missing, installing `pciutils` or `vulkan-tools` is up to you
 - [ ] Decide: chain path, final supply, fair launch (no premine)
 - [ ] Decide: should a rig caught cheating lose its other unchecked points for that period? (simulated scoring v2; see TASKS.md)
 - [ ] When the RX 470 rig is ready: set your own `OPERATOR_TOKEN` in `prototype/.env` (never share it), then make one enrollment code per card with `python -m app.workers enroll --owner owner-gpu0` (and `owner-gpu1`). Keep the codes and the saved `.key` files private

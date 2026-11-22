@@ -242,7 +242,19 @@ From the prototype directory:
 
     python -m app.gpu_probe_cli
 
-This checks whether `vulkaninfo --summary` can run. Device enumeration is not proof that AI inference works. Run the Ubuntu hardware inventory commands in the main design document and test each GPU separately.
+This checks whether `vulkaninfo --summary` can run. Device enumeration is not proof that AI inference works.
+
+For the full rig inventory (Phase 3 step one), run on the Ubuntu machine with the cards:
+
+    python -m app.hw_inventory --out inventory.json
+
+It reads `/etc/os-release`, runs only `uname -r`, `lspci -nnk` and `vulkaninfo --summary` (an allowlist, no shell, no sudo, nothing installed), lists `/dev/dri`, and writes a versioned JSON report (`bnh-hw-inventory/1`) with plain-language findings:
+
+- how many AMD cards `lspci` sees, with PCI IDs, and which kernel driver each uses (warns on `radeon` or none: Vulkan RADV needs `amdgpu`);
+- each Vulkan device with its driver and Mesa version (warns when Vulkan only sees a CPU renderer such as llvmpipe, or sees fewer AMD cards than `lspci`);
+- `/dev/dri/renderD*` nodes your user can't open (usually the `render` group).
+
+Hostname, username and UUIDs are replaced with `[host]`, `[user]` and `[uuid]`. It refuses to overwrite an existing file and always says `"proves_inference": false`. Missing tools are reported with the Ubuntu package name; installing them, changing drivers or groups is the owner's decision. Tested only against format samples of command output (`tests/test_hw_inventory.py`), not on the real rig yet. Then test each GPU separately.
 
 ## Not implemented
 

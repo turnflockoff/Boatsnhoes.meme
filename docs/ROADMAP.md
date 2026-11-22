@@ -18,6 +18,7 @@ This roadmap separates implemented repository assets from proposed work. A check
 - [x] Add a simple privacy-respecting contact / contribution path (`/contribute`, Netlify Forms).
 
 ## Track B — Hardware validation (highest priority)
+- [x] Build a read-only inventory tool that records the items below in one redacted JSON file. *(`python -m app.hw_inventory`; allowlisted commands only, no sudo or installs; warns on wrong driver, CPU-only Vulkan, missing cards and blocked render nodes. 14 tests against format samples; never run on the real rig yet.)*
 - [ ] Record Ubuntu release: `lsb_release -a`.
 - [ ] Record kernel: `uname -r`.
 - [ ] Capture PCI IDs and bound drivers: `lspci -nnk | grep -A3 -E 'VGA|Display'`.
@@ -95,4 +96,4 @@ This roadmap separates implemented repository assets from proposed work. A check
 - Treat worker receipts and hashes as records, not proof of GPU execution.
 
 ## Immediate next action
-Run the hardware inventory commands on the actual Ubuntu host and save the unedited output (remove usernames, hostnames, and other private details first if desired). Use those results to choose the smallest viable Vulkan inference smoke test.
+On the actual Ubuntu host, run `python -m app.hw_inventory --out inventory.json` from `prototype/` (it runs the inventory commands below read-only and blanks hostname, username and UUIDs). Use those results to choose the smallest viable Vulkan inference smoke test.
