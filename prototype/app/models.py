@@ -37,6 +37,9 @@ class JobEnvelope(BaseModel):
     payload_hash: str
     reward_points: int
     expires_at: int
+    # Versioned manifest (see app/schemas.py). Both are covered by the signature.
+    schema_version: str
+    model_sha256: str | None = None
     signature: str
 
 
@@ -47,3 +50,9 @@ class ResultSubmission(BaseModel):
     result_hash: str = Field(pattern="^[0-9a-f]{64}$")
     started_at: int
     completed_at: int
+    # Versioned receipt (see app/schemas.py). Optional here so an outdated worker gets a
+    # clear "unsupported receipt_version" message instead of a bare validation error.
+    receipt_version: str | None = Field(default=None, max_length=32)
+    job_schema_version: str | None = Field(default=None, max_length=32)
+    payload_hash: str | None = Field(default=None, pattern="^[0-9a-f]{64}$")
+    model_sha256: str | None = Field(default=None, pattern="^[0-9a-f]{64}$")

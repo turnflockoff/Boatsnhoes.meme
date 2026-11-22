@@ -13,7 +13,7 @@ from app import model_registry, tasks
 from app.config import Settings
 from app.ledger import Ledger
 from app.main import create_app
-from tests.auth_helpers import FirstPickRng, WorkerClient, enroll
+from tests.auth_helpers import FirstPickRng, WorkerClient, enroll, receipt
 
 OPERATOR = "operator-token-that-is-long-enough-456"
 T0 = 1_800_000_000
@@ -68,7 +68,7 @@ def claim(client: TestClient, worker: str):
 def submit(client: TestClient, job_id: str, worker: str, result: str):
     return client.post(f"/v1/jobs/{job_id}/submit", json={
         "worker_id": worker, "result": result, "result_hash": sha(result),
-        "started_at": T0, "completed_at": T0})
+        "started_at": T0, "completed_at": T0, **receipt(client, job_id)})
 
 
 def audit_status(ledger: Ledger, job_id: str) -> str:

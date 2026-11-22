@@ -23,7 +23,7 @@ from demo_worker import ManifestError, check_manifest, load_or_pin_coordinator_k
 from tests.auth_helpers import OPERATOR, WorkerClient, enroll
 
 T0 = 1_800_000_000
-SIGNED = ("job_id", "task_type", "payload", "payload_hash", "reward_points", "expires_at")
+from app.schemas import SIGNED_FIELDS as SIGNED  # noqa: E402
 
 
 def make(tmp_path: Path, key_name: str = "db") -> WorkerClient:

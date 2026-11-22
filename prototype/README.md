@@ -109,6 +109,21 @@ Tested in software only (0.5.9).
 
 **Limits:** jobs created before 0.5.9 carry the old HMAC signature and are refused by new workers, so start with a fresh database. There is no key rotation tool yet: replacing the key file invalidates every queued job and every worker's pin. First-contact pinning trusts whatever answers the first time, so on a real network give workers the key directly. This signs job manifests only; it does not sign the ledger or reward reports (threat model #10).
 
+## Implemented: versioned job and receipt schemas (Track E)
+
+Tested in software only (0.5.10). Code: `app/schemas.py`.
+
+- **Every job says which layout it uses.** Manifests carry `schema_version` (`bnh-job/1`), covered by the Ed25519 signature. A worker refuses any version it doesn't know instead of guessing what the fields mean.
+- **Model jobs name their exact model file.** `llm:generate` jobs carry `model_sha256`, copied from the pinned registry when the job is created and covered by the signature. Audits and tie-breakers copy it from the original job, so re-pinning the registry later never changes what an existing job means. Jobs with no model carry `null`.
+- **The worker checks its own pin first.** Before running anything, the demo worker compares the job's `model_sha256` with its own registry's pin (and the executor re-hashes the file against that pin before every run). A different or missing pin means the job is refused.
+- **Receipts echo what the worker used.** A result now carries `receipt_version` (`bnh-receipt/1`), `job_schema_version`, `payload_hash` (the worker hashes the input it ran) and `model_sha256`. The coordinator refuses (`422`) a receipt with an unknown version or any value that doesn't match the job. A refused receipt leaves the lease alone, is logged as a public `receipt_mismatch` event and counts as a bad submission in reward reports.
+- `GET /health` lists the job and receipt versions this coordinator speaks.
+- **Older databases** are migrated in place. Jobs stored before versioning are marked `bnh-job/0`; new workers refuse them with a clear message, so start new work from new jobs.
+- Two new consistency checks: a re-run whose version, input or model hash differs from its original, and a model job created without a pinned model hash.
+- 8 new tests (97 in total). I disabled each new check in turn (receipt match, worker pin check, audits copying the original hash) and the matching tests failed. Also run end to end: coordinator process + demo worker (versioned job accepted) and an old-style receipt refused with a clear message.
+
+**What this does not prove:** a receipt is the worker's own claim. A dishonest worker can copy the job's hashes into its receipt without running anything. These checks catch honest mistakes (stale model file, outdated worker, an answer sent to the wrong job); hidden re-runs and challenges are still what catch cheating (threat model #8).
+
 ## Safety and correctness boundaries
 
 The Ed25519 signature shows a manifest came from the holder of the coordinator's private key, but only to a worker that checks it against the right public key. The demo worker verifies it before executing. Result hashes are integrity identifiers, not proofs of execution. The coordinator is trusted in this MVP. Rewards are simulated ledger points only; no token minting, private-key handling, wallet signing, or on-chain transfer is implemented.
@@ -162,14 +177,14 @@ A GitHub Actions workflow runs these tests on pushes and pull requests affecting
 - `POST /v1/workers/{worker_id}/revoke` — operator only: block a worker's key and requeue its job.
 - `POST /v1/jobs` — create a deterministic demo job.
 - `POST /v1/jobs/next` — worker claims the next queued job (needs its key).
-- `POST /v1/jobs/{job_id}/submit` — submit a result (needs its key).
+- `POST /v1/jobs/{job_id}/submit` — submit a versioned receipt (`bnh-receipt/1`) with the result (needs its key).
 - `GET /v1/ledger` — view simulated accepted-work entries and points by status.
 - `GET /v1/jobs/{job_id}` — job status and its public audit trail.
 - `POST /v1/challenges` — operator only: queue a hidden known-answer job.
 - `GET /v1/audits` — operator only: every audit and challenge with its outcome.
 - `GET /v1/workers/{worker_id}/trust` — operator only: how a worker's results held up.
 - `GET /v1/rewards/report?since=&until=` — operator only: simulated reward report for a period.
-- `GET /health` — local health check.
+- `GET /health` — local health check, job counts, and the job/receipt schema versions spoken.
 
 ## GPU diagnostic
 

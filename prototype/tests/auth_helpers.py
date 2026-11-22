@@ -12,7 +12,7 @@ from typing import Any, Sequence
 
 from fastapi.testclient import TestClient
 
-from app import workers
+from app import schemas, workers
 
 OPERATOR = "operator-token-that-is-long-enough-456"
 OP = {"X-Operator-Token": OPERATOR}
@@ -71,3 +71,14 @@ def enroll(client: WorkerClient, worker_id: str, owner: str | None = None,
     key = r.json()["worker_key"]
     client.worker_keys[worker_id] = key
     return key
+
+
+def receipt(client: TestClient, job_id: str) -> dict[str, Any]:
+    """The versioned receipt fields an honest worker sends (see app/schemas.py), built from
+    the stored job. Unknown job ids get well-formed placeholders so 404s still test 404."""
+    job = client.app.state.ledger.get_job(job_id)
+    if job is None:
+        return {"receipt_version": schemas.RECEIPT_SCHEMA_VERSION,
+                "job_schema_version": schemas.JOB_SCHEMA_VERSION,
+                "payload_hash": "0" * 64, "model_sha256": None}
+    return schemas.receipt_fields(job, job["model_sha256"])

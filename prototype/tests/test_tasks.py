@@ -13,7 +13,7 @@ from app.config import Settings
 from app.ledger import Ledger
 from app.main import create_app
 from demo_worker import supported_tasks
-from tests.auth_helpers import OPERATOR, WorkerClient, enroll
+from tests.auth_helpers import OPERATOR, WorkerClient, enroll, receipt
 
 T0 = 1_800_000_000
 MODEL_ID = "tiny-test-model"
@@ -112,7 +112,7 @@ def test_inference_result_is_accepted_but_flagged_for_audit(pinned_model: Path,
     text = "The Salty Hoe."
     r = client.post(f"/v1/jobs/{job['job_id']}/submit", json={
         "worker_id": "rig-gpu0", "result": text, "result_hash": sha(text),
-        "started_at": T0, "completed_at": T0})
+        "started_at": T0, "completed_at": T0, **receipt(client, job["job_id"])})
     body = r.json()
     assert r.status_code == 200
     assert body["confidence"] == "schema-only" and body["needs_audit"] is True
@@ -127,7 +127,7 @@ def test_empty_inference_output_is_rejected(pinned_model: Path, client: TestClie
     client.post("/v1/jobs/next", params={"worker_id": "rig-gpu0"})
     r = client.post(f"/v1/jobs/{job['job_id']}/submit", json={
         "worker_id": "rig-gpu0", "result": "   ", "result_hash": sha("   "),
-        "started_at": T0, "completed_at": T0})
+        "started_at": T0, "completed_at": T0, **receipt(client, job["job_id"])})
     assert r.status_code == 422
 
 
@@ -137,7 +137,7 @@ def test_sha_task_receipt_reports_exact_verification(client: TestClient) -> None
     client.post("/v1/jobs/next", params={"worker_id": "rig-cpu"})
     r = client.post(f"/v1/jobs/{job['job_id']}/submit", json={
         "worker_id": "rig-cpu", "result": sha("ahoy"), "result_hash": sha(sha("ahoy")),
-        "started_at": T0, "completed_at": T0}).json()
+        "started_at": T0, "completed_at": T0, **receipt(client, job["job_id"])}).json()
     assert r["confidence"] == "exact" and r["needs_audit"] is False
 
 

@@ -1,5 +1,6 @@
 """Local demo worker: verifies each signed job manifest, runs the deterministic CPU task,
-and submits a receipt. It refuses jobs whose signature, payload hash or deadline is wrong.
+and submits a versioned receipt. It refuses jobs whose signature, schema version, payload
+hash, model pin or deadline is wrong.
 
 Workers hold no shared secret. They check signatures with the coordinator's PUBLIC key,
 pinned on the first run (or given up front with --coordinator-key / BNH_COORDINATOR_KEY).
@@ -21,11 +22,11 @@ from typing import Any
 import httpx
 from dotenv import load_dotenv
 
-from app import tasks
+from app import schemas, tasks
 from app.security import sha256_text
 from app.signing import fingerprint, parse_public_key, verify_manifest
 
-SIGNED_FIELDS = ("job_id", "task_type", "payload", "payload_hash", "reward_points", "expires_at")
+SIGNED_FIELDS = schemas.SIGNED_FIELDS
 
 
 def supported_tasks() -> set[str]:
@@ -39,7 +40,11 @@ class ManifestError(Exception):
 
 def check_manifest(job: dict[str, Any], coordinator_key: str, now: float | None = None) -> None:
     """Raise ManifestError unless the job is signed by `coordinator_key` (hex Ed25519 public
-    key), its payload matches its hash, this machine can run it and it hasn't expired."""
+    key), uses a manifest version this worker understands, its payload matches its hash,
+    this machine can run it with the same pinned model the job names, and it hasn't expired."""
+    if job.get("schema_version") != schemas.JOB_SCHEMA_VERSION:
+        raise ManifestError(f"unsupported job schema_version {job.get('schema_version')!r}; "
+                            f"this worker understands {schemas.JOB_SCHEMA_VERSION}")
     missing = [k for k in (*SIGNED_FIELDS, "signature") if k not in job]
     if missing:
         raise ManifestError(f"missing fields: {', '.join(missing)}")
@@ -50,8 +55,21 @@ def check_manifest(job: dict[str, Any], coordinator_key: str, now: float | None 
         raise ManifestError("payload hash mismatch")
     if job["task_type"] not in supported_tasks():
         raise ManifestError(f"unsupported task type {job['task_type']!r}")
+    local = local_model_sha256(job)
+    if local != job["model_sha256"]:
+        raise ManifestError(f"model pin mismatch: job wants {job['model_sha256']}, this "
+                            f"worker's registry has {local}")
     if int(job["expires_at"]) <= int(now if now is not None else time.time()):
         raise ManifestError("job already expired")
+
+
+def local_model_sha256(job: dict[str, Any]) -> str | None:
+    """The pinned model hash *this worker's* registry gives for the job (None if no model).
+    The executor re-hashes the model file against the same pin before every run."""
+    try:
+        return tasks.get(job["task_type"]).model_sha256(job["payload"])
+    except tasks.TaskError as exc:
+        raise ManifestError(f"can't run this job here: {exc}") from exc
 
 
 def save_key(path: Path, key: str) -> None:
@@ -178,6 +196,7 @@ def main() -> None:
             accepted = client.post(f"/v1/jobs/{job['job_id']}/submit", json={
                 "worker_id": args.worker_id, "result": result, "result_hash": sha256_text(result),
                 "started_at": started, "completed_at": completed,
+                **schemas.receipt_fields(job, local_model_sha256(job)),
             })
             print(accepted.status_code, accepted.json())
             if args.once:

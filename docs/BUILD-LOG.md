@@ -140,3 +140,19 @@
 2. **A public key is safe to publish.** It's on an open web address on purpose. The only thing to protect is the private key file, the same way you'd protect a wallet seed phrase.
 3. **The first handshake is the weak spot.** Pinning protects a rig from every later impostor, but the very first contact trusts whoever answers. That's why reading out the fingerprint (or giving the key directly) matters, just like checking a new phone number with a friend in person.
 4. **Old jobs break on purpose.** Jobs signed the old way are now refused, so start from a fresh database. Security changes often mean "old things stop working", and that's better than quietly accepting them.
+
+## 2026-11-22 (morning): Jobs and receipts now say which version and which model
+
+**Shipped**
+- **Jobs carry a version number.** Every job the coordinator signs now says which layout it uses (`bnh-job/1`). If a rig gets a job in a layout it doesn't know, it refuses instead of guessing. Jobs saved before today are marked `bnh-job/0` and refused with a clear message.
+- **AI jobs name their exact model file.** An `llm:generate` job now carries the fingerprint (sha256) of the pinned model file, inside the signature. Re-checks and tie-breakers copy the fingerprint from the original job, so if you re-pin the registry later, old jobs still mean what they meant.
+- **Rigs check their own model first.** Before running anything, a rig compares the job's model fingerprint with the one it pinned itself. Different or missing means "refuse".
+- **Answers come with a receipt.** A rig's answer now also says which receipt layout it uses (`bnh-receipt/1`), which job version it ran, a fingerprint of the input it ran, and which model it used. The coordinator refuses any receipt that doesn't match the job, logs it as `receipt_mismatch`, and counts it as a bad submission in reward reports. The rig keeps its job and can send a correct receipt.
+- `/health` now lists the versions the coordinator speaks. Two new self-checks catch a re-check that doesn't match its original job, or an AI job saved without a model fingerprint.
+- Tests went from 89 to 97, all passing. I switched off each new check one at a time (receipt matching, the rig's model check, re-checks copying the original fingerprint) and the matching tests failed every time, so they really catch it. I also ran it for real: a coordinator process and a demo worker finished a versioned job, and an old-style answer without a receipt was refused with "unsupported receipt_version". Still software only: no real GPU yet.
+
+**What you learned**
+1. **Version numbers are for the future.** Today there's only version 1. The point is that when version 2 comes, an old rig says "I don't understand this" instead of quietly doing the wrong thing.
+2. **Pin the meaning at creation time.** A job records the model fingerprint when it's made. If it only said "use the registry's model", re-pinning the registry would change what old jobs ask for, and a re-check could run a different model than the original.
+3. **A receipt is a claim, not proof.** A cheating rig can copy the right fingerprints into its receipt without running anything. These checks catch honest mistakes (wrong model file, outdated rig software, an answer sent to the wrong job). Hidden re-checks and test jobs are still what catch liars.
+4. **Refuse loudly, change nothing.** A bad receipt doesn't cost the rig its job or touch the points. It just gets a clear error and a line in the log, so a misconfigured rig is easy to spot and fix.

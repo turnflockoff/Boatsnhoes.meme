@@ -11,7 +11,7 @@ from app.config import Settings
 from app.ledger import Ledger
 from app.main import create_app
 from demo_worker import ManifestError, check_manifest
-from tests.auth_helpers import OPERATOR, WorkerClient, enroll
+from tests.auth_helpers import OPERATOR, WorkerClient, enroll, receipt
 
 T0 = 1_800_000_000
 
@@ -45,7 +45,7 @@ def register(client: WorkerClient, *workers: str) -> None:
 def submit(client: TestClient, job_id: str, worker: str, result: str, t: int = T0):
     return client.post(f"/v1/jobs/{job_id}/submit", json={
         "worker_id": worker, "result": result, "result_hash": sha(result),
-        "started_at": t, "completed_at": t})
+        "started_at": t, "completed_at": t, **receipt(client, job_id)})
 
 
 def test_worker_can_process_and_submit_job(env) -> None:
@@ -160,11 +160,11 @@ def test_malformed_results_are_rejected_before_touching_the_ledger(env) -> None:
     client.post("/v1/jobs/next", params={"worker_id": "wk-1"})
     bad_hash = client.post(f"/v1/jobs/{job['job_id']}/submit", json={
         "worker_id": "wk-1", "result": sha("x"), "result_hash": sha("other"),
-        "started_at": T0, "completed_at": T0})
+        "started_at": T0, "completed_at": T0, **receipt(client, job["job_id"])})
     assert bad_hash.status_code == 422
     backwards = client.post(f"/v1/jobs/{job['job_id']}/submit", json={
         "worker_id": "wk-1", "result": sha("x"), "result_hash": sha(sha("x")),
-        "started_at": T0, "completed_at": T0 - 5})
+        "started_at": T0, "completed_at": T0 - 5, **receipt(client, job["job_id"])})
     assert backwards.status_code == 422
     assert submit(client, "no-such-job", "wk-1", sha("x")).status_code == 404
     assert ledger.get_job(job["job_id"])["status"] == "leased"
@@ -175,7 +175,8 @@ def test_concurrent_claims_never_double_lease(tmp_path: Path) -> None:
     for i in range(5):
         ledger.create_job({"job_id": f"job-{i}", "task_type": "demo:sha256", "payload": str(i),
                            "payload_hash": sha(str(i)), "reward_points": 1,
-                           "expires_at": T0 + 600}, "sig", 3, T0)
+                           "expires_at": T0 + 600, "schema_version": "bnh-job/1",
+                           "model_sha256": None}, "sig", 3, T0)
     wins: list[str] = []
     lock = threading.Lock()
 

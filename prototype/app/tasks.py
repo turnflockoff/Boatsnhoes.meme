@@ -6,6 +6,8 @@ Every job type plugs in by implementing `TaskExecutor`:
   - execute(payload)   -> result string                     (worker)
   - verify(payload, result) -> Verdict                      (coordinator, at submission)
   - results_agree(a, b) -> bool                             (coordinator, Phase 4 audits)
+  - model_sha256(payload) -> pinned model hash or None      (both: goes into the signed job
+                                                             and is echoed in the receipt)
 
 `Verdict.confidence` is explicit about how much a check proves:
   "exact"          the coordinator recomputed / fully checked the answer
@@ -60,6 +62,11 @@ class TaskExecutor:
     def results_agree(self, a: str, b: str) -> bool:
         """Tolerance rule for comparing two independent runs. Default: byte-exact."""
         return a == b
+
+    def model_sha256(self, payload: str) -> str | None:
+        """sha256 of the pinned model file this payload needs, or None for tasks that use
+        no model. Read from *this machine's* registry, so coordinator and worker can compare."""
+        return None
 
 
 def _sha(value: str) -> str:
@@ -132,6 +139,10 @@ class LlmGenerateTask(TaskExecutor):
             if not isinstance(value, int) or isinstance(value, bool) or not low <= value <= high:
                 raise TaskError(f"{name} must be an integer between {low} and {high}")
         return InferenceSpec(model_id, prompt, max_tokens, seed, timeout_s)
+
+    def model_sha256(self, payload: str) -> str | None:
+        spec = self.validate(payload)  # raises TaskError if the model isn't pinned here
+        return self.registry[spec.model_id].sha256
 
     def _binary(self) -> str | None:
         configured = os.getenv("LLAMA_CLI")

@@ -38,7 +38,7 @@ This roadmap separates implemented repository assets from proposed work. A check
 - [ ] Define expected output and task-specific acceptance criteria.
 
 ## Track D — Coordinator and workers
-- [x] Define job and receipt schemas (Pydantic models; versioning still to add).
+- [x] Define job and receipt schemas. *(Pydantic models, versioned `bnh-job/1` / `bnh-receipt/1` since 0.5.10.)*
 - [x] Implement worker identity and authenticated registration. *(One-time operator enrollment codes, per-worker bearer keys stored as sha256, owner labels that keep one person's rigs from auditing each other, revocation. Software only; `prototype/tests/test_worker_auth.py`.)*
 - [x] Implement coordinator job lifecycle and deadlines (SQLite state machine).
 - [x] Implement worker polling / job leasing / retries.
@@ -47,7 +47,7 @@ This roadmap separates implemented repository assets from proposed work. A check
 - [x] Test coordinator restart (jobs persist) and silent-worker recovery (lease timeout → requeue).
 
 ## Track E — Verification and accounting
-- [ ] Implement schema, input hash, model hash, and job-version checks.
+- [x] Implement schema, input hash, model hash, and job-version checks. *(Signed `schema_version` and `model_sha256` on jobs; receipts must echo matching versions, input hash and model hash or get `422`. Catches mistakes, not liars. 8 tests, software only.)*
 - [x] Reject duplicate and expired submissions.
 - [x] Define deterministic task checks and tolerances for nondeterministic tasks. *(`exact` recompute for SHA; AI text must match after collapsing whitespace. Tolerance not yet tested against real GPU output.)*
 - [x] Add independent re-run / spot-audit flow. *(Hidden re-runs by a different worker at `AUDIT_RATE`, plus hidden known-answer challenge jobs. Tested in software only.)*

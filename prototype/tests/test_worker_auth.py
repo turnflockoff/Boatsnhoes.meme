@@ -18,7 +18,7 @@ from app import model_registry, workers
 from app.config import Settings
 from app.ledger import Ledger
 from app.main import create_app
-from tests.auth_helpers import OP, OPERATOR, FirstPickRng
+from tests.auth_helpers import OP, OPERATOR, FirstPickRng, receipt
 
 T0 = 1_800_000_000
 MODEL_ID = "tiny-test-model"
@@ -72,7 +72,8 @@ def claim(client: TestClient, key: str, worker_id: str | None = None):
 
 def submit(client: TestClient, key: str, job_id: str, result: str,
            worker_id: str | None = None):
-    body = {"result": result, "result_hash": sha(result), "started_at": T0, "completed_at": T0}
+    body = {"result": result, "result_hash": sha(result), "started_at": T0, "completed_at": T0,
+            **receipt(client, job_id)}
     if worker_id:
         body["worker_id"] = worker_id
     return client.post(f"/v1/jobs/{job_id}/submit", json=body, headers=bearer(key))
@@ -167,7 +168,7 @@ def test_claim_and_submit_need_the_workers_own_key(tmp_path: Path) -> None:
     assert submit(client, key_b, job["job_id"], sha("hello boats")).status_code == 403
     no_key = client.post(f"/v1/jobs/{job['job_id']}/submit", json={
         "result": sha("hello boats"), "result_hash": sha(sha("hello boats")),
-        "started_at": T0, "completed_at": T0})
+        "started_at": T0, "completed_at": T0, **receipt(client, job["job_id"])})
     assert no_key.status_code == 401
     ok = submit(client, key_a, job["job_id"], sha("hello boats"))
     assert ok.status_code == 200 and ok.json()["status"] == "accepted"

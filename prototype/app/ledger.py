@@ -96,7 +96,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     audit_of TEXT,
     expected_result TEXT,
     assigned_worker TEXT,
-    assigned_until INTEGER
+    assigned_until INTEGER,
+    schema_version TEXT NOT NULL DEFAULT 'bnh-job/0',
+    model_sha256 TEXT
 );
 CREATE TABLE IF NOT EXISTS job_exclusions (
     job_id TEXT NOT NULL REFERENCES jobs(job_id),
@@ -145,6 +147,10 @@ MIGRATIONS = {
         ("expected_result", "TEXT"),
         ("assigned_worker", "TEXT"),
         ("assigned_until", "INTEGER"),
+        # Jobs from before versioning were signed without these; 'bnh-job/0' marks them
+        # so workers refuse them instead of failing on a confusing signature error.
+        ("schema_version", "TEXT NOT NULL DEFAULT 'bnh-job/0'"),
+        ("model_sha256", "TEXT"),
     ),
 }
 
@@ -306,16 +312,24 @@ class Ledger:
         db.execute(
             "INSERT INTO jobs(job_id, task_type, payload, payload_hash, reward_points, "
             "expires_at, signature, status, max_attempts, created_at, updated_at, job_kind, "
-            "audit_of, expected_result) VALUES(?,?,?,?,?,?,?,'queued',?,?,?,?,?,?)",
+            "audit_of, expected_result, schema_version, model_sha256) "
+            "VALUES(?,?,?,?,?,?,?,'queued',?,?,?,?,?,?,?,?)",
             (fields["job_id"], fields["task_type"], fields["payload"], fields["payload_hash"],
              fields["reward_points"], fields["expires_at"], signature, max_attempts, now, now,
-             job_kind, audit_of, expected_result),
+             job_kind, audit_of, expected_result, fields["schema_version"],
+             fields["model_sha256"]),
         )
         for worker_id in exclude_workers:
             db.execute("INSERT INTO job_exclusions(job_id, worker_id) VALUES(?,?)",
                        (fields["job_id"], worker_id))
         # Same public event name for every kind, so the audit trail does not reveal it.
         self._event(db, now, "job_created", job_id=fields["job_id"])
+
+    def note(self, now: int, event: str, job_id: str | None = None,
+             worker_id: str | None = None, detail: str | None = None) -> None:
+        """Append one audit-trail event outside any other change (e.g. a refused receipt)."""
+        with self._tx() as db:
+            self._event(db, now, event, job_id, worker_id, detail)
 
     def _audit_not_run(self, db: sqlite3.Connection, job_id: str, now: int) -> None:
         """An audit or tie-breaker job ended without a usable result.
@@ -663,7 +677,8 @@ class Ledger:
                  "result_rejected_final": "rejected", "lease_timeout_requeued": "lease_timeouts",
                  "lease_timeout_failed": "lease_timeouts",
                  "submission_wrong_worker": "bad_submissions",
-                 "submission_conflict": "bad_submissions"}
+                 "submission_conflict": "bad_submissions",
+                 "receipt_mismatch": "bad_submissions"}
         out: dict[str, dict[str, int]] = {}
         with closing(self._connect()) as db:
             marks = ",".join("?" * len(names))
@@ -747,4 +762,13 @@ class Ledger:
                        "AND j.worker_id IS NOT NULL AND j.status IN ('leased','accepted') "
                        "AND j.assigned_worker IS NOT NULL AND j.worker_id!=j.assigned_worker"):
                 problems.append(f"audit taken by a worker it wasn't assigned to {r['job_id']}")
+            for r in q("SELECT j.job_id FROM jobs j JOIN jobs o ON o.job_id=j.audit_of "
+                       "WHERE j.job_kind IN ('audit','tiebreak') AND "
+                       "(j.schema_version!=o.schema_version OR j.payload_hash!=o.payload_hash "
+                       "OR COALESCE(j.model_sha256,'')!=COALESCE(o.model_sha256,''))"):
+                problems.append(f"re-run doesn't match the original job's version, input or "
+                                f"model {r['job_id']}")
+            for r in q("SELECT job_id FROM jobs WHERE schema_version!='bnh-job/0' AND "
+                       "task_type='llm:generate' AND model_sha256 IS NULL"):
+                problems.append(f"model job without a pinned model hash {r['job_id']}")
         return problems

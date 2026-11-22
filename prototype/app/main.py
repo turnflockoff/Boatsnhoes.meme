@@ -11,7 +11,7 @@ from typing import Any, Callable
 from fastapi import FastAPI, Header, HTTPException
 
 from .config import Settings, get_settings
-from . import rewards, tasks, workers
+from . import rewards, schemas, tasks, workers
 from .ledger import Ledger
 from .models import (ChallengeCreate, EnrollmentCreate, JobCreate, JobEnvelope, ResultSubmission,
                      WorkerRegistration)
@@ -20,8 +20,8 @@ from .signing import ManifestSigner
 
 log = logging.getLogger("bnh.coordinator")
 
-# Fields covered by the coordinator's Ed25519 signature. Workers must verify exactly these.
-SIGNED_FIELDS = ("job_id", "task_type", "payload", "payload_hash", "reward_points", "expires_at")
+# Fields covered by the coordinator's Ed25519 signature (versioned; see app/schemas.py).
+SIGNED_FIELDS = schemas.SIGNED_FIELDS
 
 # Audit-trail events that would tell a worker which jobs are audits or challenges.
 # They stay in the database for the operator but are hidden from the public job view.
@@ -56,8 +56,8 @@ def create_app(settings: Settings | None = None,
     def envelope(job: dict[str, Any]) -> JobEnvelope:
         return JobEnvelope(**{k: job[k] for k in JobEnvelope.model_fields})
 
-    def new_job_fields(task_type: str, payload: str, reward_points: int,
-                       expires_at: int) -> tuple[dict[str, Any], str]:
+    def new_job_fields(task_type: str, payload: str, reward_points: int, expires_at: int,
+                       model_sha256: str | None) -> tuple[dict[str, Any], str]:
         fields = {
             "job_id": str(uuid.uuid4()),
             "task_type": task_type,
@@ -65,8 +65,20 @@ def create_app(settings: Settings | None = None,
             "payload_hash": sha256_text(payload),
             "reward_points": reward_points,
             "expires_at": expires_at,
+            "schema_version": schemas.JOB_SCHEMA_VERSION,
+            "model_sha256": model_sha256,
         }
+        assert set(fields) == set(SIGNED_FIELDS)
         return fields, signer.sign(fields)
+
+    def validated_model_hash(task_type: str, payload: str) -> str | None:
+        """Validate a new job's payload and return the pinned model hash it will carry."""
+        executor = tasks.get(task_type)
+        try:
+            executor.validate(payload)
+            return executor.model_sha256(payload)
+        except tasks.TaskError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     def require_operator(token: str | None) -> None:
         expected = settings.operator_token
@@ -95,7 +107,9 @@ def create_app(settings: Settings | None = None,
 
     @app.get("/health")
     def health() -> dict[str, Any]:
-        return {"status": "ok", "mode": "local-prototype", "jobs": ledger.status_counts()}
+        return {"status": "ok", "mode": "local-prototype", "jobs": ledger.status_counts(),
+                "job_schema": schemas.JOB_SCHEMA_VERSION,
+                "receipt_schema": schemas.RECEIPT_SCHEMA_VERSION}
 
     @app.get("/v1/coordinator/key")
     def coordinator_key() -> dict[str, Any]:
@@ -155,13 +169,10 @@ def create_app(settings: Settings | None = None,
 
     @app.post("/v1/jobs", response_model=JobEnvelope)
     def create_job(body: JobCreate) -> JobEnvelope:
-        try:
-            tasks.get(body.task_type).validate(body.payload)
-        except tasks.TaskError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        model_sha256 = validated_model_hash(body.task_type, body.payload)
         t = now()
         fields, signature = new_job_fields(body.task_type, body.payload, body.reward_points,
-                                           t + body.ttl_seconds)
+                                           t + body.ttl_seconds, model_sha256)
         ledger.create_job(fields, signature, settings.max_attempts, t)
         return JobEnvelope(**fields, signature=signature)
 
@@ -170,17 +181,13 @@ def create_app(settings: Settings | None = None,
                          x_operator_token: str | None = Header(default=None)) -> dict[str, Any]:
         """Operator-only: queue a hidden known-answer job. Workers can't tell it apart."""
         require_operator(x_operator_token)
-        executor = tasks.get(body.task_type)
-        try:
-            executor.validate(body.payload)
-        except tasks.TaskError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        if not executor.verify(body.payload, body.expected_result).ok:
+        model_sha256 = validated_model_hash(body.task_type, body.payload)
+        if not tasks.get(body.task_type).verify(body.payload, body.expected_result).ok:
             raise HTTPException(status_code=422,
                                 detail="expected_result fails this task's own verifier")
         t = now()
         fields, signature = new_job_fields(body.task_type, body.payload, body.reward_points,
-                                           t + body.ttl_seconds)
+                                           t + body.ttl_seconds, model_sha256)
         ledger.create_job(fields, signature, settings.max_attempts, t, job_kind="challenge",
                           expected_result=body.expected_result)
         return {"job_id": fields["job_id"], "status": "queued", "job_kind": "challenge"}
@@ -238,9 +245,18 @@ def create_app(settings: Settings | None = None,
             raise HTTPException(status_code=422, detail="invalid worker timestamps")
         if sha256_text(body.result) != body.result_hash:
             raise HTTPException(status_code=422, detail="result hash mismatch")
+        receipt = body.model_dump()
+        if receipt["receipt_version"] != schemas.RECEIPT_SCHEMA_VERSION:
+            raise HTTPException(status_code=422, detail=schemas.receipt_problem(receipt, {}))
         job = ledger.get_job(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="unknown job")
+        # Track E: the receipt must say it ran this job version, on this input, with this
+        # model. A mismatch is a mistake or a stale worker; it changes nothing but the log.
+        problem = schemas.receipt_problem(receipt, job)
+        if problem:
+            ledger.note(t, "receipt_mismatch", job_id, worker_id, problem)
+            raise HTTPException(status_code=422, detail=problem)
         # Task-specific verifier. It checks the answer (or only its shape, for tasks
         # marked "schema-only"); it never proves which hardware executed the task.
         executor = tasks.get(job["task_type"])
@@ -252,12 +268,13 @@ def create_app(settings: Settings | None = None,
         audit_job = tiebreak_job = None
         if (verdict.ok and verdict.needs_audit and job["job_kind"] == "work"
                 and rng.random() < settings.audit_rate):
+            # Copy the original's model hash: a re-pin since then must not change the job.
             audit_job = new_job_fields(job["task_type"], job["payload"], job["reward_points"],
-                                       t + window)
+                                       t + window, job["model_sha256"])
         # A tie-breaker is prepared for every audit result but only stored on a mismatch.
         if verdict.ok and job["job_kind"] == "audit" and settings.tiebreak:
             tiebreak_job = new_job_fields(job["task_type"], job["payload"],
-                                          job["reward_points"], t + window)
+                                          job["reward_points"], t + window, job["model_sha256"])
         outcome, job = ledger.submit(job_id, worker_id, body.result_hash, verdict.ok, t,
                                      verdict.method, verdict.confidence, result=body.result,
                                      needs_audit=verdict.needs_audit, audit_job=audit_job,
