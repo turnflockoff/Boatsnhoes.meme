@@ -2,7 +2,7 @@
 
 > **Canonical source of truth.** If a chat conflicts with this file, this file wins until deliberately updated.
 
-**Version:** 0.5.5 | **Last updated:** 2026-11-22 | **Status:** Site LIVE at boatsnhoes.meme (Netlify); GPU worker backend Phases 1, 2 and 4 (audits, tie-breakers, threat model) built, untested on real GPUs
+**Version:** 0.5.6 | **Last updated:** 2026-11-22 | **Status:** Site LIVE at boatsnhoes.meme (Netlify); GPU worker backend Phases 1, 2, 4 and 5 (audits, tie-breakers, threat model, simulated reward reports) built, untested on real GPUs
 
 ## SESSION PROTOCOL (Claude must follow every session)
 1. **Start:** Read README.md, TASKS.md, and USER_TODO.md. Summarize status in 3 lines.
@@ -70,6 +70,7 @@ Threats and defenses. Status: planned unless marked done.
 - Not built: Litepaper, Casino coming-soon, Meme Lab, AgentWiki.
 
 ## Changelog
+- **0.5.6 (2026-11-22):** GPU worker Phase 5: simulated reward reports. Versioned scoring rule `sim-points-v1` (confirmed + unverified are payable; pending and held are not), per-worker points and activity, reproducible `report_sha256`, `python -m app.rewards verify`, operator-only `/v1/rewards/report`. Off-chain points only. 61 tests.
 - **0.5.5 (2026-11-22):** GPU worker Phase 4 finished in software: hidden tie-breaker re-run by a third worker when an audit disagrees (majority of three; outvoted/unresolved results stay held), new consistency checks, `TIEBREAK` setting. Written fraud/collusion threat model (`docs/VERIFICATION-THREAT-MODEL.md`). 51 tests.
 - **0.5.4 (2026-11-22):** GPU worker Phase 4 (first slice): hidden re-run audits by a different worker, hidden known-answer challenge jobs, whitespace tolerance rule for AI text, worker trust report, public points split into confirmed/pending/unverified/held. Operator-only endpoints need `OPERATOR_TOKEN`. 44 tests.
 - **0.5.3 (2026-11-22):** GPU worker Phase 2: task plug-in interface, llm:generate job type, pinned model registry (Qwen2.5-0.5B, Apache-2.0, unpinned until downloaded). Hourly automated build session scheduled.

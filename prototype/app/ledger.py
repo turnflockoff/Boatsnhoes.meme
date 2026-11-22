@@ -469,6 +469,36 @@ class Ledger:
                     "can agree on a wrong answer.",
         }
 
+    def reward_rows(self, since: int, until: int) -> list[dict[str, Any]]:
+        """Phase 5: accepted results with `since <= accepted_at < until`, in a fixed order.
+        Only the fields a reward report needs: never results, payloads or job kinds."""
+        with closing(self._connect()) as db:
+            rows = db.execute(
+                "SELECT s.job_id, s.worker_id, j.task_type, s.reward_points, s.accepted_at, "
+                "s.verifier_method, s.confidence, s.audit_status FROM submissions s "
+                "JOIN jobs j USING(job_id) WHERE s.accepted_at>=? AND s.accepted_at<? "
+                "ORDER BY s.accepted_at, s.job_id", (since, until)).fetchall()
+            return [dict(r) for r in rows]
+
+    def activity_counts(self, since: int, until: int) -> dict[str, dict[str, int]]:
+        """Phase 5: per-worker counts of public lifecycle events with `since <= at < until`."""
+        names = {"job_leased": "leases", "result_rejected_requeued": "rejected",
+                 "result_rejected_final": "rejected", "lease_timeout_requeued": "lease_timeouts",
+                 "lease_timeout_failed": "lease_timeouts",
+                 "submission_wrong_worker": "bad_submissions",
+                 "submission_conflict": "bad_submissions"}
+        out: dict[str, dict[str, int]] = {}
+        with closing(self._connect()) as db:
+            marks = ",".join("?" * len(names))
+            for r in db.execute(
+                f"SELECT worker_id, event, COUNT(*) AS n FROM events WHERE worker_id IS NOT NULL "
+                f"AND event IN ({marks}) AND at>=? AND at<? GROUP BY worker_id, event",
+                (*names, since, until)).fetchall():
+                counts = out.setdefault(r["worker_id"], {})
+                key = names[r["event"]]
+                counts[key] = counts.get(key, 0) + int(r["n"])
+        return out
+
     def total_points(self) -> int:
         with closing(self._connect()) as db:
             row = db.execute("SELECT COALESCE(SUM(reward_points),0) AS total FROM submissions"

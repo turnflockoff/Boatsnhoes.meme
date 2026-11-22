@@ -54,7 +54,7 @@ This roadmap separates implemented repository assets from proposed work. A check
 - [x] Add a tie-breaker re-run when an audit disagrees. *(Third worker, excluded from both sides; majority of three. Software only.)*
 - [x] Record queued, leased, accepted, rejected, expired and failed results with an audit trail, plus audit outcomes (confirmed, disputed, held).
 - [x] Keep rewards simulated and off-chain.
-- [ ] Export an auditable reward report.
+- [x] Export an auditable reward report. *(`python -m app.rewards report` / `verify`: versioned scoring `sim-points-v1`, per-worker points, sha256 over canonical JSON. Simulated points only.)*
 - [x] Document collusion, fabrication, and verification limitations. *([`VERIFICATION-THREAT-MODEL.md`](VERIFICATION-THREAT-MODEL.md))*
 - [ ] Assign audits to a randomly chosen eligible worker instead of first-come.
 

@@ -1,5 +1,5 @@
 # YOUR Personal To-Do List (things only you can do)
-**Version:** 0.5 | **Last updated:** 2026-11-21
+**Version:** 0.5.1 | **Last updated:** 2026-11-22
 Never share passwords, API keys, or recovery phrases with anyone, including Claude.
 
 ## This week
@@ -19,6 +19,7 @@ Never share passwords, API keys, or recovery phrases with anyone, including Clau
 
 ## Before the testnet
 - [ ] Decide: chain path, final supply, fair launch (no premine)
+- [ ] Decide: should a rig caught cheating lose its other unchecked points for that period? (simulated scoring v2; see TASKS.md)
 - [ ] Find a blockchain developer or team to build the chain and miner
 - [ ] Set up a project email and a shared password manager
 - [ ] Back up recovery info offline (paper, in two places)

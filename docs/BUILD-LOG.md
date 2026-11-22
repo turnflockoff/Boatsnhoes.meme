@@ -77,3 +77,18 @@
 2. **Majority voting has a blind spot.** If one person secretly runs two of the three rigs, they can outvote the honest one. That's why per-worker identity is now the top item: voting only means something if the voters are really different people.
 3. **Who picks the checker matters as much as the check.** Right now an audit goes to whichever rig asks first. A cheater who asks very fast gets to check their own friends more often. The fix (random assignment) is on the list.
 4. **Spot-check math:** at a 25% audit rate, a rig faking 10 answers gets caught about 94% of the time, as long as the checker is honest. The chance of escaping is 0.75 multiplied by itself 10 times.
+
+## 2026-11-22 (night): GPU worker Phase 5 (simulated reward reports)
+
+**Shipped**
+- **Reward reports.** For any time period, the coordinator can now total up each rig's simulated points: how many results it got accepted, how its points split across confirmed, unverified, pending and held, and how many points count ("payable"). It also lists each rig's activity: jobs borrowed, wrong answers, timeouts, bad submissions.
+- **A written, versioned scoring rule** (`sim-points-v1`): confirmed and unverified points count; pending and held don't. If the rule ever changes it gets a new name (v2), so old reports can always be re-checked under the rule they used.
+- **A fingerprint on every report.** Each report carries a sha256 of its contents. The same database and the same dates always produce the same fingerprint, and `python -m app.rewards verify report.json` re-runs the report and points at any line that changed, or tells you the file was edited.
+- The report is operator-only and never names hidden test jobs, answers, prompts or secrets.
+- Tests went from 51 to 61, all passing. I also ran it for real: a coordinator process, two demo workers, the report over HTTP (403 without the operator password), then the command-line report and verify ("OK: report matches the ledger"). Points are simulation bookkeeping only: no tokens, no money.
+
+**What you learned**
+1. **Spot-checking only works if you pay for unchecked work.** If only re-checked answers counted, three out of four honest jobs would never pay. So unchecked ("unverified") work counts, and the deterrent is that any fake that does get checked is held. The open question for you: should getting caught also cost a rig its other unchecked points? That's on your to-do list as a v2 decision.
+2. **Version your rules like you version software.** A report says which scoring rule made it. Change the rule and old reports still re-check under the old one, instead of silently changing past numbers.
+3. **Deterministic means repeatable.** No clock time and no random numbers go into a report, just the database and the dates you pick. That's what lets anyone with a copy of the ledger reproduce the exact same fingerprint.
+4. **A report can leak secrets by timing.** A hidden test that a rig fails shows up as "held" right away. If rigs could watch a live report, they'd guess which jobs were tests. So reports are operator-only, and should be published only after the period ends.

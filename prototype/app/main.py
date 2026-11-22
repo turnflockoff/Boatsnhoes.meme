@@ -11,7 +11,7 @@ from typing import Any, Callable
 from fastapi import FastAPI, Header, HTTPException
 
 from .config import Settings, get_settings
-from . import tasks
+from . import rewards, tasks
 from .ledger import Ledger
 from .models import ChallengeCreate, JobCreate, JobEnvelope, ResultSubmission, WorkerRegistration
 from .security import sha256_text, sign_manifest
@@ -36,7 +36,7 @@ def create_app(settings: Settings | None = None,
     rng = rng or random.SystemRandom()
     settings = settings or get_settings()
     ledger = Ledger(settings.database_path)
-    app = FastAPI(title="Boats N Hoes Useful-Compute MVP", version="0.4.1")
+    app = FastAPI(title="Boats N Hoes Useful-Compute MVP", version="0.5.0")
     app.state.ledger = ledger
     app.state.settings = settings
 
@@ -120,6 +120,18 @@ def create_app(settings: Settings | None = None,
         if not ledger.has_worker(worker_id):
             raise HTTPException(status_code=404, detail="unknown worker")
         return ledger.worker_trust(worker_id)
+
+    @app.get("/v1/rewards/report")
+    def reward_report(since: int = 0, until: int | None = None,
+                      x_operator_token: str | None = Header(default=None)) -> dict[str, Any]:
+        """Operator-only Phase 5 report. Operator-only because a live per-job settlement
+        view could let a worker spot a failed hidden challenge right after submitting;
+        publish a report only after its period has closed."""
+        require_operator(x_operator_token)
+        try:
+            return rewards.build_report(ledger, since, until if until is not None else now() + 1)
+        except rewards.ReportError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.get("/v1/jobs/{job_id}")
     def job_status(job_id: str) -> dict[str, Any]:

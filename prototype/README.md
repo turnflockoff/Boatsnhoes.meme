@@ -40,6 +40,24 @@ A result hash is not proof that a GPU ran a model. Phase 4 adds the ways the coo
 - 19 tests for Phase 4 (51 in total), including an in-place migration of a Phase 2 database and a tampered-database check.
 - **Written threat model:** [`docs/VERIFICATION-THREAT-MODEL.md`](../docs/VERIFICATION-THREAT-MODEL.md) lists each attack, today's defense, what is still open, and the order of fixes.
 
+## Implemented (Phase 5: simulated reward reports)
+
+Off-chain points only. Nothing is minted, sent or promised.
+
+- **Versioned scoring rule** `sim-points-v1` (`app/rewards.py`), integer math only. Each accepted result sits in one public bucket: `confirmed` and `unverified` are payable; `pending` (a hidden re-run is still queued) and `held` (disputed, outvoted, unresolved, or a failed hidden test) are not. Unverified work counts because spot-checking only works if unsampled honest work is paid. v1 has no extra penalty for a caught cheater (open decision).
+- **Per-worker report** for a period (`since <= accepted_at < until`): accepted results, points per bucket, payable points, and activity (leases, rejected answers, lease timeouts, bad submissions).
+- **Auditable and reproducible.** The report carries `report_sha256` over its canonical JSON. The same ledger and the same period always give the same hash. `python -m app.rewards verify report.json --db <db>` re-runs it and lists any entry that differs, and catches an edited report file.
+- **Self-checks** in every report: the ledger's consistency problems, and whether per-worker sums match the totals.
+- **Never leaks hidden checks.** Reports list job ids, buckets, verifier method and confidence only: no job kinds, results, payloads, expected answers or secrets.
+- **Operator-only** (`GET /v1/rewards/report`, needs `X-Operator-Token`). A live per-job view would let a worker see a "held" right after submitting and guess it was a hidden test. Publish a report only after its period has closed.
+- Statuses are read when the report is built, so a pending re-run that settles later changes the report for the same period; `verify` says so.
+- 10 tests for Phase 5 (61 in total). Also run end to end with a real coordinator process, two demo workers, the HTTP endpoint and the CLI `report`/`verify`.
+
+Build and check a report:
+
+    python -m app.rewards report --db ./data/prototype.sqlite3 --since 0 --until 1800000000 --out report.json
+    python -m app.rewards verify report.json --db ./data/prototype.sqlite3
+
 **Fraud risks that remain (be honest about these):**
 - **Collusion.** Two workers run by the same person can agree on a wrong answer. Agreement is evidence, not proof. Worker identity is not authenticated yet, so one person can register many workers. In a tie-breaker, two colluders can even outvote an honest auditor.
 - **First-come auditors.** An audit goes to whichever eligible worker asks next, so a ring that polls quickly gets more audits than chance would give it.
@@ -108,6 +126,7 @@ A GitHub Actions workflow runs these tests on pushes and pull requests affecting
 - `POST /v1/challenges` — operator only: queue a hidden known-answer job.
 - `GET /v1/audits` — operator only: every audit and challenge with its outcome.
 - `GET /v1/workers/{worker_id}/trust` — operator only: how a worker's results held up.
+- `GET /v1/rewards/report?since=&until=` — operator only: simulated reward report for a period.
 - `GET /health` — local health check.
 
 ## GPU diagnostic

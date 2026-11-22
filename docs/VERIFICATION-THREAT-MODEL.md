@@ -72,6 +72,8 @@ This assumes the auditor is honest. The rest of this document is about when that
 | 11 | **Challenge leak.** If workers learn which jobs are tests, they only behave on those | Challenges get the same envelope, receipt and public events; public ledger merges challenge outcomes into confirmed/held | The operator API itself (protected by `OPERATOR_TOKEN`) | Keep the token off worker machines; rotate it |
 | 12 | **Replay / duplicate submissions** | Lease holder check, idempotent receipts, deadlines | None known in software | Re-test across a real network |
 | 13 | **Real GPU nondeterminism** makes honest rigs disagree | Tolerance rule: ignore whitespace only | Unknown until two real RX 470s run the same job. Honest rigs could be held or outvoted | Measure in Phase 3, then tune the tolerance per task |
+| 14 | **Reading the reward report to spot hidden tests.** A failed challenge is "held" the moment it's accepted, while normal work is pending or unverified | Reward reports (Phase 5) are operator-only and list buckets, not job kinds | A worker who sees a published per-job report could guess which held job was a test | Publish reports only after the period closes; consider delaying the public bucket for challenges |
+| 15 | **Cheating pays on unsampled jobs.** Scoring `sim-points-v1` pays unverified work and adds no penalty when a worker is caught | Caught results are held, not paid | A cheater still keeps points for the fakes nobody re-ran | Scoring v2 penalty rule (owner decision), e.g. hold a worker's unverified points for the period after a failed challenge or outvote |
 
 ## Honest limits
 
@@ -90,4 +92,5 @@ This assumes the auditor is honest. The rest of this document is about when that
 2. Random auditor assignment instead of first-come (closes #4).
 3. Measure real GPU nondeterminism on the RX 470s and tune the tolerance (#13).
 4. Asymmetric manifest signatures (#9).
-5. Signed, published ledger snapshots (#10).
+5. Signed, published ledger snapshots (#10). The Phase 5 `report_sha256` is the first step: a reproducible fingerprint of each report, not yet signed.
+6. A penalty rule for caught cheaters in scoring v2 (#15).
