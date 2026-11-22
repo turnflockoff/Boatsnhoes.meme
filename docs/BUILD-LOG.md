@@ -156,3 +156,19 @@
 2. **Pin the meaning at creation time.** A job records the model fingerprint when it's made. If it only said "use the registry's model", re-pinning the registry would change what old jobs ask for, and a re-check could run a different model than the original.
 3. **A receipt is a claim, not proof.** A cheating rig can copy the right fingerprints into its receipt without running anything. These checks catch honest mistakes (wrong model file, outdated rig software, an answer sent to the wrong job). Hidden re-checks and test jobs are still what catch liars.
 4. **Refuse loudly, change nothing.** A bad receipt doesn't cost the rig its job or touch the points. It just gets a clear error and a line in the log, so a misconfigured rig is easy to spot and fix.
+
+## 2026-11-22 (midday): Reward reports now carry the coordinator's signature
+
+**Shipped**
+- **Signed reports.** The coordinator can now sign a reward report for a period that's already over: `python -m app.rewards report --sign --out report.json`. The file gets a "signature" section with the coordinator's public key, its short fingerprint, and the signature itself. It's the same key that already signs jobs, but the signed message is labeled as a report, so a report signature can never be passed off as a job.
+- **Anyone can check it, no database needed.** `python -m app.rewards verify report.json --no-db --public-key <key>` says "OK" only if the coordinator signed this exact file. Change any number and the check fails. Change the number *and* recompute the file's fingerprint, and the signature check fails instead.
+- **It won't sign too early.** A period that hasn't ended yet is refused (its numbers can still change, and a live per-job view could give away hidden tests). It also won't sign a report that fails its own self-checks, and it won't make up a new key if the key file is missing.
+- The operator API does the same with `?sign=true`.
+- Tests went from 97 to 109, all passing. I switched off each new check one at a time (the signature check, the "period must be over" rule, the trusted-key comparison, the report label) and a test failed every time. I also ran it for real: a coordinator, a demo worker that finished two jobs, a signed report that checked out offline and against the ledger, an edited copy that was refused, and the API refusing to sign a period that was still open. Still software only: no real GPU yet.
+- Also fixed an out-of-date line in the prototype README that still said audits were first-come (that was fixed in 0.5.8).
+
+**What you learned**
+1. **A signature answers "who said this?", not "is it true?".** Signing a report stops anyone from changing it after it's issued, and proves it came from your coordinator. It doesn't stop the coordinator from signing wrong numbers. Checking the numbers still means re-running the report against a copy of the database.
+2. **One key, many jobs, so label what you sign.** The coordinator's key signs jobs and now reports. Each signed message says what it is (`purpose`), so nobody can take a signature from one kind of message and reuse it on another.
+3. **Checking against the key inside the file proves nothing on its own.** A forger can sign with their own key and put that key in the file. That's why the checker asks for the key you already trust, and warns you to compare fingerprints when you don't give one.
+4. **Sign only what's finished.** A report for a period that's still running can change minutes later. Signing it would put your name on numbers that are about to be wrong.

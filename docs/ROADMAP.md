@@ -58,6 +58,7 @@ This roadmap separates implemented repository assets from proposed work. A check
 - [x] Document collusion, fabrication, and verification limitations. *([`VERIFICATION-THREAT-MODEL.md`](VERIFICATION-THREAT-MODEL.md))*
 - [x] Assign audits to a randomly chosen eligible worker instead of first-come. *(Audits and tie-breakers go to one random active, eligible worker; re-assigned if it doesn't show up. 9 tests, software only.)*
 - [x] Sign job manifests asymmetrically so workers can't forge jobs. *(Coordinator Ed25519 key; workers verify with a pinned public key. 7 tests, software only.)*
+- [x] Sign closed-period reward reports so they can be checked offline. *(Same coordinator key with a separate `purpose`; `rewards verify --no-db --public-key`. Proves who issued a report, not that its numbers are right. 12 tests, software only.)*
 
 ## Track F — Two-GPU proof of concept
 - [ ] Run two independent workers on the two RX 470 cards.

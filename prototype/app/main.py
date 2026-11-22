@@ -206,14 +206,17 @@ def create_app(settings: Settings | None = None,
         return ledger.worker_trust(worker_id)
 
     @app.get("/v1/rewards/report")
-    def reward_report(since: int = 0, until: int | None = None,
+    def reward_report(since: int = 0, until: int | None = None, sign: bool = False,
                       x_operator_token: str | None = Header(default=None)) -> dict[str, Any]:
         """Operator-only Phase 5 report. Operator-only because a live per-job settlement
         view could let a worker spot a failed hidden challenge right after submitting;
-        publish a report only after its period has closed."""
+        publish a report only after its period has closed. `sign=true` adds the
+        coordinator's Ed25519 signature and is refused while the period is still open."""
         require_operator(x_operator_token)
         try:
-            return rewards.build_report(ledger, since, until if until is not None else now() + 1)
+            t = now()
+            report = rewards.build_report(ledger, since, until if until is not None else t + 1)
+            return rewards.sign_report(report, signer, t) if sign else report
         except rewards.ReportError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 

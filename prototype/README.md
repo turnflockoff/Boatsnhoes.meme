@@ -61,9 +61,9 @@ Build and check a report:
 
 **Fraud risks that remain (be honest about these):**
 - **Collusion.** Two workers run by the same person can agree on a wrong answer. Agreement is evidence, not proof. Workers now need an operator code and a per-worker key, and same-owner workers never audit each other, but a person who gets codes under several names is still a ring. In a tie-breaker, two colluders can even outvote an honest auditor.
-- **First-come auditors.** An audit goes to whichever eligible worker asks next, so a ring that polls quickly gets more audits than chance would give it.
+- **Rings with many enrolled rigs.** Audits now go to a random eligible rig (fixed in 0.5.8), but a ring that keeps more rigs active still gets more of the draws.
 - **Repeated payloads.** An audit has the same payload as the original. Colluding workers who compare notes could spot it.
-- **Trusted coordinator.** The coordinator picks auditors, stores expected answers, and could lie about all of it.
+- **Trusted coordinator.** The coordinator picks auditors, stores expected answers, and could lie about all of it. Signed reward reports (0.5.11) stop anyone from editing a report after it's issued, but the coordinator can still sign wrong numbers.
 - **Real GPU nondeterminism is unknown.** The whitespace-only tolerance is a guess until two real rigs produce output for the same job. It may need loosening (or a different check) after Phase 3.
 - **Two rigs aren't enough for a tie-breaker.** With only two workers online, a dispute stays held until a person looks at it.
 
@@ -107,7 +107,20 @@ Tested in software only (0.5.9).
 - `PROTOTYPE_SECRET` is no longer used; the coordinator logs a warning if it is still set.
 - 7 new tests (89 in total), including a worker that tries to sign a job with its own key, a genuine signature copied onto another job, legacy HMAC signatures, and an impostor coordinator. Also run end to end: coordinator + demo worker (first-contact pin, job accepted), then a second coordinator with a new key on the same address (worker refused to run).
 
-**Limits:** jobs created before 0.5.9 carry the old HMAC signature and are refused by new workers, so start with a fresh database. There is no key rotation tool yet: replacing the key file invalidates every queued job and every worker's pin. First-contact pinning trusts whatever answers the first time, so on a real network give workers the key directly. This signs job manifests only; it does not sign the ledger or reward reports (threat model #10).
+**Limits:** jobs created before 0.5.9 carry the old HMAC signature and are refused by new workers, so start with a fresh database. There is no key rotation tool yet: replacing the key file invalidates every queued job and every worker's pin. First-contact pinning trusts whatever answers the first time, so on a real network give workers the key directly. The same key also signs closed-period reward reports since 0.5.11 (see below); it still does not sign the raw ledger.
+
+## Implemented: signed reward reports (threat model #10, first step)
+
+Tested in software only (0.5.11). Simulated points only.
+
+- **The coordinator signs a closed period's report.** `python -m app.rewards report --sign --out r.json` (or `GET /v1/rewards/report?until=...&sign=true`) adds a `signature` block: algorithm, the coordinator's public key, its fingerprint and an Ed25519 signature. It is the same key that signs job manifests; the signed message carries `purpose: bnh-reward-report-signature/1`, so a report signature can never pass as a job signature.
+- **What is signed:** the report type, `report_sha256` (which covers the whole body), the scoring version and the period. Editing any number breaks the hash; recomputing the hash breaks the signature.
+- **Anyone can check it without the database:** `python -m app.rewards verify r.json --no-db --public-key <hex>` (or `BNH_COORDINATOR_KEY`). Without a trusted key it still checks, but tells you to compare the fingerprint, because anyone can sign a file with their own key.
+- **Refuses to sign** a period that hasn't ended (`until` in the future; its numbers can still change and a live per-job view can reveal hidden tests, threat model #14), a report that fails its own checks, or a report whose hash doesn't match. The CLI never creates a new key: `--sign` with a missing key file is an error.
+- `verify --db` with `--public-key` now also demands a valid signature. An unsigned report still verifies against the ledger as before.
+- 12 new tests (109 in total), including an edited-and-rehashed report, a report signed by an impostor key, a report signature tried as a job signature, and an open period. Each new check was switched off once to confirm a test fails. Also run end to end: a coordinator process, a demo worker that finished two jobs, a signed report checked offline and against the ledger, a tampered copy refused, and the API refusing to sign an open period.
+
+**What this does not fix:** a signature proves *who issued* the report, not that the numbers are right. The coordinator can still sign a report built from a database it edited; only an independent re-run against a copy of the ledger (`verify --db`) checks the numbers, and nobody outside the operator has that copy yet. There is no key rotation and no public place where reports are posted yet.
 
 ## Implemented: versioned job and receipt schemas (Track E)
 
@@ -183,7 +196,7 @@ A GitHub Actions workflow runs these tests on pushes and pull requests affecting
 - `POST /v1/challenges` — operator only: queue a hidden known-answer job.
 - `GET /v1/audits` — operator only: every audit and challenge with its outcome.
 - `GET /v1/workers/{worker_id}/trust` — operator only: how a worker's results held up.
-- `GET /v1/rewards/report?since=&until=` — operator only: simulated reward report for a period.
+- `GET /v1/rewards/report?since=&until=&sign=` — operator only: simulated reward report for a period; `sign=true` adds the coordinator's signature (closed periods only).
 - `GET /health` — local health check, job counts, and the job/receipt schema versions spoken.
 
 ## GPU diagnostic
