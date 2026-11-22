@@ -403,3 +403,21 @@
 2. **Units hide in the file names.** Temperature is in millidegrees, power in microwatts, memory in bytes. Getting one conversion wrong would make a cool card look like it's on fire, so each one has a test.
 3. **Measure while it works, not after.** A card at idle tells you little. The watch mode exists so the numbers cover the actual test, and the "0 % busy" note catches the easy mistake of watching card1 while the job ran on card0.
 4. **Numbers about a GPU aren't proof the GPU did the work.** Like the inventory, this tool can't show inference worked. It's the logbook that goes next to a real test run.
+
+## 2026-11-22 (23:20 UTC): A recorder for the first real test on each card
+
+**Shipped**
+- **`python -m app.gpu_run`.** The next real step on the rig is a first small test on each card (Track B: "run a minimal smoke test on GPU 0, repeat on GPU 1"). This tool wraps whatever test command you choose and writes down what happened in one JSON file:
+  - **Did it work?** Exit code, how long it took, the last 40 lines of its output and error output, and a fingerprint (sha256) of the whole output.
+  - **Was the answer right?** Give it the answer you expect (`--expect-file`, compared after ignoring spacing, the same rule as AI jobs; or `--expect-sha256` for an exact match) and it says matched or not. A run that was stopped half-way is never compared.
+  - **Exactly what ran?** A fingerprint of the program and of every file named in the command (for example the model file), so someone else can check they're using the same files.
+  - **Which card did the work?** It reads every card's busy %, temperature, power and VRAM before, every second during, and after the run. If you said `--card card1` but card0 got busy, it tells you the test most likely ran on card0. If no card got busy, it most likely ran on the CPU.
+- **Safety rules.** No shell, no sudo (it refuses `sudo`, `su`, `doas`, `pkexec`, `runuser`), never writes to the driver's files, never overwrites a report (checked before your test starts), stops the test and anything it started after `--timeout` (default 15 minutes) or Ctrl-C. Extra settings passed with `--env` are saved in the report, so names that look like secrets (`TOKEN`, `KEY`, `PASSWORD`...) are refused. Hostname and username are blanked like in the inventory.
+- **Honest about what it proves.** Every report says `"proves_inference": false`. One report is a record; it becomes evidence when someone else repeats the same command with the same file fingerprints and gets the same answer.
+- Tests went from 341 to 397, all passing (56 new). The "GPU work" in the tests is a small Python program that writes numbers into a fake card folder, so a test can make card0 or card1 look busy. I switched off 20 rules one at a time (stopping the whole process group, refusing secret names in both places, the 10 % busy line, refusing sudo, the early overwrite check, not comparing a stopped run, blanking names, the wrong-card warning, the already-busy warning, trimming the output, the size cap on compared output, hashing files, the exit code, the spacing rule, passing settings through, the VRAM and heat warnings, the timeout itself, upper-case fingerprints) and a test failed every time (for the timeout one, the test hung and was killed). On this cloud machine, which has no GPU, a real run correctly reported "card0 doesn't exist" and refused to overwrite its own report. Still software only: never run on the RX 470s.
+
+**What you learned**
+1. **"It ran" and "it ran on the GPU" are different claims.** Programs like llama.cpp quietly fall back to the CPU or pick a different card when the device setting is off. Watching busy % on every card during the run is a cheap way to catch that.
+2. **Card numbers aren't always device numbers.** Linux calls them card0/card1; Vulkan numbers its devices separately, and the order can differ. The recorder doesn't guess the mapping, it checks which card actually got busy.
+3. **Fingerprint the inputs, not just the output.** A matching answer only means something if you know which program and which model file produced it. Hashing them makes the run repeatable by someone else.
+4. **Stop the whole family.** A test program can start helper processes. Stopping only the parent can leave a helper running on the card, so the recorder stops the whole group.

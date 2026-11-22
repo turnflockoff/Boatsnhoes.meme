@@ -349,6 +349,21 @@ It only **reads** the files the amdgpu driver already publishes under `/sys/clas
 
 The JSON report (`bnh-gpu-sensors/1`) has each card's PCI slot (to match the inventory), driver, last reading and, over the watch, the lowest/highest/average temperature, power, VRAM use, busy %, core/memory clock and fan speed. Findings warn when a card reaches 85 °C or comes within 5 °C of the driver's own critical limit, when VRAM use reaches 90 %, when a card isn't on `amdgpu`, when a sensor is missing, or when a card stayed at 0 % busy for the whole watch (so the test didn't run there). `--samples` is 1-3600 and `--interval` 0.5-60 s; Ctrl-C keeps the readings taken so far (`stopped_early`). It refuses to overwrite a file, checked before the watch starts, and always says `"proves_inference": false`. Tested only against fake sysfs trees laid out like amdgpu's (`tests/test_gpu_sensors.py`), not on the real rig yet. Throughput and errors still come from the test itself.
 
+### Recording one test run on one card
+
+When you're ready for the first smoke test, run it through the run recorder instead of on its own:
+
+    python -m app.gpu_run --card card1 --label "smoke test 1, gpu1" --out gpu1-run1.json \
+        --expect-file expected.txt -- ./llama-cli -m models/tiny.gguf -p "Hello" -n 16 --seed 1
+
+It refuses to start if `--out` already exists, if the command is `sudo`/`su`/`doas`/`pkexec`/`runuser`, or if an `--env NAME=value` name looks like a secret (`TOKEN`, `SECRET`, `PASS`, `KEY`, ...; every `--env` value is saved in the report). It then hashes the program and every argument that names an existing file (the model, a prompt file), takes one sensor reading of every card, runs your command (no shell, stdin closed, its own process group), reads every card again every `--interval` seconds (0.5-60, default 1) until it ends, stops it and anything it started after `--timeout` seconds (default 900) or on Ctrl-C, and takes one last reading.
+
+The JSON report (`bnh-gpu-run/1`) has the exit code, duration, the sha256 and last 40 lines of stdout and stderr, whether stdout matched what you expected (`--expect-sha256` exact, or `--expect-file` after collapsing whitespace, the same tolerance as `llm:generate`; partial output from a stopped run is never compared), and per card the readings before, the lowest/highest/average during, the readings after and the VRAM the run added. Hostname and username are blanked as in the inventory.
+
+The key finding is **which card actually did the work** (`evidence.target_card_busy`, `evidence.busy_elsewhere`, "busy" meaning at least 10 % `gpu_busy_percent`): if card1 stayed idle while card0 got busy, the report says the test most likely ran on card0 (check the program's device setting, e.g. `GGML_VK_VISIBLE_DEVICES` for llama.cpp's Vulkan build); if no card got busy, it most likely ran on the CPU. It also warns when the card was already busy before the start, on heat, on VRAM at 90 %, and when the run was too short to tell. Exit code 0 means the command succeeded and the output didn't mismatch; 1 means it failed, timed out or mismatched; 2 means it refused to run.
+
+It always says `"proves_inference": false`: one report is a record, and becomes evidence when someone else repeats the same command with the same file hashes and gets the same output. Tested only with small Python programs writing into fake sysfs trees (`tests/test_gpu_run.py`); never run on the real rig yet.
+
 ## Not implemented
 
 - Real model inference on RX 470.

@@ -25,7 +25,7 @@ This roadmap separates implemented repository assets from proposed work. A check
 - [ ] Capture Vulkan devices: `vulkaninfo --summary`.
 - [ ] Confirm `/dev/dri` permissions.
 - [ ] Confirm both RX 470 cards enumerate independently.
-- [ ] Run a minimal Vulkan compute smoke test on GPU 0.
+- [ ] Run a minimal Vulkan compute smoke test on GPU 0. *(Run recorder built: `python -m app.gpu_run --card card0 --out run.json -- <test command>` saves exit code, output hash, expected-output match, file hashes and which card was actually busy. 56 tests with fake sysfs and small Python programs; no test has been run on a GPU.)*
 - [ ] Repeat on GPU 1.
 - [ ] Record temperature, power, VRAM use, throughput, errors, and stability. *(Sensor tool built: `python -m app.gpu_sensors` reads temperature, power, VRAM, busy %, clocks and fan from amdgpu sysfs, read-only, with min/max/avg over a watch. 47 tests against fake sysfs trees; never run on the real rig. Throughput and errors come from the test itself.)*
 - [ ] Document exact working driver/runtime versions.
@@ -106,4 +106,4 @@ This roadmap separates implemented repository assets from proposed work. A check
 - Treat worker receipts and hashes as records, not proof of GPU execution.
 
 ## Immediate next action
-On the actual Ubuntu host, run `python -m app.hw_inventory --out inventory.json` from `prototype/` (it runs the inventory commands below read-only and blanks hostname, username and UUIDs). Use those results to choose the smallest viable Vulkan inference smoke test.
+On the actual Ubuntu host, run `python -m app.hw_inventory --out inventory.json` from `prototype/` (it runs the inventory commands below read-only and blanks hostname, username and UUIDs). Use those results to choose the smallest viable Vulkan inference smoke test, then run it on each card through `python -m app.gpu_run --card cardN --out gpuN-run1.json -- <command>` so the report shows which card really did the work.

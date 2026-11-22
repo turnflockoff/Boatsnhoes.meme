@@ -1,5 +1,5 @@
 # BOATS N HOES: Project Task List (Claude + dev work)
-**Version:** 0.5.25 | **Last updated:** 2026-11-22 | Personal to-dos live in USER_TODO.md.
+**Version:** 0.5.26 | **Last updated:** 2026-11-22 | Personal to-dos live in USER_TODO.md.
 
 ## Phase 0: Foundation
 - [x] Buy boatsnhoes.meme
@@ -54,6 +54,7 @@
 - [ ] Make the offline handover key and keep it on a USB stick (owner step, before rigs go online)
 - [ ] Pick the numbers for `POINTS_TABLE` (owner decision; e.g. 1 for the demo task, 10 for an AI job)
 - [x] Read-only GPU sensor tool for Phase 3: `python -m app.gpu_sensors` (temperature, power, VRAM, busy %, clocks, fan from amdgpu sysfs; one snapshot or a watch with min/max/avg; warns on heat, nearly full VRAM, wrong driver, idle card; 341 tests, fake sysfs only)
+- [x] One-run recorder for Phase 3: `python -m app.gpu_run --card cardN --out run.json -- <command>` (exit code, output sha256 and tail, expected-output check, program/model file hashes, sensor readings before/during/after for every card, flags when the test ran on another card or the CPU; refuses sudo, secret-looking env, overwrites; 397 tests, fake sysfs only)
 - [ ] GPU worker Phase 3: RX 470 hardware validation (needs the real rig; start by running the inventory tool there)
 - [ ] Memory-hard, ASIC-resistant algorithm (pseudocode, reference miner)
 - [ ] Per-block difficulty adjustment
