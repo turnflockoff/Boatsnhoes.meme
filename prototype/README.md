@@ -122,6 +122,27 @@ Tested in software only (0.5.11). Simulated points only.
 
 **What this does not fix:** a signature proves *who issued* the report, not that the numbers are right. The coordinator can still sign a report built from a database it edited; only an independent re-run against a copy of the ledger (`verify --db`) checks the numbers, and nobody outside the operator has that copy yet. There is no key rotation and no public place where reports are posted yet.
 
+## Implemented: shareable ledger copies (threat model #10, second step)
+
+Tested in software only (0.5.13). Simulated points only.
+
+A signed report proves who issued the numbers. To check the numbers themselves, someone needs the ledger they came from. `app/ledger_copy.py` makes a redacted copy of the ledger up to the end of a closed period that anyone can re-run the report against:
+
+    python -m app.rewards report --db ./data/prototype.sqlite3 --until 1800000000 --sign --out report.json
+    python -m app.ledger_copy export --db ./data/prototype.sqlite3 --until 1800000000 --out ledger-copy.sqlite3
+    # anyone, with the two files and the coordinator's public key:
+    python -m app.rewards verify report.json --db ledger-copy.sqlite3 --public-key <hex>
+    python -m app.ledger_copy info ledger-copy.sqlite3
+
+- **What it keeps:** the structure the checks need. Which job re-ran which, who did each job, which workers share an owner, timestamps, points and settlement. Both the report and every `check_consistency` invariant (no self-audit, no same-owner audit, every outvoted result has a tie-breaker, ...) give the same answer on the copy as on the coordinator.
+- **What it removes:** worker key hashes, enrollment codes, payloads and prompts, job signatures, answers and answer hashes, expected answers of hidden tests, event details (they can name owners), worker capabilities and last-seen times. Owner labels become `owner-1`, `owner-2`, ... (same owner, same label). Payload hashes are replaced by an HMAC with a random key that is thrown away, so a re-run still visibly matches its original inside the copy but can't be matched against live jobs.
+- **What it leaves out:** jobs created at or after `until` (except re-checks of earlier jobs, which settle them), events at or after `until`, and workers that joined later.
+- **Refuses** an open period, a period with any job (or re-check of one) still queued or running, a ledger that fails its own consistency check, an existing output file, and writing over the ledger itself. Deleted rows are wiped (`secure_delete` plus `VACUUM`), and the file is built under a temporary name, so a failed export never leaves a half-redacted copy.
+- **Checking never changes the file.** `rewards report/verify` open a copy read-only, so the sha256 printed at export stays valid. A report that reaches past the copy's `until` is refused, since it would be built from missing data.
+- 10 new tests (137 in total), including a byte search of the copy for every prompt, answer, expected answer, key, key hash, code hash, signature, real owner label and original payload/answer hash used. Six checks were switched off one at a time (wiping, hash masking, the open-job check, the past-the-end guard, read-only opening, event-detail removal) and a test failed every time. Also run end to end: a coordinator process and a demo worker, an export refused while a job was still queued, then a signed report re-checked against the copy with "OK", no secrets found in the copy, and its sha256 unchanged after checking.
+
+**Trade-off and limits:** for the closed period, the copy shows which jobs were hidden re-runs and hidden tests and how they came out (not their prompts or answers). Outsiders need that to check that no worker audited itself, but it is more than the report shows (threat model #14), so share copies with a delay. A copy proves the report matches *this* copy; an operator could still edit the ledger before exporting. Copies from many periods that later disagree, or independent observers, are what catch that. There is still no fixed public place to post reports and copies (owner decision).
+
 ## Implemented: versioned job and receipt schemas (Track E)
 
 Tested in software only (0.5.10). Code: `app/schemas.py`.
@@ -211,6 +232,7 @@ A GitHub Actions workflow runs these tests on pushes and pull requests affecting
 - `GET /v1/audits` — operator only: every audit and challenge with its outcome.
 - `GET /v1/workers/{worker_id}/trust` — operator only: how a worker's results held up.
 - `GET /v1/rewards/report?since=&until=&sign=` — operator only: simulated reward report for a period; `sign=true` adds the coordinator's signature (closed periods only).
+- `python -m app.ledger_copy export|info` — CLI only: redacted ledger copy for a closed, settled period (see above).
 - `GET /health` — public health check: `200` ok / `503` down, uptime, job counts, and the job/receipt schema versions spoken.
 - `GET /v1/operator/health` — operator only: workers, queue, waiting audits, recent events, consistency problems and warnings.
 

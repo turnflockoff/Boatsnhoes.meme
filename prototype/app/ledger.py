@@ -161,15 +161,23 @@ ASSIGNED_KINDS = ("audit", "tiebreak")
 
 class Ledger:
     def __init__(self, path: Path, rng: random.Random | None = None,
-                 active_seconds: int = 300, assign_seconds: int = 120):
+                 active_seconds: int = 300, assign_seconds: int = 120,
+                 read_only: bool = False):
         """`rng` picks auditors; the default uses the OS's secure randomness so workers
         can't predict who gets an audit. A worker counts as active for `active_seconds`
         after it last asked for a job, sent a result, or enrolled. An assigned worker has
-        `assign_seconds` to claim its audit before someone else gets it."""
+        `assign_seconds` to claim its audit before someone else gets it.
+        `read_only` opens an existing file without changing a single byte (no WAL switch,
+        no migrations), for checking a shared ledger copy whose sha256 was published."""
         self.path = Path(path)
         self.rng = rng or random.SystemRandom()
         self.active_seconds = active_seconds
         self.assign_seconds = assign_seconds
+        self.read_only = read_only
+        if read_only:
+            if not self.path.exists():
+                raise FileNotFoundError(self.path)
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._connect()) as db:
             db.execute("PRAGMA journal_mode=WAL")
@@ -185,7 +193,11 @@ class Ledger:
 
     # -- plumbing -----------------------------------------------------------------
     def _connect(self) -> sqlite3.Connection:
-        db = sqlite3.connect(self.path, timeout=10, isolation_level=None)
+        if self.read_only:
+            db = sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True,
+                                 timeout=10, isolation_level=None)
+        else:
+            db = sqlite3.connect(self.path, timeout=10, isolation_level=None)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA foreign_keys=ON")
         return db
@@ -757,6 +769,16 @@ class Ledger:
             else:
                 rows = db.execute("SELECT * FROM events ORDER BY id")
             return [dict(r) for r in rows.fetchall()]
+
+    def copy_until(self) -> int | None:
+        """End of the period a redacted ledger copy covers (app/ledger_copy.py), or None
+        for a full ledger. Reports past this point would be built from missing data."""
+        with closing(self._connect()) as db:
+            if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                              "AND name='copy_info'").fetchone():
+                return None
+            row = db.execute("SELECT until FROM copy_info").fetchone()
+            return int(row["until"]) if row else None
 
     def check_consistency(self) -> list[str]:
         """Invariants an auditor can run at any time. Returns a list of problems."""

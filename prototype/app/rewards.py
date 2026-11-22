@@ -79,6 +79,10 @@ def build_report(ledger: Ledger, since: int, until: int,
         raise ReportError(f"unknown scoring version {scoring!r}")
     if since < 0 or until <= since:
         raise ReportError("period must satisfy 0 <= since < until")
+    limit = ledger.copy_until()
+    if limit is not None and until > limit:
+        raise ReportError(f"this ledger copy only covers up to {limit}; "
+                          "a report past that point would be missing data")
     rule = SCORING_RULES[scoring]
     payable = set(rule["payable_buckets"])
 
@@ -273,7 +277,9 @@ def main(argv: list[str] | None = None) -> int:
     if not args.db.exists():
         print(f"database not found: {args.db}", file=sys.stderr)
         return 2
-    ledger = Ledger(args.db)
+    # A shared ledger copy is opened read-only so checking it never changes its sha256.
+    from .ledger_copy import copy_info
+    ledger = Ledger(args.db, read_only=copy_info(args.db) is not None)
     if args.cmd == "report":
         now = int(time.time())
         if args.until is not None:

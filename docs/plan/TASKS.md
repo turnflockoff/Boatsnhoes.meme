@@ -1,5 +1,5 @@
 # BOATS N HOES: Project Task List (Claude + dev work)
-**Version:** 0.5.12 | **Last updated:** 2026-11-22 | Personal to-dos live in USER_TODO.md.
+**Version:** 0.5.13 | **Last updated:** 2026-11-22 | Personal to-dos live in USER_TODO.md.
 
 ## Phase 0: Foundation
 - [x] Buy boatsnhoes.meme
@@ -35,7 +35,8 @@
 - [x] Versioned job/receipt schemas: signed job version and pinned model hash, receipts must match version, input hash and model hash (97 tests)
 - [x] Signed reward reports (threat model #10, first step): coordinator signs closed-period reports with its Ed25519 key, anyone can check offline with the public key (109 tests)
 - [x] Structured logs and health reporting: one JSON line per event, no secrets or prompts in logs, request ids, public `/health` (503 when the database fails), operator `/v1/operator/health` with plain-language warnings (127 tests)
-- [ ] Post signed reports in a fixed public place and share ledger copies so others can re-run them
+- [x] Shareable ledger copies: redacted copy of a closed, settled period (no keys, codes, prompts, answers or real owner names) that anyone can re-run a signed report and the consistency checks against (137 tests)
+- [ ] Post signed reports and ledger copies in a fixed public place (owner decision: where)
 - [ ] GPU worker Phase 3: RX 470 hardware validation (needs the real rig)
 - [ ] Memory-hard, ASIC-resistant algorithm (pseudocode, reference miner)
 - [ ] Per-block difficulty adjustment
