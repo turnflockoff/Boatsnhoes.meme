@@ -253,3 +253,21 @@
 2. **Why both keys sign.** The old key's signature says "I hand over to this key". The new key's signature proves the new key actually exists and agrees, so nobody can point the chain at a key they made up or copied.
 3. **A handover can't fix a stolen key.** If someone has your old private key, they can sign a handover to *their* key too. Handovers are for planned changes (say, moving the coordinator to a new machine). After a suspected theft, give each rig the new key directly.
 4. **Write the note first, then swap.** Saving the handover before swapping keys means a crash leaves either "nothing changed" or "finish the swap", never a coordinator with a key nobody can follow.
+
+## 2026-11-22 (14:15 UTC): Rigs that keep letting their audits go now show up
+
+**Shipped**
+- **A new line in each rig's trust report: `audit_follow_through`.** Since 0.5.8 the coordinator hands each secret re-check (audit) to one rig chosen at random, so a rig can't *grab* the audits it likes. But it could still quietly *let go* of ones it doesn't like, and they'd just move on to another random rig. Now every rig's report shows how many audits it was **assigned**, how many it **completed**, and how many it **dropped**, split three ways:
+  - **not claimed:** it was picked but never picked the job up in time (`AUDIT_ASSIGN_SECONDS`, default 2 minutes). This is a new private diary entry, `audit_assignment_expired`.
+  - **lease expired:** it picked the job up, then went silent until its time ran out.
+  - **refused:** it sent back an answer that failed the basic shape check (for example, blank).
+- **The health page warns you.** `/v1/operator/health` now lists every rig's drop count (`audit_dropouts`) and adds a plain-language warning for any rig at or above `AUDIT_DROP_WARN` (default 3). The warning says outright that a rig that simply went offline looks exactly the same.
+- **Counted fairly.** If a rig is picked again for the same audit (because nobody else can do it), it's judged on its latest pick only, so an old lease doesn't excuse a new no-show. A rig that took a job and timed out is counted once, not twice. If you revoke a rig, the audits it was holding aren't counted against it: that was your doing.
+- **It only watches, it doesn't punish.** Drops don't change points or how often the rig itself is checked. Whether they should is your call (added to your to-do list). Rigs never see these counts or the new diary entry.
+- Tests went from 168 to 177, all passing. I switched off seven parts one at a time (the new diary entry, the revoked-rig exception, the "don't count a timeout twice" check, judging on the latest pick, keeping the entry private, the health warning, counting only audit jobs) and a test failed every time. I also ran it for real: started the coordinator, enrolled a rig with an invite code, and its trust report showed all zeros, the health page showed no dropouts and no warnings, and the report was refused (403) without the operator password. Still software only: no real GPU yet.
+
+**What you learned**
+1. **Two ways to game a lottery.** You can try to win more draws (fixed earlier by picking at random) or throw away the tickets you don't like. Random picks fix the first; counting what each rig throws away makes the second visible.
+2. **Count first, decide later.** A number with no automatic consequence is safe to add today. Deciding what it should *do* (more checks? a warning to the owner?) is a fairness question, so it waits for you.
+3. **Same symptom, different causes.** A rig with a flaky Wi-Fi connection and a rig dodging checks both "drop" audits. Good monitoring says what it saw, not what it thinks it means.
+4. **Avoid double counting.** One event (a timeout) can show up in two places in the diary. Each drop is counted from exactly one kind of entry, and a test checks that.

@@ -37,6 +37,9 @@ class Settings:
     auditor_active_seconds: int = 300
     # How long the chosen worker has to pick up its audit before it is re-assigned.
     audit_assign_seconds: int = 120
+    # Operator health warns about a worker that has dropped this many assigned audits or
+    # tie-breakers (not picked up, lease ran out, or result refused). Lifetime count.
+    audit_drop_warn: int = 3
 
     def resolved_signing_key_path(self) -> Path:
         return self.signing_key_path or self.database_path.parent / "coordinator-signing.key"
@@ -105,4 +108,5 @@ def get_settings() -> Settings:
         tiebreak=_bool_env("TIEBREAK", True),
         auditor_active_seconds=_int_env("AUDITOR_ACTIVE_SECONDS", 300, 10, 86400),
         audit_assign_seconds=_int_env("AUDIT_ASSIGN_SECONDS", 120, 5, 86400),
+        audit_drop_warn=_int_env("AUDIT_DROP_WARN", 3, 1, 100000),
     )

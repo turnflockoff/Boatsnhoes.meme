@@ -30,7 +30,7 @@ SIGNED_FIELDS = schemas.SIGNED_FIELDS
 PRIVATE_EVENTS = {"audit_scheduled", "audit_match", "audit_mismatch", "audit_not_run",
                   "passed_challenge", "failed_challenge", "tiebreak_scheduled",
                   "tiebreak_majority", "tiebreak_unresolved", "tiebreak_not_run",
-                  "auditor_assigned", "auditor_unassigned"}
+                  "auditor_assigned", "auditor_unassigned", "audit_assignment_expired"}
 
 
 def create_app(settings: Settings | None = None,
@@ -212,13 +212,23 @@ def create_app(settings: Settings | None = None,
                             f"outvoted): {', '.join(struck)}. Their results are now re-checked "
                             "more often; look at /v1/workers/<id>/trust and decide whether to "
                             "revoke")
+        # Threat model #4 follow-up: a rig that keeps letting its audits go.
+        follow = ledger.audit_follow_through()
+        droppers = sorted(w for w, f in follow.items() if f["dropped"] >= settings.audit_drop_warn)
+        if droppers:
+            warnings.append(f"{len(droppers)} worker(s) dropped {settings.audit_drop_warn} or more "
+                            f"assigned audit/tie-breaker job(s): {', '.join(droppers)}. Often just "
+                            "a rig that went offline, but a rig skipping checks it doesn't like "
+                            "looks the same; see audit_follow_through in /v1/workers/<id>/trust")
         if problems:
             warnings.append(f"{len(problems)} consistency problem(s): see "
                             "consistency_problems")
         return {"status": "attention" if warnings else "ok", "checked_at": t,
                 "uptime_seconds": t - started_at, "signing_key_fingerprint": signer.fingerprint,
                 "signing_key_rotations": len(rotations),
-                **snap, "consistency_problems": problems, "warnings": warnings}
+                **snap, "audit_dropouts": {w: f["dropped"] for w, f in follow.items()
+                                           if f["dropped"]},
+                "consistency_problems": problems, "warnings": warnings}
 
     @app.get("/v1/coordinator/key")
     def coordinator_key() -> dict[str, Any]:

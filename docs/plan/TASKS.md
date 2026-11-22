@@ -1,5 +1,5 @@
 # BOATS N HOES: Project Task List (Claude + dev work)
-**Version:** 0.5.16 | **Last updated:** 2026-11-22 | Personal to-dos live in USER_TODO.md.
+**Version:** 0.5.17 | **Last updated:** 2026-11-22 | Personal to-dos live in USER_TODO.md.
 
 ## Phase 0: Foundation
 - [x] Buy boatsnhoes.meme
@@ -40,6 +40,8 @@
 - [x] Read-only rig inventory tool for Phase 3: `python -m app.hw_inventory` (OS, kernel, PCI IDs, bound driver, Vulkan devices/Mesa version, /dev/dri access, redacted JSON; 151 tests, format samples only)
 - [x] Trust-based audit rate (threat model #1, `audit-tier-v1`): new rigs and rigs caught once (failed hidden test or outvoted) are re-checked more often; operator-only, changes checks not points (158 tests)
 - [x] Planned coordinator key rotation (threat model #9 follow-up): `python -m app.key_rotation rotate`, handover signed by old and new key, pinned workers follow a valid chain, queued jobs re-signed on claim, crash-safe (168 tests)
+- [x] Audit follow-through (threat model #4 follow-up): per-rig count of assigned audits/tie-breakers it never picked up, let time out, or had refused; operator health warns at `AUDIT_DROP_WARN`; operator-only, changes nothing about points (177 tests)
+- [ ] Decide what repeated audit drops should change, if anything (owner decision; today it's a warning only)
 - [ ] GPU worker Phase 3: RX 470 hardware validation (needs the real rig; start by running the inventory tool there)
 - [ ] Memory-hard, ASIC-resistant algorithm (pseudocode, reference miner)
 - [ ] Per-block difficulty adjustment

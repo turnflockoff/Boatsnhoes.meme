@@ -1,5 +1,5 @@
 # YOUR Personal To-Do List (things only you can do)
-**Version:** 0.5.4 | **Last updated:** 2026-11-22
+**Version:** 0.5.17 | **Last updated:** 2026-11-22
 Never share passwords, API keys, or recovery phrases with anyone, including Claude.
 
 ## This week
@@ -22,6 +22,7 @@ Never share passwords, API keys, or recovery phrases with anyone, including Clau
 - [ ] Decide: chain path, final supply, fair launch (no premine)
 - [ ] Decide: should a rig caught cheating lose its other unchecked points for that period? (simulated scoring v2; see TASKS.md)
 - [ ] When the RX 470 rig is ready: set your own `OPERATOR_TOKEN` in `prototype/.env` (never share it), then make one enrollment code per card with `python -m app.workers enroll --owner owner-gpu0` (and `owner-gpu1`). Keep the codes and the saved `.key` files private
+- [ ] Decide: if a rig keeps dropping audits it was picked for (the operator health page warns after 3), should anything happen automatically, like checking its own work more often? Today it's only a warning, because a rig that went offline looks the same as one dodging checks
 - [ ] Decide where signed reward reports and ledger copies get posted (for example a `reports/` page on boatsnhoes.meme, or GitHub releases) and how long to wait after a period closes before sharing a copy
 - [ ] Find a blockchain developer or team to build the chain and miner
 - [ ] Set up a project email and a shared password manager

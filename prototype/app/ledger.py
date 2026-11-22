@@ -425,13 +425,22 @@ class Ledger:
         worker isn't revoked. The previous pick is avoided when anyone else is eligible."""
         kinds = ",".join("?" * len(ASSIGNED_KINDS))
         for row in db.execute(
-            f"SELECT j.job_id, j.assigned_worker FROM jobs j LEFT JOIN workers w "
+            f"SELECT j.job_id, j.assigned_worker, j.assigned_until, w.revoked_at "
+            f"FROM jobs j LEFT JOIN workers w "
             f"ON w.worker_id=j.assigned_worker WHERE j.status='queued' "
             f"AND j.job_kind IN ({kinds}) AND (j.assigned_worker IS NULL "
             f"OR j.assigned_until IS NULL OR j.assigned_until<=? OR w.revoked_at IS NOT NULL) "
             f"ORDER BY j.created_at, j.job_id", (*ASSIGNED_KINDS, now)).fetchall():
             candidates = self._eligible_auditors(db, row["job_id"], now)
             previous = row["assigned_worker"]
+            if previous is not None and row["revoked_at"] is None \
+                    and not self._leased_since_assignment(db, row["job_id"], previous):
+                # The pick's time ran out and it never picked the job up. (A pick that took
+                # the job and then let the lease run out, or had its result refused, already
+                # has its own event; a revoked pick is the operator's doing, not a drop.)
+                # Private: it names who was handed an audit.
+                self._event(db, now, "audit_assignment_expired", row["job_id"], previous,
+                            detail="not picked up in time")
             if previous in candidates and len(candidates) > 1:
                 candidates.remove(previous)
             pick = self.rng.choice(candidates) if candidates else None
@@ -442,6 +451,20 @@ class Ledger:
             # Private event: it names which worker was handed an audit.
             self._event(db, now, "auditor_assigned" if pick else "auditor_unassigned",
                         row["job_id"], pick, detail=f"candidates={len(candidates)}")
+
+    @staticmethod
+    def _leased_since_assignment(db: sqlite3.Connection, job_id: str, worker_id: str) -> bool:
+        """Did `worker_id` lease `job_id` after it was last assigned to it? Looked up in the
+        audit trail, so a worker that is picked again for the same job is judged on its
+        latest assignment only."""
+        assigned_id = db.execute(
+            "SELECT MAX(id) FROM events WHERE job_id=? AND worker_id=? "
+            "AND event='auditor_assigned'", (job_id, worker_id)).fetchone()[0]
+        if assigned_id is None:
+            return False
+        return db.execute(
+            "SELECT 1 FROM events WHERE job_id=? AND worker_id=? AND event='job_leased' "
+            "AND id>? LIMIT 1", (job_id, worker_id, assigned_id)).fetchone() is not None
 
     def claim_next(self, worker_id: str, lease_seconds: int, now: int) -> dict[str, Any] | None:
         """Atomically lease the oldest queued job `worker_id` may take, or return None.
@@ -682,6 +705,7 @@ class Ledger:
             "audits_unresolved": counts.get("unresolved", 0),
             "challenges_passed": counts.get("passed-challenge", 0),
             "challenges_failed": counts.get("failed-challenge", 0),
+            "audit_follow_through": self.audit_follow_through(worker_id),
             "note": "Agreement between workers is evidence, not proof: colluding workers "
                     "can agree on a wrong answer.",
         }
@@ -705,6 +729,54 @@ class Ledger:
                     for r in db.execute(sql, args).fetchall()}
         if worker_id:
             return rows.get(worker_id, {"checks_passed": 0, "strikes": 0})
+        return rows
+
+    def audit_follow_through(self, worker_id: str | None = None) -> dict[str, Any]:
+        """Threat model #4 follow-up: per worker, what happened to the audits and
+        tie-breakers it was randomly handed. Lifetime counts, from the audit trail:
+
+            assigned      times it was picked for one (a re-pick of the same job counts again)
+            completed     audit/tie-breaker results it got accepted
+            not_claimed   picks it never took up before `assign_seconds` ran out
+            lease_expired ones it took, then went silent until its lease ran out
+            refused       ones whose result the coordinator rejected (e.g. empty output)
+            dropped       not_claimed + lease_expired + refused
+
+        A rig that went offline and a ring member quietly skipping checks it doesn't like
+        look the same here: this is a reason to look, not proof. Revocation by the operator
+        is not counted. With a `worker_id`, that worker's counts; without, every worker's."""
+        kinds = ",".join("?" * len(ASSIGNED_KINDS))
+        sql = (
+            "SELECT w.worker_id, "
+            "(SELECT COUNT(*) FROM events e WHERE e.worker_id=w.worker_id "
+            " AND e.event='auditor_assigned') AS assigned, "
+            f"(SELECT COUNT(*) FROM submissions s JOIN jobs j USING(job_id) "
+            f" WHERE s.worker_id=w.worker_id AND j.job_kind IN ({kinds})) AS completed, "
+            "(SELECT COUNT(*) FROM events e WHERE e.worker_id=w.worker_id "
+            " AND e.event='audit_assignment_expired') AS not_claimed, "
+            f"(SELECT COUNT(*) FROM events e JOIN jobs j USING(job_id) "
+            f" WHERE e.worker_id=w.worker_id AND j.job_kind IN ({kinds}) "
+            f" AND e.event IN ('lease_timeout_requeued','lease_timeout_failed')) "
+            f" AS lease_expired, "
+            f"(SELECT COUNT(*) FROM events e JOIN jobs j USING(job_id) "
+            f" WHERE e.worker_id=w.worker_id AND j.job_kind IN ({kinds}) "
+            f" AND e.event IN ('result_rejected_requeued','result_rejected_final')) AS refused "
+            f"FROM workers w {'WHERE w.worker_id=? ' if worker_id else ''}"
+            "ORDER BY w.worker_id")
+        args = (*ASSIGNED_KINDS, *ASSIGNED_KINDS, *ASSIGNED_KINDS,
+                *((worker_id,) if worker_id else ()))
+        with closing(self._connect()) as db:
+            rows = {}
+            for r in db.execute(sql, args).fetchall():
+                counts = {k: int(r[k]) for k in ("assigned", "completed", "not_claimed",
+                                                  "lease_expired", "refused")}
+                counts["dropped"] = (counts["not_claimed"] + counts["lease_expired"]
+                                     + counts["refused"])
+                rows[r["worker_id"]] = counts
+        if worker_id:
+            return rows.get(worker_id, dict.fromkeys(
+                ("assigned", "completed", "not_claimed", "lease_expired", "refused",
+                 "dropped"), 0))
         return rows
 
     def reward_rows(self, since: int, until: int) -> list[dict[str, Any]]:
