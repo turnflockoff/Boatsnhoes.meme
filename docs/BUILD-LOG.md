@@ -357,3 +357,18 @@
 2. **Hidden tests have to blend in on every detail.** Same envelope, same deadline, and now the same points. Any one difference can give them away.
 3. **Fail loudly at start-up.** A setting with a typo is better refusing to start than silently doing something you didn't mean.
 4. **The table decides who picks, not what's fair.** 1 vs 10 points is a guess for now. Once the RX 470s are measured, points could follow real work, like words generated or GPU seconds. Picking the numbers is your call (on your to-do list).
+
+## 2026-11-22 (20:30 UTC): A rig caught cheating no longer has to check other rigs' work
+
+**Shipped**
+- **A choice of who checks whom, `AUDITOR_PICK`.** When a result gets a hidden re-run (an audit) or a third opinion (a tie-breaker), the coordinator picks a rig at random. Until now every eligible rig had the same chance, including a rig that had just failed a hidden test. That meant a caught cheater could still "confirm" someone else's fake answer, or be the deciding vote in a two-against-one.
+- **`trusted-first`: best record goes first.** With `AUDITOR_PICK=trusted-first` in `prototype/.env`, the pick is still random, but only among the most trusted group that has anyone available: `established` rigs (clean record), then `new` rigs, and a rig with a strike only if nobody else can do it (a check by a doubtful rig still beats no check). Same-owner, switched-off and offline rigs stay excluded as before, and hidden tests you aim at a rig work exactly as before.
+- **Off until you choose.** The default stays `uniform` (today's behaviour). Checking work pays the same points as normal work, so `trusted-first` gives established rigs a bigger share of those points. That's a fairness call, so it's on your to-do list. While it's off and some rig has a strike, your operator health page now says that rig can still check others.
+- **You can see what happened.** `/v1/audits` shows the rule in force, operator health shows `auditor_pick`, and each private "auditor picked" record now notes which group it came from (`pool=established`). Shared ledger copies still drop those notes. A typo in the setting stops the coordinator at start-up.
+- Tests went from 270 to 281, all passing. I switched off 9 rules one at a time (the trusted-first filter, the group order twice, the health warning, reading the setting, refusing bad values, passing the setting through, showing it on `/v1/audits`, the pool note) and a test failed every time. I also started the real server with `trusted-first`: health and `/v1/audits` showed the rule, a bad value refused to start, and the log had no tokens. Still software only: no real GPU yet.
+
+**What you learned**
+1. **Who checks matters as much as how often.** Checking a caught rig more often (two days ago) was half the fix. Letting it check others was the other half of the hole.
+2. **Every security choice moves money, even pretend money.** Steering checks to trusted rigs also steers the points those checks pay. That's why it's a switch you flip, not something I turned on for you.
+3. **Fall back, don't freeze.** If only a doubtful rig is around, using it is better than leaving a result unchecked. The rule picks the best available, never "nobody".
+4. **Trust can be gamed too.** A ring that has already earned a clean record gets more checks under this rule, not fewer. Hidden tests with known answers are still the only check a ring can't vote its way past.

@@ -38,6 +38,9 @@ class Settings:
     # Threat model #4: audits go to a random active worker, not whoever polls first.
     # A worker counts as active this long after its last job request.
     auditor_active_seconds: int = 300
+    # `auditor-pick-v1` (app/audit_policy.py): "uniform" = any eligible rig, same chance;
+    # "trusted-first" = established rigs first, then new, a rig with a strike last.
+    auditor_pick: str = "uniform"
     # How long the chosen worker has to pick up its audit before it is re-assigned.
     audit_assign_seconds: int = 120
     # Operator health warns about a worker that has dropped this many assigned audits or
@@ -105,6 +108,15 @@ def default_signing_key_path() -> Path:
     return Path(raw) if raw else _database_path().parent / "coordinator-signing.key"
 
 
+def _auditor_pick_env() -> str:
+    from .audit_policy import AUDITOR_PICK_RULES
+
+    raw = (os.getenv("AUDITOR_PICK") or "uniform").strip().lower()
+    if raw not in AUDITOR_PICK_RULES:
+        raise ValueError(f"AUDITOR_PICK must be one of {', '.join(AUDITOR_PICK_RULES)}")
+    return raw
+
+
 def get_settings() -> Settings:
     from .tasks import EXECUTORS  # the task types a points table must cover
 
@@ -134,6 +146,7 @@ def get_settings() -> Settings:
         tiebreak=_bool_env("TIEBREAK", True),
         auditor_active_seconds=_int_env("AUDITOR_ACTIVE_SECONDS", 300, 10, 86400),
         audit_assign_seconds=_int_env("AUDIT_ASSIGN_SECONDS", 120, 5, 86400),
+        auditor_pick=_auditor_pick_env(),
         audit_drop_warn=_int_env("AUDIT_DROP_WARN", 3, 1, 100000),
         submitter_token=submitter_token,
         rate_limit_per_minute=_int_env("RATE_LIMIT_PER_MINUTE", 240, 0, 100000),

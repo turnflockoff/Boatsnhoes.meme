@@ -46,7 +46,7 @@ from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-from .audit_policy import PASSED_STATUSES, STRIKE_STATUSES
+from .audit_policy import AUDITOR_PICK_RULES, PASSED_STATUSES, STRIKE_STATUSES, auditor_pool
 
 FINAL_STATES = ("accepted", "rejected", "expired", "failed")
 
@@ -190,7 +190,8 @@ class Ledger:
     def __init__(self, path: Path, rng: random.Random | None = None,
                  active_seconds: int = 300, assign_seconds: int = 120,
                  read_only: bool = False,
-                 tier_of: Callable[[dict[str, int]], str] | None = None):
+                 tier_of: Callable[[dict[str, int]], str] | None = None,
+                 auditor_pick: str = "uniform"):
         """`rng` picks auditors; the default uses the OS's secure randomness so workers
         can't predict who gets an audit. A worker counts as active for `active_seconds`
         after it last asked for a job, sent a result, or enrolled. An assigned worker has
@@ -198,13 +199,21 @@ class Ledger:
         `read_only` opens an existing file without changing a single byte (no WAL switch,
         no migrations), for checking a shared ledger copy whose sha256 was published.
         `tier_of` maps a worker's audit_history() counts to its trust tier (see
-        app/audit_policy.py); without it, hidden tests aimed at a tier find nobody."""
+        app/audit_policy.py); without it, hidden tests aimed at a tier find nobody.
+        `auditor_pick` is "uniform" (any eligible worker) or "trusted-first" (audits and
+        tie-breakers go to the most trusted tier that has an eligible worker; needs
+        `tier_of`, see audit_policy.auditor_pool)."""
+        if auditor_pick not in AUDITOR_PICK_RULES:
+            raise ValueError(f"unknown auditor_pick {auditor_pick!r}")
+        if auditor_pick == "trusted-first" and tier_of is None:
+            raise ValueError("auditor_pick='trusted-first' needs tier_of")
         self.path = Path(path)
         self.rng = rng or random.SystemRandom()
         self.active_seconds = active_seconds
         self.assign_seconds = assign_seconds
         self.read_only = read_only
         self.tier_of = tier_of
+        self.auditor_pick = auditor_pick
         if read_only:
             if not self.path.exists():
                 raise FileNotFoundError(self.path)
@@ -524,6 +533,15 @@ class Ledger:
                             detail="not picked up in time")
             if previous in candidates and len(candidates) > 1:
                 candidates.remove(previous)
+            pool_note = ""
+            if not target and self.auditor_pick == "trusted-first" and candidates:
+                # `auditor-pick-v1`: only the most trusted tier that has anyone eligible.
+                # Worked out now, from each rig's record at this moment.
+                history = self._audit_history_rows(db)
+                assert self.tier_of is not None
+                candidates, tier = auditor_pool(candidates,
+                                                lambda w: self.tier_of(history[w]))
+                pool_note = f" pool={tier}"
             pick = self.rng.choice(candidates) if candidates else None
             if pick is None and previous is None:
                 continue  # nobody eligible yet; try again on the next request
@@ -535,7 +553,8 @@ class Ledger:
                        (pick, until, row["job_id"]))
             # Private event: it names which worker was handed an audit or a test.
             self._event(db, now, assigned_ev if pick else unassigned_ev,
-                        row["job_id"], pick, detail=f"candidates={len(candidates)}")
+                        row["job_id"], pick,
+                        detail=f"candidates={len(candidates)}{pool_note}")
 
     @staticmethod
     def _leased_since_assignment(db: sqlite3.Connection, job_id: str, worker_id: str,

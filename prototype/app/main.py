@@ -67,7 +67,9 @@ def create_app(settings: Settings | None = None,
                     active_seconds=settings.auditor_active_seconds,
                     assign_seconds=settings.audit_assign_seconds,
                     # Hidden tests aimed at a trust tier use the same rule as the audit rate.
-                    tier_of=lambda h: audit_policy.decide_for(h, settings).tier)
+                    tier_of=lambda h: audit_policy.decide_for(h, settings).tier,
+                    # `auditor-pick-v1`: who may be picked to audit or break a tie.
+                    auditor_pick=settings.auditor_pick)
     app = FastAPI(title="Boats N Hoes Useful-Compute MVP", version="0.5.0")
     app.state.ledger = ledger
     app.state.settings = settings
@@ -307,6 +309,12 @@ def create_app(settings: Settings | None = None,
                             f"outvoted): {', '.join(struck)}. Their results are now re-checked "
                             "more often; look at /v1/workers/<id>/trust and decide whether to "
                             "revoke")
+            if settings.auditor_pick == "uniform":
+                # Threat model #4/#6: a caught rig still has the same chance to audit
+                # others, or to be the deciding vote in a tie-breaker.
+                warnings.append("rigs with a strike can still be picked to audit others or "
+                                "break ties (AUDITOR_PICK=uniform); AUDITOR_PICK=trusted-first "
+                                "uses them only when nobody else is eligible")
         # Threat model #4 follow-up: a rig that keeps letting its audits go.
         follow = ledger.audit_follow_through()
         droppers = sorted(w for w, f in follow.items() if f["dropped"] >= settings.audit_drop_warn)
@@ -344,6 +352,7 @@ def create_app(settings: Settings | None = None,
                                            if f["dropped"]},
                 "review": queue["counts"] | {"points_held": queue["points_held"]},
                 "rate_limits": limits, "points": points.describe(settings.points_table),
+                "auditor_pick": settings.auditor_pick,
                 "consistency_problems": problems, "warnings": warnings}
 
     @app.get("/v1/operator/review")

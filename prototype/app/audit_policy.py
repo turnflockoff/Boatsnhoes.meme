@@ -23,13 +23,27 @@ What this is not:
     answers and so graduate out of `new` (threat model #3). Passed hidden test jobs can't be
     faked that way, but they only exist if the operator creates them.
   - Not forgiving. Strikes don't expire in v1; the operator can revoke a rig instead.
+
+The same tiers can also decide who is picked to audit others (`auditor-pick-v1`, setting
+`AUDITOR_PICK`). With `trusted-first`, audits and tie-breakers go to a random `established`
+rig when one is eligible, else a `new` one, and a `suspect` rig only as a last resort. It is
+off by default because audit work pays the same points as normal work, so it shifts who
+earns that share; switching it on is the owner's call.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable, Sequence
 
 AUDIT_POLICY_VERSION = "audit-tier-v1"
+
+# Who gets picked to audit or break a tie (`auditor-pick-v1`, threat model #4 and #6).
+#   uniform        every eligible rig has the same chance (the default; today's behaviour).
+#   trusted-first  random among the most trusted eligible rigs, in PICK_ORDER: a `suspect`
+#                  rig only audits when nobody else is eligible.
+AUDITOR_PICK_VERSION = "auditor-pick-v1"
+AUDITOR_PICK_RULES = ("uniform", "trusted-first")
+PICK_ORDER = ("established", "new", "suspect")
 
 # Audit statuses that count for or against a worker.
 PASSED_STATUSES = ("confirmed", "passed-challenge")
@@ -71,4 +85,24 @@ def describe(settings: Any) -> dict[str, Any]:
             "suspect_rate": max(settings.audit_rate, settings.audit_rate_suspect),
             "new_until_checks_passed": settings.audit_new_until,
             "passed_statuses": list(PASSED_STATUSES),
-            "strike_statuses": list(STRIKE_STATUSES)}
+            "strike_statuses": list(STRIKE_STATUSES),
+            "auditor_pick": describe_pick(getattr(settings, "auditor_pick", "uniform"))}
+
+
+def auditor_pool(candidates: Sequence[str],
+                 tier_of_worker: Callable[[str], str]) -> tuple[list[str], str | None]:
+    """`trusted-first`: the eligible rigs in the most trusted tier that has anyone, and that
+    tier's name. Pure, and keeps the order it was given, so a seeded rng stays repeatable.
+    The pick inside the pool is still random (app/ledger.py)."""
+    by_tier: dict[str, list[str]] = {}
+    for worker in candidates:
+        by_tier.setdefault(tier_of_worker(worker), []).append(worker)
+    for tier in PICK_ORDER:
+        if by_tier.get(tier):
+            return by_tier[tier], tier
+    return [], None
+
+
+def describe_pick(rule: str) -> dict[str, Any]:
+    """The auditor-pick rule in force, for the operator's views."""
+    return {"version": AUDITOR_PICK_VERSION, "rule": rule, "order": list(PICK_ORDER)}
