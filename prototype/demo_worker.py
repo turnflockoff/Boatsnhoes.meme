@@ -1,10 +1,14 @@
 """Local demo worker: verifies each signed job manifest, runs the deterministic CPU task,
 and submits a receipt. It refuses jobs whose signature, payload hash or deadline is wrong.
 
+Workers hold no shared secret. They check signatures with the coordinator's PUBLIC key,
+pinned on the first run (or given up front with --coordinator-key / BNH_COORDINATOR_KEY).
+
 First run (the operator gives you a one-time code; see `python -m app.workers enroll`):
-    PROTOTYPE_SECRET=... python demo_worker.py --worker-id rig-gpu0 --enrollment-code bnhe_...
-Later runs reuse the saved key in ./data/worker-<id>.key:
-    PROTOTYPE_SECRET=... python demo_worker.py --worker-id rig-gpu0 --once
+    python demo_worker.py --worker-id rig-gpu0 --enrollment-code bnhe_...
+Later runs reuse the saved worker key in ./data/worker-<id>.key and the pinned coordinator
+key in ./data/coordinator.pub:
+    python demo_worker.py --worker-id rig-gpu0 --once
 """
 from __future__ import annotations
 
@@ -18,7 +22,8 @@ import httpx
 from dotenv import load_dotenv
 
 from app import tasks
-from app.security import sha256_text, verify_manifest
+from app.security import sha256_text
+from app.signing import fingerprint, parse_public_key, verify_manifest
 
 SIGNED_FIELDS = ("job_id", "task_type", "payload", "payload_hash", "reward_points", "expires_at")
 
@@ -32,12 +37,14 @@ class ManifestError(Exception):
     """The job envelope failed verification; the worker must not execute it."""
 
 
-def check_manifest(job: dict[str, Any], secret: str, now: float | None = None) -> None:
+def check_manifest(job: dict[str, Any], coordinator_key: str, now: float | None = None) -> None:
+    """Raise ManifestError unless the job is signed by `coordinator_key` (hex Ed25519 public
+    key), its payload matches its hash, this machine can run it and it hasn't expired."""
     missing = [k for k in (*SIGNED_FIELDS, "signature") if k not in job]
     if missing:
         raise ManifestError(f"missing fields: {', '.join(missing)}")
     fields = {k: job[k] for k in SIGNED_FIELDS}
-    if not verify_manifest(fields, str(job["signature"]), secret):
+    if not verify_manifest(fields, str(job["signature"]), coordinator_key):
         raise ManifestError("bad signature: job was not signed by this coordinator")
     if sha256_text(job["payload"]) != job["payload_hash"]:
         raise ManifestError("payload hash mismatch")
@@ -53,6 +60,45 @@ def save_key(path: Path, key: str) -> None:
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w") as fh:
         fh.write(key + "\n")
+
+
+def load_or_pin_coordinator_key(client: httpx.Client, pin_file: Path,
+                                given: str | None = None) -> str:
+    """Return the coordinator public key this worker trusts.
+
+    - `given` (from the operator, out of band) is the strongest option: used as-is.
+    - Otherwise a key pinned on an earlier run is used, and if the coordinator now serves a
+      different key the worker stops: either the operator rotated it or this isn't the
+      real coordinator. Either way a person has to decide.
+    - First run with neither: trust on first use. Fetch, print the fingerprint so the owner
+      can compare it with the operator's, and save it (readable by this user only).
+    """
+    if given:
+        try:
+            parse_public_key(given)
+        except ValueError as exc:
+            raise SystemExit(f"Bad coordinator key: {exc}") from exc
+        return given.strip().lower()
+    response = client.get("/v1/coordinator/key")
+    if response.status_code != 200:
+        raise SystemExit(f"Could not fetch the coordinator key ({response.status_code}).")
+    served = str(response.json().get("public_key", "")).strip().lower()
+    try:
+        parse_public_key(served)
+    except ValueError as exc:
+        raise SystemExit(f"Coordinator served a bad key: {exc}") from exc
+    if pin_file.exists():
+        pinned = pin_file.read_text().strip().lower()
+        if served != pinned:
+            raise SystemExit(
+                f"Coordinator key CHANGED (pinned {fingerprint(pinned)}, now serving "
+                f"{fingerprint(served)}). Refusing to run jobs. If the operator really "
+                f"rotated the key, confirm the new fingerprint with them and delete {pin_file}.")
+        return pinned
+    save_key(pin_file, served)
+    print(f"First contact: pinned coordinator key {fingerprint(served)} in {pin_file}. "
+          "Check this fingerprint with the operator.")
+    return served
 
 
 def load_or_enroll(client: httpx.Client, worker_id: str, key_file: Path,
@@ -96,13 +142,18 @@ def main() -> None:
                         help="one-time code from the operator (first run only)")
     parser.add_argument("--key-file", type=Path, default=None,
                         help="where this worker's key is kept (default ./data/worker-<id>.key)")
+    parser.add_argument("--coordinator-key", default=os.getenv("BNH_COORDINATOR_KEY"),
+                        help="coordinator public key (hex) from the operator; "
+                             "default: pin it on first contact")
+    parser.add_argument("--coordinator-key-file", type=Path,
+                        default=Path("data") / "coordinator.pub",
+                        help="where the pinned coordinator key is kept")
     args = parser.parse_args()
     key_file = args.key_file or Path("data") / f"worker-{args.worker_id}.key"
-    secret = os.getenv("PROTOTYPE_SECRET", "")
-    if len(secret) < 24:
-        raise SystemExit("Set PROTOTYPE_SECRET (same value as the coordinator) to verify jobs.")
 
     with httpx.Client(base_url=args.url, timeout=10) as client:
+        coordinator_key = load_or_pin_coordinator_key(client, args.coordinator_key_file,
+                                                      args.coordinator_key)
         key = load_or_enroll(client, args.worker_id, key_file, args.enrollment_code,
                              sorted(supported_tasks()))
         client.headers["Authorization"] = f"Bearer {key}"
@@ -114,7 +165,7 @@ def main() -> None:
             response.raise_for_status()
             job = response.json()
             try:
-                check_manifest(job, secret)
+                check_manifest(job, coordinator_key)
             except ManifestError as exc:
                 # Do not run it. The lease will time out and the coordinator will requeue it.
                 print(f"Refused job {job.get('job_id')}: {exc}")

@@ -15,7 +15,6 @@ from app.main import create_app
 from demo_worker import supported_tasks
 from tests.auth_helpers import OPERATOR, WorkerClient, enroll
 
-SECRET = "test-secret-that-is-long-enough-123"
 T0 = 1_800_000_000
 MODEL_ID = "tiny-test-model"
 
@@ -45,7 +44,7 @@ def pinned_model(registry: Path, tmp_path: Path) -> Path:
 
 @pytest.fixture
 def client(tmp_path: Path) -> TestClient:
-    settings = Settings(secret=SECRET, database_path=tmp_path / "db.sqlite3",
+    settings = Settings(database_path=tmp_path / "db.sqlite3",
                         lease_seconds=30, max_attempts=2, operator_token=OPERATOR)
     return WorkerClient(create_app(settings, clock=lambda: T0))
 

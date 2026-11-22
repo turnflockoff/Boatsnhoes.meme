@@ -125,3 +125,18 @@
 2. **Random has to mean unpredictable.** The draw uses the computer's secure randomness (the same kind used to make passwords), so nobody can guess the next pick from the last ones. Tests use a fixed "seed" instead, so the same test always plays out the same way.
 3. **Every assignment needs a timeout.** If you hand a job to one rig and that rig unplugs, the job would sit forever. So each pick has a 2-minute window, then someone else gets a turn.
 4. **This makes cheating rings weaker, not impossible.** If 2 of 10 active rigs are in a ring, a ring member checks a friend's work only about 2 times in 10. Getting more chances means getting more invite codes, which is why handing out one code per real person matters.
+
+## 2026-11-22 (early morning): Only the coordinator can sign jobs now
+
+**Shipped**
+- **A lock only the coordinator has the key to.** Every job the coordinator hands out carries a signature, so rigs can tell a real job from a fake one. Before, that signature used one shared password (`PROTOTYPE_SECRET`) that every rig also had to know, which meant any rig could make fake jobs that looked real to the other rigs. Now the coordinator signs with a private key (Ed25519) that never leaves its machine, and rigs check with the matching public key, which can check signatures but can't make them. Closes threat model item #9.
+- **The private key is guarded.** It's created on first start in `data/coordinator-signing.key`, readable only by your user. If the file's permissions let other users read it, the coordinator refuses to start and tells you the `chmod 600` command to fix it.
+- **Rigs remember the coordinator ("pinning").** On its first run the demo worker saves the coordinator's public key and prints a short fingerprint like `0c74-ea31-24dd-92f4` for you to compare. If a different coordinator ever answers at that address, the rig stops instead of taking its jobs. You can also hand rigs the key directly (`--coordinator-key`), which is safer than trusting the first answer.
+- `python -m app.signing` prints the public key and fingerprint. `GET /v1/coordinator/key` serves the same thing. `PROTOTYPE_SECRET` is retired.
+- Tests went from 82 to 89, all passing. I also broke the check on purpose (ignored which key signed a job) and 3 tests failed, so they really catch it. Then I ran it for real: a coordinator, a demo worker that pinned the key and finished a job, and a second "impostor" coordinator on the same address that the worker refused to work for. Still software only: no real GPU yet.
+
+**What you learned**
+1. **A shared password can't prove who wrote something.** If everyone who checks a signature can also make one, a signature only proves "someone in the group". A public/private key pair splits those powers: one secret key signs, and anyone can check with the public key.
+2. **A public key is safe to publish.** It's on an open web address on purpose. The only thing to protect is the private key file, the same way you'd protect a wallet seed phrase.
+3. **The first handshake is the weak spot.** Pinning protects a rig from every later impostor, but the very first contact trusts whoever answers. That's why reading out the fingerprint (or giving the key directly) matters, just like checking a new phone number with a friend in person.
+4. **Old jobs break on purpose.** Jobs signed the old way are now refused, so start from a fresh database. Security changes often mean "old things stop working", and that's better than quietly accepting them.

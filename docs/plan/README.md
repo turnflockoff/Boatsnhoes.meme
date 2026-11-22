@@ -2,7 +2,7 @@
 
 > **Canonical source of truth.** If a chat conflicts with this file, this file wins until deliberately updated.
 
-**Version:** 0.5.8 | **Last updated:** 2026-11-22 | **Status:** Site LIVE at boatsnhoes.meme (Netlify); GPU worker backend Phases 1, 2, 4 and 5 (audits, tie-breakers, threat model, simulated reward reports) plus per-worker keys and random auditor assignment built, untested on real GPUs
+**Version:** 0.5.9 | **Last updated:** 2026-11-22 | **Status:** Site LIVE at boatsnhoes.meme (Netlify); GPU worker backend Phases 1, 2, 4 and 5 (audits, tie-breakers, threat model, simulated reward reports) plus per-worker keys, random auditor assignment and Ed25519 job signatures built, untested on real GPUs
 
 ## SESSION PROTOCOL (Claude must follow every session)
 1. **Start:** Read README.md, TASKS.md, and USER_TODO.md. Summarize status in 3 lines.
@@ -70,6 +70,7 @@ Threats and defenses. Status: planned unless marked done.
 - Not built: Litepaper, Casino coming-soon, Meme Lab, AgentWiki.
 
 ## Changelog
+- **0.5.9 (2026-11-22):** Job manifests are now signed with the coordinator's Ed25519 private key instead of a shared HMAC secret (threat model #9). Workers verify with the public key (`GET /v1/coordinator/key`), pinned on first contact or given by the operator, and stop if it changes. `PROTOTYPE_SECRET` retired; `python -m app.signing` prints the key. New dependency: `cryptography`. Software only. 89 tests.
 - **0.5.8 (2026-11-22):** Audits and tie-breakers now go to one randomly chosen active, eligible worker instead of whoever asks first (threat model #4). Re-assigned at random if the pick doesn't claim it in time, is revoked, or gives it back. New settings `AUDITOR_ACTIVE_SECONDS`, `AUDIT_ASSIGN_SECONDS`; new consistency check. Software only. 82 tests.
 - **0.5.7 (2026-11-22):** Worker sign-up now needs a one-time operator code; each rig gets its own key (stored only as a hash) for every claim and submit. Owner labels keep one person's rigs from auditing each other. Operator can revoke a rig. `python -m app.workers enroll|revoke|list`. Software only. 73 tests.
 - **0.5.6 (2026-11-22):** GPU worker Phase 5: simulated reward reports. Versioned scoring rule `sim-points-v1` (confirmed + unverified are payable; pending and held are not), per-worker points and activity, reproducible `report_sha256`, `python -m app.rewards verify`, operator-only `/v1/rewards/report`. Off-chain points only. 61 tests.

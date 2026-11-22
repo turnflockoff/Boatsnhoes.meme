@@ -12,7 +12,6 @@ from app import rewards
 from app.security import sha256_text
 from tests.test_audits import (
     OP,
-    SECRET,
     T0,
     claim,
     llm_payload,
@@ -88,7 +87,7 @@ def test_failed_hidden_challenge_is_held_and_not_named(tmp_path: Path) -> None:
     text = json.dumps(rep).lower()
     # The report never names job kinds, results, payloads, expected answers or secrets.
     for leak in ("challenge", "audit_of", "job_kind", "known answer", "made-up answer",
-                 "secret test", SECRET.lower(), "expected_result"):
+                 "secret test", "private key", "expected_result"):
         assert leak not in text, leak
 
 

@@ -13,7 +13,6 @@ from app.main import create_app
 from demo_worker import ManifestError, check_manifest
 from tests.auth_helpers import OPERATOR, WorkerClient, enroll
 
-SECRET = "test-secret-that-is-long-enough-123"
 T0 = 1_800_000_000
 
 
@@ -32,7 +31,7 @@ class Clock:
 @pytest.fixture
 def env(tmp_path: Path):
     clock = Clock()
-    settings = Settings(secret=SECRET, database_path=tmp_path / "db.sqlite3",
+    settings = Settings(database_path=tmp_path / "db.sqlite3",
                         lease_seconds=30, max_attempts=2, operator_token=OPERATOR)
     app = create_app(settings, clock=clock)
     return WorkerClient(app), clock, settings, app.state.ledger
@@ -55,7 +54,8 @@ def test_worker_can_process_and_submit_job(env) -> None:
     job = client.post("/v1/jobs", json={"payload": "hello boats"}).json()
     claimed = client.post("/v1/jobs/next", params={"worker_id": "wk-1"})
     assert claimed.status_code == 200
-    check_manifest(claimed.json(), SECRET, now=T0)  # worker-side verification passes
+    pub = client.get("/v1/coordinator/key").json()["public_key"]
+    check_manifest(claimed.json(), pub, now=T0)  # worker-side verification passes
     response = submit(client, job["job_id"], "wk-1", sha("hello boats"))
     assert response.status_code == 200
     body = response.json()
@@ -194,26 +194,33 @@ def test_concurrent_claims_never_double_lease(tmp_path: Path) -> None:
     assert ledger.check_consistency() == []
 
 
-def test_worker_refuses_tampered_or_foreign_manifests(env) -> None:
+def test_worker_refuses_tampered_or_foreign_manifests(env, tmp_path: Path) -> None:
+    from app.signing import ManifestSigner
+
     client, *_ = env
     register(client, "wk-1")
     client.post("/v1/jobs", json={"payload": "legit", "reward_points": 1})
     job = client.post("/v1/jobs/next", params={"worker_id": "wk-1"}).json()
-    check_manifest(job, SECRET, now=T0)
+    pub = client.get("/v1/coordinator/key").json()["public_key"]
+    other = ManifestSigner.load_or_create(tmp_path / "other-coordinator.key").public_key_hex
+    check_manifest(job, pub, now=T0)
     with pytest.raises(ManifestError, match="bad signature"):
-        check_manifest(job | {"reward_points": 999}, SECRET, now=T0)
+        check_manifest(job | {"reward_points": 999}, pub, now=T0)
     with pytest.raises(ManifestError, match="bad signature"):
-        check_manifest(job, "some-other-coordinators-secret-xyz", now=T0)
+        check_manifest(job, other, now=T0)  # signed by a different coordinator
     with pytest.raises(ManifestError, match="expired"):
-        check_manifest(job, SECRET, now=job["expires_at"] + 1)
+        check_manifest(job, pub, now=job["expires_at"] + 1)
     with pytest.raises(ManifestError, match="missing"):
-        check_manifest({k: v for k, v in job.items() if k != "signature"}, SECRET, now=T0)
+        check_manifest({k: v for k, v in job.items() if k != "signature"}, pub, now=T0)
 
 
-def test_secret_never_appears_in_api_responses(env) -> None:
-    client, *_ = env
+def test_signing_key_never_appears_in_api_responses(env) -> None:
+    client, _, settings, _ = env
     register(client, "wk-1")
     job = client.post("/v1/jobs", json={"payload": "s"}).json()
     client.post("/v1/jobs/next", params={"worker_id": "wk-1"})
-    for path in ("/health", "/v1/ledger", f"/v1/jobs/{job['job_id']}"):
-        assert SECRET not in client.get(path).text
+    pem = settings.resolved_signing_key_path().read_text()
+    body = "".join(line for line in pem.splitlines() if "-----" not in line)
+    for path in ("/health", "/v1/ledger", f"/v1/jobs/{job['job_id']}", "/v1/coordinator/key"):
+        text = client.get(path).text
+        assert body not in text and "PRIVATE KEY" not in text

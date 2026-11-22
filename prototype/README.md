@@ -9,7 +9,7 @@ This directory contains an early local coordinator/worker scaffold for the RX 47
 - **Atomic claiming** with `BEGIN IMMEDIATE` transactions: two workers, or two coordinator processes on the same database, can't lease the same job.
 - **Leases** (`LEASE_SECONDS`, default 60): if a worker goes silent, its job is requeued. After `MAX_ATTEMPTS` (default 3) the job is marked `failed`. Wrong answers requeue the job until attempts run out, then it's `rejected`.
 - **Idempotent submissions**: resubmitting the same accepted result returns the original receipt and is paid only once. A different worker submitting after acceptance gets `409`. Late submissions from a worker that lost its lease get `403`. Expired jobs get `410`.
-- **The worker verifies the coordinator's HMAC-SHA256 manifest signature**, the payload hash, the task type and the deadline before it executes anything. A job signed with a different secret is refused.
+- **The worker verifies the coordinator's Ed25519 manifest signature** (HMAC-SHA256 until 0.5.9), the payload hash, the task type and the deadline before it executes anything. A job signed by a different coordinator is refused.
 - `GET /v1/ledger` includes job counts and `consistency_problems`, an invariant check an auditor can run at any time. `GET /v1/jobs/{id}` shows a job's status and audit trail.
 - A local CPU demo worker that runs a deterministic SHA-256 task (a test fixture, not useful work).
 - Vulkan device-enumeration diagnostic helper.
@@ -75,7 +75,7 @@ To try inference on a GPU box later:
     python -m app.model_registry pin qwen2.5-0.5b-instruct-q4_k_m ./models/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf
     LLAMA_CLI=/path/to/llama-cli MODEL_DIR=./models python demo_worker.py
 
-**Still missing (honest limits):** anyone who can reach the API can create normal jobs, and owner labels depend on the operator handing out codes carefully. The coordinator is trusted, and the shared secret is symmetric, so a worker that knows it could forge manifests. Per-worker keys or asymmetric signatures are the fix. An inference adapter exists (Phase 2) but is untested on real hardware, and there is no RX 470 validation yet (Phase 3).
+**Still missing (honest limits):** anyone who can reach the API can create normal jobs, and owner labels depend on the operator handing out codes carefully. The coordinator is trusted. (The old shared-secret forgery risk is fixed in 0.5.9: see asymmetric manifest signatures below.) An inference adapter exists (Phase 2) but is untested on real hardware, and there is no RX 470 validation yet (Phase 3).
 
 ## Implemented: per-worker keys and authenticated registration
 
@@ -96,9 +96,22 @@ Closes threat-model item #2 *as far as the operator hands out codes carefully*. 
 
 **Your two RX 470s:** if both cards get the same owner label, they will never audit each other, so with only those two rigs online no audit ever runs. For a two-card test, enroll them under two labels (for example `owner-gpu0` and `owner-gpu1`) and remember that agreement between two cards you own proves less than agreement between strangers.
 
+## Implemented: asymmetric manifest signatures (threat model #9)
+
+Tested in software only (0.5.9).
+
+- **Only the coordinator can sign jobs.** It holds an Ed25519 private key in `./data/coordinator-signing.key` (or `COORDINATOR_SIGNING_KEY_FILE`), created on first start with owner-only permissions. The coordinator refuses to start if other users on the machine can read the file. Signatures look like `ed25519:<128 hex>`.
+- **Workers hold no secret.** They check signatures with the coordinator's public key from `GET /v1/coordinator/key` (public key + a short fingerprint like `0c74-ea31-24dd-92f4`). Before, every worker had the same HMAC secret, so any worker could sign fake jobs for the others.
+- **Pinning.** The demo worker saves the public key on first contact (`./data/coordinator.pub`, owner-only) and prints its fingerprint so the rig owner can compare it with the operator's. If the coordinator ever serves a different key, the worker stops instead of trusting it. For a stronger first run, the operator gives the key out of band: `--coordinator-key` or `BNH_COORDINATOR_KEY`.
+- `python -m app.signing` prints the public key and fingerprint for the operator to share.
+- `PROTOTYPE_SECRET` is no longer used; the coordinator logs a warning if it is still set.
+- 7 new tests (89 in total), including a worker that tries to sign a job with its own key, a genuine signature copied onto another job, legacy HMAC signatures, and an impostor coordinator. Also run end to end: coordinator + demo worker (first-contact pin, job accepted), then a second coordinator with a new key on the same address (worker refused to run).
+
+**Limits:** jobs created before 0.5.9 carry the old HMAC signature and are refused by new workers, so start with a fresh database. There is no key rotation tool yet: replacing the key file invalidates every queued job and every worker's pin. First-contact pinning trusts whatever answers the first time, so on a real network give workers the key directly. This signs job manifests only; it does not sign the ledger or reward reports (threat model #10).
+
 ## Safety and correctness boundaries
 
-The HMAC signature authenticates a manifest only to a party that has the shared secret and actually verifies it. The demo worker verifies it before executing. Result hashes are integrity identifiers, not proofs of execution. The coordinator is trusted in this MVP. Rewards are simulated ledger points only; no token minting, private-key handling, wallet signing, or on-chain transfer is implemented.
+The Ed25519 signature shows a manifest came from the holder of the coordinator's private key, but only to a worker that checks it against the right public key. The demo worker verifies it before executing. Result hashes are integrity identifiers, not proofs of execution. The coordinator is trusted in this MVP. Rewards are simulated ledger points only; no token minting, private-key handling, wallet signing, or on-chain transfer is implemented.
 
 The reference repositories:
 - https://github.com/MooreThreads/ethminer-musa
@@ -113,7 +126,7 @@ are research references only. Their PoW/consensus implementations are not integr
     . .venv/bin/activate
     pip install -r requirements.txt
     cp .env.example .env
-    # Set PROTOTYPE_SECRET to a long random value.
+    python -m app.signing   # creates the signing key; share the printed public key
     uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 In another terminal, make a one-time code for the rig and start the worker with it:
@@ -121,9 +134,10 @@ In another terminal, make a one-time code for the rig and start the worker with 
     cd prototype
     . .venv/bin/activate
     CODE=$(python -m app.workers enroll --owner owner-gpu0)
-    python demo_worker.py --url http://127.0.0.1:8000 --worker-id rig-gpu0 --enrollment-code "$CODE"
+    python demo_worker.py --url http://127.0.0.1:8000 --worker-id rig-gpu0 --enrollment-code "$CODE" \
+        --coordinator-key <public key printed above>
 
-Later runs reuse the saved key, so the code isn't needed again:
+Later runs reuse the saved worker key and the pinned coordinator key:
 
     python demo_worker.py --url http://127.0.0.1:8000 --worker-id rig-gpu0
 
@@ -142,6 +156,7 @@ A GitHub Actions workflow runs these tests on pushes and pull requests affecting
 
 ## API outline
 
+- `GET /v1/coordinator/key` — public: the coordinator's Ed25519 public key and fingerprint.
 - `POST /v1/enrollments` — operator only: make a one-time enrollment code for an owner.
 - `POST /v1/workers/register` — new worker: send the enrollment code, get a key once. Existing worker: send its key to update capabilities.
 - `POST /v1/workers/{worker_id}/revoke` — operator only: block a worker's key and requeue its job.

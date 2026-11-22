@@ -15,7 +15,6 @@ from tests.auth_helpers import WorkerClient, enroll
 from tests.test_audits import (
     OP,
     OPERATOR,
-    SECRET,
     Clock,
     audit_status,
     claim,
@@ -30,7 +29,7 @@ pytestmark = pytest.mark.usefixtures("pinned")
 def make(tmp_path: Path, workers: tuple[str, ...], seed: int = 1, owners: dict | None = None,
          active: int = 300, assign: int = 120):
     clock = Clock()
-    settings = Settings(secret=SECRET, database_path=tmp_path / "db.sqlite3", lease_seconds=30,
+    settings = Settings(database_path=tmp_path / "db.sqlite3", lease_seconds=30,
                         max_attempts=2, audit_rate=1.0, operator_token=OPERATOR,
                         auditor_active_seconds=active, audit_assign_seconds=assign)
     app = create_app(settings, clock=clock, rng=random.Random(seed))

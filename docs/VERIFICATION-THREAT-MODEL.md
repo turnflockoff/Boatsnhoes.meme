@@ -38,7 +38,7 @@ wrong numbers in a test ledger, not lost money.
 | Hidden re-run audit | A fabricated AI answer, when a different worker re-runs the job and gets a different result. Rate `AUDIT_RATE` (default 25%). | Yes, tested |
 | Hidden tie-breaker | Which side of a disputed audit is wrong: a third worker (neither side) re-runs the job and the majority of three wins. | Yes, tested |
 | Hidden challenge jobs | A worker that fakes answers on a job where the operator already knows the answer. Looks like normal work, and a wrong answer looks accepted. | Yes, tested |
-| Signed manifests (HMAC) | A fake coordinator. Workers refuse jobs whose signature doesn't check out. | Yes, tested |
+| Signed manifests (Ed25519 since 0.5.9; HMAC before) | A fake coordinator, and workers forging jobs for each other. Workers refuse jobs whose signature doesn't check out against the pinned coordinator public key. | Yes, tested |
 | Leases, idempotent receipts, deadlines | Replays, double payment, late answers from a worker that lost its lease. | Yes, tested |
 | Model fingerprint (sha256) before each run | A swapped or corrupted model file **on an honest worker**. | Yes, tested |
 
@@ -67,7 +67,7 @@ This assumes the auditor is honest. The rest of this document is about when that
 | 6 | **Two of three in the tie-breaker are colluding** | Tie-breaker excluded from both sides of the dispute and from their owners | Majority of three can **outvote an honest auditor** if the original worker and the tie-breaker are in the same ring | Same as #2 and #4, plus never letting a single tie-breaker decide on low-trust workers |
 | 7 | **Only two rigs online**, so no third worker exists | Tie-breaker expires, dispute stays held (`tiebreak_not_run`) | A person has to look at it | Operator review queue (manual for now) |
 | 8 | **Model swapping** (smaller or tampered model) | Fingerprint check runs on the worker, which the cheater controls | A cheating worker can skip the check entirely | Audits catch it only if the swapped model's output differs. Challenges with known outputs from the pinned model help |
-| 9 | **Shared secret leaks.** HMAC is symmetric, so every worker holds the signing key | Secret kept out of logs and API responses | Any worker could forge job manifests to other workers | Asymmetric signatures (coordinator signs, workers only verify) |
+| 9 | **Forged job manifests.** Under HMAC every worker held the signing key | **Fixed in software (0.5.9):** coordinator signs with an Ed25519 private key (owner-only file, refused if others can read it); workers verify with the public key, pinned on first contact or given by the operator, and stop if it changes | First-contact pinning trusts the first answer; no key rotation yet; stealing the coordinator's key file still lets someone sign | Give workers the key out of band; add a rotation procedure; keep the key off shared machines |
 | 10 | **Trusted coordinator/operator** | Append-only `events` table, `check_consistency` invariants anyone can run | The operator picks auditors, stores expected answers and could edit the database | Publish signed ledger snapshots; later, independent re-verification |
 | 11 | **Challenge leak.** If workers learn which jobs are tests, they only behave on those | Challenges get the same envelope, receipt and public events; public ledger merges challenge outcomes into confirmed/held | The operator API itself (protected by `OPERATOR_TOKEN`) | Keep the token off worker machines; rotate it |
 | 12 | **Replay / duplicate submissions** | Lease holder check, idempotent receipts, deadlines | None known in software | Re-test across a real network |
@@ -91,6 +91,6 @@ This assumes the auditor is honest. The rest of this document is about when that
 1. ~~Per-worker keys and authenticated registration~~ **Done (software only):** enrollment codes, per-worker keys, owner-aware exclusions, revocation. Narrows #2, #3 and #6 to "rings the operator was fooled into enrolling".
 2. ~~Random auditor assignment instead of first-come (closes #4).~~ **Done (software only, 0.5.8).**
 3. Measure real GPU nondeterminism on the RX 470s and tune the tolerance (#13).
-4. Asymmetric manifest signatures (#9).
+4. ~~Asymmetric manifest signatures (#9).~~ **Done (software only, 0.5.9).**
 5. Signed, published ledger snapshots (#10). The Phase 5 `report_sha256` is the first step: a reproducible fingerprint of each report, not yet signed.
 6. A penalty rule for caught cheaters in scoring v2 (#15).

@@ -15,7 +15,6 @@ from app.ledger import Ledger
 from app.main import create_app
 from tests.auth_helpers import FirstPickRng, WorkerClient, enroll
 
-SECRET = "test-secret-that-is-long-enough-123"
 OPERATOR = "operator-token-that-is-long-enough-456"
 T0 = 1_800_000_000
 MODEL_ID = "tiny-test-model"
@@ -48,7 +47,7 @@ def pinned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 def make(tmp_path: Path, audit_rate: float = 1.0, operator_token: str | None = OPERATOR):
     clock = Clock()
-    settings = Settings(secret=SECRET, database_path=tmp_path / "db.sqlite3", lease_seconds=30,
+    settings = Settings(database_path=tmp_path / "db.sqlite3", lease_seconds=30,
                         max_attempts=2, audit_rate=audit_rate, operator_token=operator_token)
     app = create_app(settings, clock=clock, rng=FirstPickRng(1))
     client = WorkerClient(app)
@@ -322,7 +321,7 @@ def test_tiebreak_that_never_runs_keeps_dispute_held(pinned, tmp_path: Path) -> 
 
 def test_tiebreak_can_be_switched_off(pinned, tmp_path: Path) -> None:
     clock = Clock()
-    settings = Settings(secret=SECRET, database_path=tmp_path / "db.sqlite3", lease_seconds=30,
+    settings = Settings(database_path=tmp_path / "db.sqlite3", lease_seconds=30,
                         max_attempts=2, audit_rate=1.0, operator_token=OPERATOR, tiebreak=False)
     client = WorkerClient(create_app(settings, clock=clock, rng=FirstPickRng(1)))
     for w in ("wk-a", "wk-b", "wk-c"):

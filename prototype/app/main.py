@@ -15,11 +15,12 @@ from . import rewards, tasks, workers
 from .ledger import Ledger
 from .models import (ChallengeCreate, EnrollmentCreate, JobCreate, JobEnvelope, ResultSubmission,
                      WorkerRegistration)
-from .security import sha256_text, sign_manifest
+from .security import sha256_text
+from .signing import ManifestSigner
 
 log = logging.getLogger("bnh.coordinator")
 
-# Fields covered by the coordinator's HMAC signature. Workers must verify exactly these.
+# Fields covered by the coordinator's Ed25519 signature. Workers must verify exactly these.
 SIGNED_FIELDS = ("job_id", "task_type", "payload", "payload_hash", "reward_points", "expires_at")
 
 # Audit-trail events that would tell a worker which jobs are audits or challenges.
@@ -37,12 +38,16 @@ def create_app(settings: Settings | None = None,
     The default `rng` uses the OS's secure randomness, so workers can't predict audits."""
     rng = rng or random.SystemRandom()
     settings = settings or get_settings()
+    # Threat model #9: only the coordinator holds the private key; workers get the public one.
+    signer = ManifestSigner.load_or_create(settings.resolved_signing_key_path())
+    log.info("manifest signing key loaded", extra={"fingerprint": signer.fingerprint})
     ledger = Ledger(settings.database_path, rng=rng,
                     active_seconds=settings.auditor_active_seconds,
                     assign_seconds=settings.audit_assign_seconds)
     app = FastAPI(title="Boats N Hoes Useful-Compute MVP", version="0.5.0")
     app.state.ledger = ledger
     app.state.settings = settings
+    app.state.signer = signer
 
     def now() -> int:
         return int(clock())
@@ -61,7 +66,7 @@ def create_app(settings: Settings | None = None,
             "reward_points": reward_points,
             "expires_at": expires_at,
         }
-        return fields, sign_manifest(fields, settings.secret)
+        return fields, signer.sign(fields)
 
     def require_operator(token: str | None) -> None:
         expected = settings.operator_token
@@ -91,6 +96,14 @@ def create_app(settings: Settings | None = None,
     @app.get("/health")
     def health() -> dict[str, Any]:
         return {"status": "ok", "mode": "local-prototype", "jobs": ledger.status_counts()}
+
+    @app.get("/v1/coordinator/key")
+    def coordinator_key() -> dict[str, Any]:
+        """Public: the key workers use to check job signatures. Safe to publish.
+        Workers should pin it once (compare the fingerprint with the operator) and refuse
+        any later change, so a fake coordinator can't just serve its own key."""
+        return {"algorithm": "ed25519", "public_key": signer.public_key_hex,
+                "fingerprint": signer.fingerprint}
 
     @app.post("/v1/enrollments")
     def create_enrollment(body: EnrollmentCreate,
@@ -279,7 +292,7 @@ def create_app(settings: Settings | None = None,
 
 def __getattr__(name: str) -> Any:
     # `uvicorn app.main:app` builds the app lazily so importing this module (tests,
-    # tooling) never touches the default database or requires a configured secret.
+    # tooling) never touches the default database or creates a signing key.
     if name == "app":
         global app
         app = create_app()
