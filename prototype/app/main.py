@@ -12,12 +12,12 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from .config import Settings, get_settings
-from . import audit_policy, observability, rewards, schemas, tasks, workers
+from . import audit_policy, key_rotation, observability, rewards, schemas, tasks, workers
 from .ledger import Ledger
 from .models import (ChallengeCreate, EnrollmentCreate, JobCreate, JobEnvelope, ResultSubmission,
                      WorkerRegistration)
 from .security import sha256_text
-from .signing import ManifestSigner
+from .signing import ManifestSigner, fingerprint, verify_manifest
 
 log = logging.getLogger("bnh.coordinator")
 access_log = logging.getLogger("bnh.access")
@@ -42,7 +42,13 @@ def create_app(settings: Settings | None = None,
     settings = settings or get_settings()
     # Threat model #9: only the coordinator holds the private key; workers get the public one.
     signer = ManifestSigner.load_or_create(settings.resolved_signing_key_path())
-    log.info("manifest signing key loaded", extra={"fingerprint": signer.fingerprint})
+    # Planned rotations (app/key_rotation.py): the public handover chain must end on the key
+    # just loaded. Jobs signed by a retired key of this coordinator are re-signed on claim.
+    rotations = key_rotation.check_current_key(settings.resolved_signing_key_path(),
+                                               signer.public_key_hex)
+    retired = key_rotation.retired_keys(rotations)
+    log.info("manifest signing key loaded", extra={"fingerprint": signer.fingerprint,
+                                                   "rotations": len(rotations)})
     ledger = Ledger(settings.database_path, rng=rng,
                     active_seconds=settings.auditor_active_seconds,
                     assign_seconds=settings.audit_assign_seconds)
@@ -95,6 +101,27 @@ def create_app(settings: Settings | None = None,
         }
         assert set(fields) == set(SIGNED_FIELDS)
         return fields, signer.sign(fields)
+
+    def current_signature(job: dict[str, Any]) -> dict[str, Any]:
+        """Return the job with a signature from the current key. A job queued before a
+        planned rotation still carries the retired key's signature; re-sign it, but only if
+        that old signature really checks out against a key this coordinator handed over
+        from. A signature that matches no key of ours (e.g. a row edited by hand) is sent
+        unchanged, so the worker refuses it."""
+        fields = {k: job[k] for k in SIGNED_FIELDS}
+        if verify_manifest(fields, job["signature"], signer.public_key_hex):
+            return job
+        for old_key in retired:
+            if verify_manifest(fields, job["signature"], old_key):
+                new_signature = signer.sign(fields)
+                ledger.replace_signature(job["job_id"], job["signature"], new_signature, now(),
+                                         f"{fingerprint(old_key)} -> {signer.fingerprint}")
+                log.info("job re-signed after key rotation",
+                         extra={"job_id": job["job_id"], "old_fingerprint": fingerprint(old_key),
+                                "fingerprint": signer.fingerprint})
+                return job | {"signature": new_signature}
+        log.warning("job signature matches no coordinator key", extra={"job_id": job["job_id"]})
+        return job
 
     def validated_model_hash(task_type: str, payload: str) -> str | None:
         """Validate a new job's payload and return the pinned model hash it will carry."""
@@ -190,6 +217,7 @@ def create_app(settings: Settings | None = None,
                             "consistency_problems")
         return {"status": "attention" if warnings else "ok", "checked_at": t,
                 "uptime_seconds": t - started_at, "signing_key_fingerprint": signer.fingerprint,
+                "signing_key_rotations": len(rotations),
                 **snap, "consistency_problems": problems, "warnings": warnings}
 
     @app.get("/v1/coordinator/key")
@@ -198,7 +226,7 @@ def create_app(settings: Settings | None = None,
         Workers should pin it once (compare the fingerprint with the operator) and refuse
         any later change, so a fake coordinator can't just serve its own key."""
         return {"algorithm": "ed25519", "public_key": signer.public_key_hex,
-                "fingerprint": signer.fingerprint}
+                "fingerprint": signer.fingerprint, "rotations": rotations}
 
     @app.post("/v1/enrollments")
     def create_enrollment(body: EnrollmentCreate,
@@ -330,7 +358,7 @@ def create_app(settings: Settings | None = None,
             raise HTTPException(status_code=404, detail="no queued jobs")
         log.info("job leased", extra={"job_id": job["job_id"], "worker_id": worker_id,
                                       "attempt": job["attempts"]})
-        return envelope(job)
+        return envelope(current_signature(job))
 
     @app.post("/v1/jobs/{job_id}/submit")
     def submit_result(job_id: str, body: ResultSubmission,

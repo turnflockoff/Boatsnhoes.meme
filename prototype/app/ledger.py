@@ -339,6 +339,18 @@ class Ledger:
         # Same public event name for every kind, so the audit trail does not reveal it.
         self._event(db, now, "job_created", job_id=fields["job_id"])
 
+    def replace_signature(self, job_id: str, old_signature: str, new_signature: str,
+                          now: int, detail: str) -> bool:
+        """Swap a job's stored signature after a planned key rotation. Only changes the row
+        if it still holds `old_signature` (so two requests can't race). Logged as
+        `job_resigned` with the old and new key fingerprints."""
+        with self._tx() as db:
+            cur = db.execute("UPDATE jobs SET signature=? WHERE job_id=? AND signature=?",
+                             (new_signature, job_id, old_signature))
+            if cur.rowcount:
+                self._event(db, now, "job_resigned", job_id=job_id, detail=detail)
+            return bool(cur.rowcount)
+
     def note(self, now: int, event: str, job_id: str | None = None,
              worker_id: str | None = None, detail: str | None = None) -> None:
         """Append one audit-trail event outside any other change (e.g. a refused receipt)."""

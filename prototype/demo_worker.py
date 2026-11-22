@@ -23,6 +23,7 @@ import httpx
 from dotenv import load_dotenv
 
 from app import schemas, tasks
+from app.key_rotation import RotationError, follow_chain
 from app.security import sha256_text
 from app.signing import fingerprint, parse_public_key, verify_manifest
 
@@ -80,14 +81,24 @@ def save_key(path: Path, key: str) -> None:
         fh.write(key + "\n")
 
 
+def replace_key_file(path: Path, key: str) -> None:
+    """Swap the pinned key in one step: write a private temporary file, then rename it."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.unlink(missing_ok=True)
+    save_key(tmp, key)
+    os.replace(tmp, path)
+
+
 def load_or_pin_coordinator_key(client: httpx.Client, pin_file: Path,
                                 given: str | None = None) -> str:
     """Return the coordinator public key this worker trusts.
 
     - `given` (from the operator, out of band) is the strongest option: used as-is.
-    - Otherwise a key pinned on an earlier run is used, and if the coordinator now serves a
-      different key the worker stops: either the operator rotated it or this isn't the
-      real coordinator. Either way a person has to decide.
+    - Otherwise a key pinned on an earlier run is used. If the coordinator now serves a
+      different key, the worker only moves to it when the coordinator also shows a chain of
+      handovers from the pinned key to the new one, each signed by both keys (a planned
+      rotation, see app/key_rotation.py). Anything else and the worker stops: a person has
+      to decide whether this is still the real coordinator.
     - First run with neither: trust on first use. Fetch, print the fingerprint so the owner
       can compare it with the operator's, and save it (readable by this user only).
     """
@@ -108,10 +119,18 @@ def load_or_pin_coordinator_key(client: httpx.Client, pin_file: Path,
     if pin_file.exists():
         pinned = pin_file.read_text().strip().lower()
         if served != pinned:
-            raise SystemExit(
-                f"Coordinator key CHANGED (pinned {fingerprint(pinned)}, now serving "
-                f"{fingerprint(served)}). Refusing to run jobs. If the operator really "
-                f"rotated the key, confirm the new fingerprint with them and delete {pin_file}.")
+            try:
+                path = follow_chain(response.json().get("rotations") or [], pinned, served)
+            except (RotationError, AttributeError, TypeError) as exc:
+                raise SystemExit(
+                    f"Coordinator key CHANGED (pinned {fingerprint(pinned)}, now serving "
+                    f"{fingerprint(served)}) without a valid signed handover ({exc}). "
+                    f"Refusing to run jobs. If the operator really replaced the key, confirm "
+                    f"the new fingerprint with them and delete {pin_file}.") from exc
+            replace_key_file(pin_file, served)
+            print(f"Coordinator key rotated: {' -> '.join(fingerprint(k) for k in path)} "
+                  f"(each step signed by both keys). Pin updated in {pin_file}.")
+            return served
         return pinned
     save_key(pin_file, served)
     print(f"First contact: pinned coordinator key {fingerprint(served)} in {pin_file}. "

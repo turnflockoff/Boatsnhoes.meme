@@ -108,7 +108,20 @@ Tested in software only (0.5.9).
 - `PROTOTYPE_SECRET` is no longer used; the coordinator logs a warning if it is still set.
 - 7 new tests (89 in total), including a worker that tries to sign a job with its own key, a genuine signature copied onto another job, legacy HMAC signatures, and an impostor coordinator. Also run end to end: coordinator + demo worker (first-contact pin, job accepted), then a second coordinator with a new key on the same address (worker refused to run).
 
-**Limits:** jobs created before 0.5.9 carry the old HMAC signature and are refused by new workers, so start with a fresh database. There is no key rotation tool yet: replacing the key file invalidates every queued job and every worker's pin. First-contact pinning trusts whatever answers the first time, so on a real network give workers the key directly. The same key also signs closed-period reward reports since 0.5.11 (see below); it still does not sign the raw ledger.
+**Limits:** jobs created before 0.5.9 carry the old HMAC signature and are refused by new workers, so start with a fresh database. Replacing the key file by hand breaks every worker's pin; use the rotation tool below instead (0.5.16). First-contact pinning trusts whatever answers the first time, so on a real network give workers the key directly. The same key also signs closed-period reward reports since 0.5.11 (see below); it still does not sign the raw ledger.
+
+## Implemented: planned key rotation (threat model #9 follow-up)
+
+Tested in software only (0.5.16).
+
+- **`python -m app.key_rotation rotate`** (stop the coordinator first) makes a new Ed25519 key and writes a **handover**: old public key → new public key, a sequence number and a time, **signed by both keys** (`purpose: bnh-coordinator-key-rotation/1`, so it can never pass as a job or report signature). The handover is added to the public file `coordinator-signing.key.history.json` next to the key, then the new key replaces the old one. The old private key is not kept. `python -m app.key_rotation show` lists the handovers.
+- **Workers follow it on their own.** `GET /v1/coordinator/key` now also returns `rotations`. A demo worker whose pinned key differs from the served one checks the chain of handovers from its pin to the served key (every step signed by both keys, numbered 1, 2, 3..., each starting where the last ended, no key reused, forward only) and only then updates its pin. Anything else and it stops, as before.
+- **Queued jobs keep working.** A job signed before the rotation is re-signed with the new key when a worker claims it, but only if its old signature checks out against a key this coordinator handed over from. A job signed by anyone else (for example a row edited in the database) is sent unchanged, so the worker refuses it. Each re-sign is logged (`job_resigned`, old → new fingerprint).
+- **Crash-safe.** The new key waits in `coordinator-signing.key.next` until the handover is saved. If the machine dies before the handover is saved, nothing changes and the next `rotate` starts fresh. If it dies after, the coordinator refuses to start ("rotation was interrupted") and re-running `rotate` finishes the same handover instead of making a second one. The coordinator also refuses to start if the key file doesn't match the end of its history.
+- Operator health shows `signing_key_rotations`.
+- 10 new tests (168 in total). I switched off ten rules one at a time (old-key signature, new-key signature, numbering, linking, no reuse, the start-up history check, finishing an interrupted rotation, the worker's chain check, re-signing on claim, refusing to re-sign a foreign signature) and a test failed every time. Also run end to end: coordinator + demo worker pinned key A, a job queued, coordinator stopped, `rotate`, restarted on key B; the worker followed the handover, the queued job was re-signed and accepted.
+
+**Limits:** a handover only helps for a **planned** rotation. Whoever holds the old private key can sign a handover, so if that key may have been stolen, give every worker the new key directly (`--coordinator-key`) and delete its old pin instead. Workers started with `--coordinator-key` don't follow handovers; give them the new key. Old signed reward reports still check out against the old public key, which stays listed in the history file.
 
 ## Implemented: signed reward reports (threat model #10, first step)
 
@@ -220,7 +233,8 @@ A GitHub Actions workflow runs these tests on pushes and pull requests affecting
 
 ## API outline
 
-- `GET /v1/coordinator/key` — public: the coordinator's Ed25519 public key and fingerprint.
+- `GET /v1/coordinator/key` — public: the coordinator's Ed25519 public key, fingerprint and signed key handovers (`rotations`).
+- `python -m app.key_rotation rotate|show` — CLI only: planned key rotation with a handover signed by both keys (see above).
 - `POST /v1/enrollments` — operator only: make a one-time enrollment code for an owner.
 - `POST /v1/workers/register` — new worker: send the enrollment code, get a key once. Existing worker: send its key to update capabilities.
 - `POST /v1/workers/{worker_id}/revoke` — operator only: block a worker's key and requeue its job.
