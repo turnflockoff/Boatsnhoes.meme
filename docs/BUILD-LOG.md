@@ -172,3 +172,19 @@
 2. **One key, many jobs, so label what you sign.** The coordinator's key signs jobs and now reports. Each signed message says what it is (`purpose`), so nobody can take a signature from one kind of message and reuse it on another.
 3. **Checking against the key inside the file proves nothing on its own.** A forger can sign with their own key and put that key in the file. That's why the checker asks for the key you already trust, and warns you to compare fingerprints when you don't give one.
 4. **Sign only what's finished.** A report for a period that's still running can change minutes later. Signing it would put your name on numbers that are about to be wrong.
+
+## 2026-11-22 (afternoon): The coordinator now keeps a clean diary and can say how it's doing
+
+**Shipped**
+- **A diary in a machine-readable format (structured logs).** Every time something happens, the coordinator writes one line like `{"ts": "...", "level": "info", "msg": "job leased", "job_id": "...", "worker_id": "wk-a"}`. One line per request (what was asked, the answer code, how many milliseconds it took) and one line per important moment: job created, job handed out, answer accepted or refused, rig joined, rig kicked out. Refused keys, wrong operator passwords and bad receipts are logged as warnings with the reason.
+- **A tracking number on every request.** Each request gets an id, sent back in the `X-Request-ID` header. If a rig reports an error, you can find the exact matching line in the coordinator's log.
+- **Nothing secret goes in the diary.** No rig keys, no operator password, no invite codes, no prompts, no answers, no web-address extras. If code ever tries to log a field named like a secret, it's replaced with `[redacted]`. A hidden test job is logged exactly like a normal job. So a log is safe to paste into a bug report (but still don't hand it to rigs: it shows *when* you used operator tools).
+- **Two health checks.** `GET /health` is public: "ok" (200) when the database works, "down" (503) when it doesn't, without leaking file paths. `GET /v1/operator/health` is behind your operator password and gives plain-language warnings: no rigs online, re-checks stuck because no rig with a different owner is around, jobs past their deadline, and any self-check failures.
+- `LOG_FORMAT=json` (default) or `text` for reading in a terminal, `LOG_LEVEL=info` by default.
+- Tests went from 109 to 127, all passing. One test runs a whole session and then searches the log for every key, password, code, prompt and answer it used: none show up. I broke each safety rule on purpose once (turned off redaction, logged the full web address, logged a key under a different name, skipped the database check) and a test failed every time. I also ran it for real: a coordinator with JSON logs, a demo worker finishing a job, a fake key refused and found in the log by its tracking number, and both health pages. Still software only: no real GPU yet.
+
+**What you learned**
+1. **Logs are for machines first.** A sentence like "worker wk-a got job 123" is easy to read but hard to search. Named fields (`worker_id`, `job_id`) let a tool answer "show me everything rig wk-a did today" in one command.
+2. **Logs are where secrets leak.** Teams often protect the database and then print passwords into log files that get copied everywhere. The rule here: messages are fixed phrases, data goes in named fields, and secret-looking field names are blanked automatically.
+3. **"Alive" and "healthy" are different questions.** The public check answers "is it up?" for a monitor. The operator check answers "is it doing its job?", like re-checks that can't run because every online rig has the same owner.
+4. **Your two-card test will show a warning, on purpose.** If both RX 470s share one owner label, the operator health page will say re-checks are waiting for an eligible auditor. That's the system telling you it won't let one person check their own work.

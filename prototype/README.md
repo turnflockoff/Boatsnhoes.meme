@@ -137,6 +137,20 @@ Tested in software only (0.5.10). Code: `app/schemas.py`.
 
 **What this does not prove:** a receipt is the worker's own claim. A dishonest worker can copy the job's hashes into its receipt without running anything. These checks catch honest mistakes (stale model file, outdated worker, an answer sent to the wrong job); hidden re-runs and challenges are still what catch cheating (threat model #8).
 
+## Implemented: structured logs and health reporting (Track D)
+
+Tested in software only (0.5.12).
+
+- **One JSON object per log line** (`app/observability.py`): `ts`, `level`, `logger`, `msg`, then named fields. `LOG_FORMAT=text` gives a readable `key=value` version for a terminal; `LOG_LEVEL` picks debug/info/warning/error (default info). Start uvicorn with `--no-access-log` so requests aren't logged twice.
+- **One line per request** (`bnh.access`): method, path, status, duration in ms and a request id. The id comes back in the `X-Request-ID` header; a worker can send its own (letters, digits, `.`, `_`, `-`, up to 64 characters) so its error can be matched to the coordinator's line.
+- **Lifecycle lines** (`bnh.coordinator`): job created, job leased, result submitted (with the outcome), worker enrolled, worker revoked. **Warnings** for refused worker keys, refused operator tokens and refused receipts, with the reason.
+- **Safe to paste into a bug report:** no keys, tokens, enrollment codes, prompts, answers or expected answers, no query strings and no headers. Fields with those names are replaced with `[redacted]` even if code passes them by mistake. A challenge is logged exactly like a normal job. Logs are still operator data: the request lines show *when* you called an operator endpoint, so don't hand raw logs to workers.
+- **`GET /health` (public):** `200` with `status: ok`, uptime and job counts when the database can be read; `503` with `status: down` when it can't (the error itself goes to the log, not the response). It says nothing about workers or audits.
+- **`GET /v1/operator/health` (operator only):** registered, active and revoked workers; queued and leased jobs, the oldest queued job's age, leases past due and jobs past their deadline; open audits and those **waiting for an eligible auditor**; event counts for the last hour; the ledger's consistency problems; and plain-language `warnings`. `status` is `attention` whenever there is a warning. It only reads: past-due leases are requeued by the next worker request, as before.
+- 18 new tests (127 in total), including a full workflow whose logs are searched for every key, token, code, prompt and answer used. Each safety check was broken on purpose once (no redaction, query strings logged, a key logged under another name, the database check skipped) and a test failed every time. Also run end to end: a coordinator with JSON logs, a demo worker finishing a job, a refused fake key matched by its request id, and both health endpoints.
+
+**Limits:** logs go to stderr only (no rotation or shipping yet; use your service manager), and no metrics endpoint for graphs. The waiting-auditor warning is exactly what your two-card test will show if both RX 470s share one owner label.
+
 ## Safety and correctness boundaries
 
 The Ed25519 signature shows a manifest came from the holder of the coordinator's private key, but only to a worker that checks it against the right public key. The demo worker verifies it before executing. Result hashes are integrity identifiers, not proofs of execution. The coordinator is trusted in this MVP. Rewards are simulated ledger points only; no token minting, private-key handling, wallet signing, or on-chain transfer is implemented.
@@ -155,7 +169,7 @@ are research references only. Their PoW/consensus implementations are not integr
     pip install -r requirements.txt
     cp .env.example .env
     python -m app.signing   # creates the signing key; share the printed public key
-    uvicorn app.main:app --host 127.0.0.1 --port 8000
+    uvicorn app.main:app --host 127.0.0.1 --port 8000 --no-access-log
 
 In another terminal, make a one-time code for the rig and start the worker with it:
 
@@ -197,7 +211,8 @@ A GitHub Actions workflow runs these tests on pushes and pull requests affecting
 - `GET /v1/audits` — operator only: every audit and challenge with its outcome.
 - `GET /v1/workers/{worker_id}/trust` — operator only: how a worker's results held up.
 - `GET /v1/rewards/report?since=&until=&sign=` — operator only: simulated reward report for a period; `sign=true` adds the coordinator's signature (closed periods only).
-- `GET /health` — local health check, job counts, and the job/receipt schema versions spoken.
+- `GET /health` — public health check: `200` ok / `503` down, uptime, job counts, and the job/receipt schema versions spoken.
+- `GET /v1/operator/health` — operator only: workers, queue, waiting audits, recent events, consistency problems and warnings.
 
 ## GPU diagnostic
 

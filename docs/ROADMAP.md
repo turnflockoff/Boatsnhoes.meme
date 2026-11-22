@@ -42,7 +42,7 @@ This roadmap separates implemented repository assets from proposed work. A check
 - [x] Implement worker identity and authenticated registration. *(One-time operator enrollment codes, per-worker bearer keys stored as sha256, owner labels that keep one person's rigs from auditing each other, revocation. Software only; `prototype/tests/test_worker_auth.py`.)*
 - [x] Implement coordinator job lifecycle and deadlines (SQLite state machine).
 - [x] Implement worker polling / job leasing / retries.
-- [ ] Add structured logs and health reporting.
+- [x] Add structured logs and health reporting. *(JSON log lines with no secrets or job content, a request id per request, public `/health` with 200/503, operator `/v1/operator/health` with warnings. 18 tests, software only.)*
 - [x] Add idempotent receipt submission.
 - [x] Test coordinator restart (jobs persist) and silent-worker recovery (lease timeout → requeue).
 

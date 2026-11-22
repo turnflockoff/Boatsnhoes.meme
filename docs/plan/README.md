@@ -2,7 +2,7 @@
 
 > **Canonical source of truth.** If a chat conflicts with this file, this file wins until deliberately updated.
 
-**Version:** 0.5.11 | **Last updated:** 2026-11-22 | **Status:** Site LIVE at boatsnhoes.meme (Netlify); GPU worker backend Phases 1, 2, 4 and 5 (audits, tie-breakers, threat model, simulated reward reports) plus per-worker keys, random auditor assignment, Ed25519 job signatures, versioned job/receipt checks and signed reward reports built, untested on real GPUs
+**Version:** 0.5.12 | **Last updated:** 2026-11-22 | **Status:** Site LIVE at boatsnhoes.meme (Netlify); GPU worker backend Phases 1, 2, 4 and 5 (audits, tie-breakers, threat model, simulated reward reports) plus per-worker keys, random auditor assignment, Ed25519 job signatures, versioned job/receipt checks, signed reward reports and structured logs/health checks built, untested on real GPUs
 
 ## SESSION PROTOCOL (Claude must follow every session)
 1. **Start:** Read README.md, TASKS.md, and USER_TODO.md. Summarize status in 3 lines.
@@ -70,6 +70,7 @@ Threats and defenses. Status: planned unless marked done.
 - Not built: Litepaper, Casino coming-soon, Meme Lab, AgentWiki.
 
 ## Changelog
+- **0.5.12 (2026-11-22):** Structured logs and health reporting (Track D). Coordinator logs one JSON object per line (`LOG_FORMAT`, `LOG_LEVEL`) with a request id echoed in `X-Request-ID`; keys, tokens, codes, prompts, answers and query strings are never logged, and challenges log like normal jobs. Public `/health` returns 503 when the database fails; new operator-only `/v1/operator/health` reports workers, queue, audits waiting for an eligible auditor, recent events, consistency problems and warnings. Software only. 127 tests.
 - **0.5.11 (2026-11-22):** Signed reward reports (threat model #10, first step). `python -m app.rewards report --sign` / `?sign=true` adds the coordinator's Ed25519 signature (separate `purpose` from job signatures) to a closed period's report; `verify --no-db --public-key` checks it with no database. Refuses open periods, reports failing their own checks, and never creates a new key. Proves who issued a report, not that its numbers are right. Software only. 109 tests.
 - **0.5.10 (2026-11-22):** Versioned job and receipt schemas (Track E). Jobs carry a signed `schema_version` (`bnh-job/1`) and, for AI jobs, the pinned `model_sha256`; audits copy it from the original. Workers refuse unknown versions or a different local model pin. Receipts (`bnh-receipt/1`) must echo the job version, input hash and model hash or get `422` (logged as `receipt_mismatch`). Pre-versioning jobs are marked `bnh-job/0` and refused. Catches mistakes, not liars. Software only. 97 tests.
 - **0.5.9 (2026-11-22):** Job manifests are now signed with the coordinator's Ed25519 private key instead of a shared HMAC secret (threat model #9). Workers verify with the public key (`GET /v1/coordinator/key`), pinned on first contact or given by the operator, and stop if it changes. `PROTOTYPE_SECRET` retired; `python -m app.signing` prints the key. New dependency: `cryptography`. Software only. 89 tests.

@@ -702,6 +702,54 @@ class Ledger:
             rows = db.execute("SELECT status, COUNT(*) AS n FROM jobs GROUP BY status").fetchall()
             return {row["status"]: int(row["n"]) for row in rows}
 
+    def ping(self) -> None:
+        """Cheapest possible proof the database file can be opened and read."""
+        with closing(self._connect()) as db:
+            db.execute("SELECT 1 FROM jobs LIMIT 1").fetchall()
+
+    def health_snapshot(self, now: int, window_seconds: int = 3600) -> dict[str, Any]:
+        """Operator view of how the coordinator is doing right now. Read-only: it does not
+        sweep, so leases past due show up as `overdue_leases` until the next request."""
+        with closing(self._connect()) as db:
+            one = lambda sql, *args: db.execute(sql, args).fetchone()[0]  # noqa: E731
+            kinds = ",".join("?" * len(ASSIGNED_KINDS))
+            oldest = one("SELECT MIN(created_at) FROM jobs WHERE status='queued'")
+            snapshot = {
+                "workers": {
+                    "registered": one("SELECT COUNT(*) FROM workers"),
+                    "active": one("SELECT COUNT(*) FROM workers WHERE revoked_at IS NULL AND "
+                                  "last_seen_at IS NOT NULL AND last_seen_at>?",
+                                  now - self.active_seconds),
+                    "revoked": one("SELECT COUNT(*) FROM workers WHERE revoked_at IS NOT NULL"),
+                },
+                "queue": {
+                    "queued": one("SELECT COUNT(*) FROM jobs WHERE status='queued'"),
+                    "leased": one("SELECT COUNT(*) FROM jobs WHERE status='leased'"),
+                    "oldest_queued_age_seconds": None if oldest is None else now - int(oldest),
+                    "overdue_leases": one("SELECT COUNT(*) FROM jobs WHERE status='leased' "
+                                          "AND lease_expires_at<=?", now),
+                    "past_deadline": one("SELECT COUNT(*) FROM jobs WHERE status IN "
+                                         "('queued','leased') AND expires_at<=?", now),
+                },
+                "audits": {
+                    "open": one(f"SELECT COUNT(*) FROM jobs WHERE status IN ('queued','leased') "
+                                f"AND job_kind IN ({kinds})", *ASSIGNED_KINDS),
+                    # Queued with no live pick: nobody eligible, or the pick ran out of time.
+                    "waiting_for_auditor": one(
+                        f"SELECT COUNT(*) FROM jobs j LEFT JOIN workers w "
+                        f"ON w.worker_id=j.assigned_worker WHERE j.status='queued' "
+                        f"AND j.job_kind IN ({kinds}) AND (j.assigned_worker IS NULL "
+                        f"OR j.assigned_until IS NULL OR j.assigned_until<=? "
+                        f"OR w.revoked_at IS NOT NULL)", *ASSIGNED_KINDS, now),
+                },
+                "recent_events": {r["event"]: int(r["n"]) for r in db.execute(
+                    "SELECT event, COUNT(*) AS n FROM events WHERE at>? AND at<=? "
+                    "GROUP BY event ORDER BY event", (now - window_seconds, now)).fetchall()},
+                "recent_window_seconds": window_seconds,
+                "last_event_at": one("SELECT MAX(at) FROM events"),
+            }
+        return snapshot
+
     def events(self, job_id: str | None = None) -> list[dict[str, Any]]:
         with closing(self._connect()) as db:
             if job_id:
