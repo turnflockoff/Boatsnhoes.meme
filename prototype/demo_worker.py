@@ -165,6 +165,33 @@ def load_or_enroll(client: httpx.Client, worker_id: str, key_file: Path,
     return key
 
 
+MAX_BACKOFF_SECONDS = 60
+
+
+def retry_after_seconds(response: httpx.Response) -> int:
+    """How long the coordinator asked us to wait after a 429 (at least 1 s, at most 60 s)."""
+    try:
+        wait = int(response.headers.get("Retry-After", "5"))
+    except ValueError:
+        wait = 5
+    return max(1, min(wait, MAX_BACKOFF_SECONDS))
+
+
+def post_with_backoff(client: httpx.Client, url: str, tries: int = 5,
+                      sleep: Any = time.sleep, **kwargs: Any) -> httpx.Response:
+    """POST, and if the coordinator says "too many requests" (429), wait as long as it asks
+    and try again, a few times. Safe for claims and for submits (submits are idempotent)."""
+    for attempt in range(tries):
+        response = client.post(url, **kwargs)
+        if response.status_code != 429 or attempt == tries - 1:
+            return response
+        wait = retry_after_seconds(response)
+        print(f"Coordinator says slow down ({response.json().get('detail')}); "
+              f"waiting {wait} s.")
+        sleep(wait)
+    return response
+
+
 def execute(job: dict[str, Any]) -> str:
     return tasks.get(job["task_type"]).execute(job["payload"])
 
@@ -195,7 +222,8 @@ def main() -> None:
                              sorted(supported_tasks()))
         client.headers["Authorization"] = f"Bearer {key}"
         while True:
-            response = client.post("/v1/jobs/next", params={"worker_id": args.worker_id})
+            response = post_with_backoff(client, "/v1/jobs/next",
+                                         params={"worker_id": args.worker_id})
             if response.status_code == 404:
                 print("No queued jobs.")
                 return
@@ -212,7 +240,7 @@ def main() -> None:
             started = int(time.time())
             result = execute(job)
             completed = int(time.time())
-            accepted = client.post(f"/v1/jobs/{job['job_id']}/submit", json={
+            accepted = post_with_backoff(client, f"/v1/jobs/{job['job_id']}/submit", json={
                 "worker_id": args.worker_id, "result": result, "result_hash": sha256_text(result),
                 "started_at": started, "completed_at": completed,
                 **schemas.receipt_fields(job, local_model_sha256(job)),

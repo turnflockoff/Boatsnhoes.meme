@@ -1,5 +1,5 @@
 # BOATS N HOES: Project Task List (Claude + dev work)
-**Version:** 0.5.18 | **Last updated:** 2026-11-22 | Personal to-dos live in USER_TODO.md.
+**Version:** 0.5.19 | **Last updated:** 2026-11-22 | Personal to-dos live in USER_TODO.md.
 
 ## Phase 0: Foundation
 - [x] Buy boatsnhoes.meme
@@ -44,6 +44,7 @@
 - [ ] Decide what repeated audit drops should change, if anything (owner decision; today it's a warning only)
 - [x] Operator review queue (threat model #7): read-only list of held cases (stuck disputes, three-way disagreements, failed hidden tests) with answers side by side, `python -m app.review`, health warning (190 tests)
 - [ ] Decide what a reviewer's decision should do to held points (part of scoring v2; owner decision)
+- [x] Close open job creation and limit requests (threat model #16, #17): `POST /v1/jobs` needs the operator or a job-only submitter token; per-address request limit with `429`/`Retry-After`; lock-out after repeated wrong keys, tokens or codes; addresses kept out of logs (210 tests)
 - [ ] GPU worker Phase 3: RX 470 hardware validation (needs the real rig; start by running the inventory tool there)
 - [ ] Memory-hard, ASIC-resistant algorithm (pseudocode, reference miner)
 - [ ] Per-block difficulty adjustment

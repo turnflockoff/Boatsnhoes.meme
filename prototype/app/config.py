@@ -40,6 +40,15 @@ class Settings:
     # Operator health warns about a worker that has dropped this many assigned audits or
     # tie-breakers (not picked up, lease ran out, or result refused). Lifetime count.
     audit_drop_warn: int = 3
+    # Who may queue normal jobs (POST /v1/jobs): the operator token, or this separate
+    # submitter token, which can only create jobs (no hidden tests, answers or reports).
+    # With neither set, job creation is disabled.
+    submitter_token: str | None = None
+    # app/rate_limit.py: requests per minute per client address (0 = off), and a lock-out
+    # after `auth_failure_limit` wrong credentials within `auth_failure_window_seconds`.
+    rate_limit_per_minute: int = 240
+    auth_failure_limit: int = 10
+    auth_failure_window_seconds: int = 600
 
     def resolved_signing_key_path(self) -> Path:
         return self.signing_key_path or self.database_path.parent / "coordinator-signing.key"
@@ -95,6 +104,12 @@ def get_settings() -> Settings:
     operator_token = os.getenv("OPERATOR_TOKEN") or None
     if operator_token is not None and len(operator_token) < 24:
         raise ValueError("OPERATOR_TOKEN must be at least 24 characters")
+    submitter_token = os.getenv("SUBMITTER_TOKEN") or None
+    if submitter_token is not None:
+        if len(submitter_token) < 24:
+            raise ValueError("SUBMITTER_TOKEN must be at least 24 characters")
+        if submitter_token == operator_token:
+            raise ValueError("SUBMITTER_TOKEN must be different from OPERATOR_TOKEN")
     return Settings(
         database_path=db,
         signing_key_path=default_signing_key_path(),
@@ -109,4 +124,8 @@ def get_settings() -> Settings:
         auditor_active_seconds=_int_env("AUDITOR_ACTIVE_SECONDS", 300, 10, 86400),
         audit_assign_seconds=_int_env("AUDIT_ASSIGN_SECONDS", 120, 5, 86400),
         audit_drop_warn=_int_env("AUDIT_DROP_WARN", 3, 1, 100000),
+        submitter_token=submitter_token,
+        rate_limit_per_minute=_int_env("RATE_LIMIT_PER_MINUTE", 240, 0, 100000),
+        auth_failure_limit=_int_env("AUTH_FAILURE_LIMIT", 10, 0, 10000),
+        auth_failure_window_seconds=_int_env("AUTH_FAILURE_WINDOW_SECONDS", 600, 10, 86400),
     )

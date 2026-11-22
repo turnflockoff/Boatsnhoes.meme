@@ -46,6 +46,7 @@ This roadmap separates implemented repository assets from proposed work. A check
 - [x] Add structured logs and health reporting. *(JSON log lines with no secrets or job content, a request id per request, public `/health` with 200/503, operator `/v1/operator/health` with warnings. 18 tests, software only.)*
 - [x] Add idempotent receipt submission.
 - [x] Test coordinator restart (jobs persist) and silent-worker recovery (lease timeout → requeue).
+- [x] Require a token to queue jobs and limit requests per client. *(`X-Submitter-Token` or `X-Operator-Token` on `POST /v1/jobs`; `RATE_LIMIT_PER_MINUTE` with `429`/`Retry-After`; lock-out after `AUTH_FAILURE_LIMIT` wrong credentials; `/health` exempt. In memory, per connecting address. 20 tests, software only.)*
 
 ## Track E — Verification and accounting
 - [x] Implement schema, input hash, model hash, and job-version checks. *(Signed `schema_version` and `model_sha256` on jobs; receipts must echo matching versions, input hash and model hash or get `422`. Catches mistakes, not liars. 8 tests, software only.)*

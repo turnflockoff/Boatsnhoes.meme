@@ -1,5 +1,5 @@
 # YOUR Personal To-Do List (things only you can do)
-**Version:** 0.5.18 | **Last updated:** 2026-11-22
+**Version:** 0.5.19 | **Last updated:** 2026-11-22
 Never share passwords, API keys, or recovery phrases with anyone, including Claude.
 
 ## This week
@@ -21,7 +21,7 @@ Never share passwords, API keys, or recovery phrases with anyone, including Clau
 - [ ] On the RX 470 rig (Ubuntu): from `prototype/`, run `python -m app.hw_inventory --out inventory.json`. No sudo needed; it only reads. Look over the file (hostname and username are already blanked) and share it or commit it so the next step (a Vulkan smoke test on each card) can be planned. If it says a tool is missing, installing `pciutils` or `vulkan-tools` is up to you
 - [ ] Decide: chain path, final supply, fair launch (no premine)
 - [ ] Decide: should a rig caught cheating lose its other unchecked points for that period? (simulated scoring v2; see TASKS.md)
-- [ ] When the RX 470 rig is ready: set your own `OPERATOR_TOKEN` in `prototype/.env` (never share it), then make one enrollment code per card with `python -m app.workers enroll --owner owner-gpu0` (and `owner-gpu1`). Keep the codes and the saved `.key` files private
+- [ ] When the RX 470 rig is ready: set your own `OPERATOR_TOKEN` in `prototype/.env` (never share it; you now also need it, or a `SUBMITTER_TOKEN`, to queue jobs), then make one enrollment code per card with `python -m app.workers enroll --owner owner-gpu0` (and `owner-gpu1`). Keep the codes and the saved `.key` files private
 - [ ] Decide: if a rig keeps dropping audits it was picked for (the operator health page warns after 3), should anything happen automatically, like checking its own work more often? Today it's only a warning, because a rig that went offline looks the same as one dodging checks
 - [ ] Optional, when rigs are running: `python -m app.review` lists held results that need a person (side by side). It changes nothing. Decide, together with the scoring v2 question above, what your verdict on a case should do to its points
 - [ ] Decide where signed reward reports and ledger copies get posted (for example a `reports/` page on boatsnhoes.meme, or GitHub releases) and how long to wait after a period closes before sharing a copy

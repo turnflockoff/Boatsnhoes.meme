@@ -12,8 +12,8 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from .config import Settings, get_settings
-from . import (audit_policy, key_rotation, observability, review, rewards, schemas, tasks,
-               workers)
+from . import (audit_policy, key_rotation, observability, rate_limit, review, rewards, schemas,
+               tasks, workers)
 from .ledger import Ledger
 from .models import (ChallengeCreate, EnrollmentCreate, JobCreate, JobEnvelope, ResultSubmission,
                      WorkerRegistration)
@@ -34,11 +34,21 @@ PRIVATE_EVENTS = {"audit_scheduled", "audit_match", "audit_mismatch", "audit_not
                   "auditor_assigned", "auditor_unassigned", "audit_assignment_expired"}
 
 
+class AuthRefused(HTTPException):
+    """A credential was sent and it was wrong (bad worker key, operator or submitter token,
+    or enrollment code). Counted per client by app/rate_limit.py; enough of them in a row
+    and the client is locked out for a while. A *missing* credential is a plain
+    HTTPException and isn't counted."""
+
+
 def create_app(settings: Settings | None = None,
                clock: Callable[[], float] = time.time,
-               rng: random.Random | None = None) -> FastAPI:
+               rng: random.Random | None = None,
+               limiter_clock: Callable[[], float] = time.monotonic) -> FastAPI:
     """Build the coordinator. `clock` and `rng` are injectable so tests are deterministic.
-    The default `rng` uses the OS's secure randomness, so workers can't predict audits."""
+    The default `rng` uses the OS's secure randomness, so workers can't predict audits.
+    `limiter_clock` drives the request limits (app/rate_limit.py), which measure real
+    elapsed time rather than the coordinator's job clock."""
     rng = rng or random.SystemRandom()
     settings = settings or get_settings()
     # Threat model #9: only the coordinator holds the private key; workers get the public one.
@@ -57,6 +67,12 @@ def create_app(settings: Settings | None = None,
     app.state.ledger = ledger
     app.state.settings = settings
     app.state.signer = signer
+    limiter = rate_limit.RateLimiter(settings.rate_limit_per_minute, settings.auth_failure_limit,
+                                     settings.auth_failure_window_seconds, limiter_clock)
+    app.state.limiter = limiter
+
+    def client_of(request: Request) -> str:
+        return request.client.host if request.client else "unknown"
 
     def now() -> int:
         return int(clock())
@@ -73,8 +89,20 @@ def create_app(settings: Settings | None = None,
         fields = {"request_id": request_id, "method": request.method,
                   "path": request.url.path}
         started = time.perf_counter()
+        blocked = limiter.check(client_of(request), request.url.path)
         try:
-            response = await call_next(request)
+            if blocked:
+                reason, retry_after = blocked
+                # The client's address is never logged, only a tag that groups its lines.
+                log.warning("request limited", extra={
+                    "reason": reason, "retry_after": retry_after,
+                    "client_tag": limiter.tag(client_of(request))})
+                detail = ("too many failed logins from this address; try again later"
+                          if reason == "locked_out" else "too many requests; slow down")
+                response = JSONResponse(status_code=429, content={"detail": detail},
+                                        headers={"Retry-After": str(retry_after)})
+            else:
+                response = await call_next(request)
         except Exception:
             access_log.exception("request failed", extra=fields | {"status": 500})
             raise
@@ -84,6 +112,16 @@ def create_app(settings: Settings | None = None,
         access_log.log(level, "request", extra=fields | {"status": response.status_code,
                                                           "duration_ms": duration_ms})
         return response
+
+    @app.exception_handler(AuthRefused)
+    async def count_auth_failure(request: Request, exc: AuthRefused) -> JSONResponse:
+        if limiter.record_auth_failure(client_of(request)):
+            log.warning("client locked out", extra={
+                "reason": "too many failed logins",
+                "window_seconds": settings.auth_failure_window_seconds,
+                "client_tag": limiter.tag(client_of(request))})
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail},
+                            headers=exc.headers)
 
     def envelope(job: dict[str, Any]) -> JobEnvelope:
         return JobEnvelope(**{k: job[k] for k in JobEnvelope.model_fields})
@@ -139,23 +177,50 @@ def create_app(settings: Settings | None = None,
             log.warning("operator auth refused", extra={"reason": "operator endpoints disabled"})
             raise HTTPException(status_code=403, detail="operator endpoints are disabled "
                                 "(set OPERATOR_TOKEN)")
-        if not token or not hmac.compare_digest(token.encode(), expected.encode()):
+        if not token:
             log.warning("operator auth refused", extra={"reason": "operator token required"})
             raise HTTPException(status_code=403, detail="operator token required")
+        if not hmac.compare_digest(token.encode(), expected.encode()):
+            log.warning("operator auth refused", extra={"reason": "wrong operator token"})
+            raise AuthRefused(status_code=403, detail="operator token required")
+
+    def require_job_creator(operator: str | None, submitter: str | None) -> str:
+        """POST /v1/jobs: the operator token or the submitter token. Returns which one.
+        Without this anyone who can reach the coordinator could queue a job with up to
+        1000 points and then claim it with their own rig (minting simulated points)."""
+        if not settings.operator_token and not settings.submitter_token:
+            log.warning("job creation refused", extra={"reason": "job creation disabled"})
+            raise HTTPException(status_code=403, detail="job creation is disabled "
+                                "(set OPERATOR_TOKEN or SUBMITTER_TOKEN)")
+        if not operator and not submitter:
+            log.warning("job creation refused", extra={"reason": "token required"})
+            raise HTTPException(status_code=403, detail="X-Submitter-Token or "
+                                "X-Operator-Token required to queue jobs")
+        for sent, expected, role in ((operator, settings.operator_token, "operator"),
+                                     (submitter, settings.submitter_token, "submitter")):
+            if sent and expected and hmac.compare_digest(sent.encode(), expected.encode()):
+                return role
+        log.warning("job creation refused", extra={"reason": "wrong token"})
+        raise AuthRefused(status_code=403, detail="X-Submitter-Token or X-Operator-Token "
+                          "required to queue jobs")
 
     def authenticate_worker(authorization: str | None, claimed_id: str | None) -> str:
         """Return the worker id that owns the bearer key, or raise 401/403.
         If the request also names a worker id, it must be the key's own worker."""
-        def refuse(code: int, reason: str, worker_id: str | None = None) -> HTTPException:
+        def refuse(code: int, reason: str, worker_id: str | None = None,
+                   counted: bool = True) -> HTTPException:
             # Never log the key itself: only why it was refused and whose it was.
             log.warning("worker auth refused", extra={"reason": reason, "worker_id": worker_id,
                                                       "claimed_worker_id": claimed_id})
             headers = {"WWW-Authenticate": "Bearer"} if code == 401 else None
-            return HTTPException(status_code=code, detail=reason, headers=headers)
+            # A wrong, revoked or someone else's key counts toward the lock-out; no key at
+            # all is a setup mistake and doesn't.
+            kind = AuthRefused if counted else HTTPException
+            return kind(status_code=code, detail=reason, headers=headers)
 
         scheme, _, key = (authorization or "").partition(" ")
         if scheme.lower() != "bearer" or not key.strip():
-            raise refuse(401, "worker key required")
+            raise refuse(401, "worker key required", counted=False)
         worker = ledger.worker_for_key(sha256_text(key.strip()))
         if worker is None:
             raise refuse(401, "unknown worker key")
@@ -227,6 +292,12 @@ def create_app(settings: Settings | None = None,
             warnings.append(f"{queue['counts']['needs_review']} held case(s) need a person "
                             "(stuck dispute, three different answers, or a failed hidden "
                             "test): see /v1/operator/review")
+        # app/rate_limit.py: someone keeps sending wrong keys/tokens/codes.
+        limits = limiter.snapshot()
+        if limits["locked_out_clients"]:
+            warnings.append(f"{len(limits['locked_out_clients'])} client address(es) locked out "
+                            "after repeated wrong keys, tokens or enrollment codes: see "
+                            "rate_limits. Could be a misconfigured rig or someone guessing")
         if problems:
             warnings.append(f"{len(problems)} consistency problem(s): see "
                             "consistency_problems")
@@ -236,6 +307,7 @@ def create_app(settings: Settings | None = None,
                 **snap, "audit_dropouts": {w: f["dropped"] for w, f in follow.items()
                                            if f["dropped"]},
                 "review": queue["counts"] | {"points_held": queue["points_held"]},
+                "rate_limits": limits,
                 "consistency_problems": problems, "warnings": warnings}
 
     @app.get("/v1/operator/review")
@@ -284,7 +356,7 @@ def create_app(settings: Settings | None = None,
                                               sha256_text(body.enrollment_code),
                                               sha256_text(key), now())
         if outcome == "bad_code":
-            raise HTTPException(status_code=403,
+            raise AuthRefused(status_code=403,
                                 detail="enrollment code is invalid, used or expired")
         if outcome == "taken":
             raise HTTPException(status_code=409, detail="worker id is already registered; "
@@ -308,7 +380,10 @@ def create_app(settings: Settings | None = None,
         return {"worker_id": worker_id, "status": "revoked", "already_revoked": not changed}
 
     @app.post("/v1/jobs", response_model=JobEnvelope)
-    def create_job(body: JobCreate) -> JobEnvelope:
+    def create_job(body: JobCreate,
+                   x_operator_token: str | None = Header(default=None),
+                   x_submitter_token: str | None = Header(default=None)) -> JobEnvelope:
+        require_job_creator(x_operator_token, x_submitter_token)
         model_sha256 = validated_model_hash(body.task_type, body.payload)
         t = now()
         fields, signature = new_job_fields(body.task_type, body.payload, body.reward_points,

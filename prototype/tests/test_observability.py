@@ -218,7 +218,7 @@ def test_refused_requests_are_warnings_with_a_reason(env, caplog) -> None:
     warnings = [l for l in lines(caplog) if l["level"] == "warning"]
     reasons = {l["msg"]: l for l in warnings}
     assert reasons["worker auth refused"]["reason"] == "unknown worker key"
-    assert reasons["operator auth refused"]["reason"] == "operator token required"
+    assert reasons["operator auth refused"]["reason"] == "wrong operator token"
     assert reasons["receipt refused"]["job_id"] == job["job_id"]
     assert "bnhw_wrong" not in json.dumps(warnings) and "wrong-token" not in json.dumps(warnings)
 

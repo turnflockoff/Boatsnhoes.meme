@@ -95,7 +95,7 @@ Closes threat-model item #2 *as far as the operator hands out codes carefully*. 
 - The demo worker saves its key to `./data/worker-<id>.key` (owner-only file permissions, git-ignored) on the first run and reuses it after.
 - 12 new tests (73 in total). Also run end to end with a real coordinator process: one code from the API, one from the CLI, two demo workers, a reused code refused, a saved key reused, and a revoked worker refused.
 
-**What this does not fix:** owner labels are only as honest as the operator's hand-out. One person who talks the operator into several codes under different names is still a Sybil ring. There is no proof of personhood, no rate limit on the API, and creating normal jobs (`POST /v1/jobs`) still needs no login.
+**What this does not fix:** owner labels are only as honest as the operator's hand-out. One person who talks the operator into several codes under different names is still a Sybil ring. There is no proof of personhood. (Until 0.5.19 there was also no rate limit on the API and anyone could queue normal jobs; both are fixed, see "who may queue jobs" below.)
 
 **Your two RX 470s:** if both cards get the same owner label, they will never audit each other, so with only those two rigs online no audit ever runs. For a two-card test, enroll them under two labels (for example `owner-gpu0` and `owner-gpu1`) and remember that agreement between two cards you own proves less than agreement between strangers.
 
@@ -188,6 +188,19 @@ Tested in software only (0.5.12).
 
 **Limits:** logs go to stderr only (no rotation or shipping yet; use your service manager), and no metrics endpoint for graphs. The waiting-auditor warning is exactly what your two-card test will show if both RX 470s share one owner label.
 
+## Implemented: who may queue jobs, request limits and lock-outs (0.5.19)
+
+Tested in software only.
+
+- **Queuing a job needs a token.** `POST /v1/jobs` used to be open to anyone who could reach the coordinator. That let any enrolled rig queue a job worth up to 1000 simulated points on an empty queue, claim it itself and get paid. Now it needs either `X-Operator-Token` or a new `X-Submitter-Token` (`SUBMITTER_TOKEN` in `.env`, at least 24 characters, different from the operator token). The submitter token can **only** queue normal jobs: it can't see hidden tests, answers, audits or reports, enroll rigs or make challenges, so a program that feeds work in never needs the operator token. With neither token set, job creation is off. A worker key never works here.
+- **Requests per minute per address** (`app/rate_limit.py`, `RATE_LIMIT_PER_MINUTE`, default 240, `0` = off). Each client address gets a bucket of that many requests that refills at the same rate. An empty bucket gets `429 Too Many Requests` with `Retry-After`. The demo worker waits as told (at most 60 s, a few times) before claiming or submitting again; submits are idempotent, so a retry is safe.
+- **Lock-out after wrong credentials** (`AUTH_FAILURE_LIMIT`, default 10, `0` = off, within `AUTH_FAILURE_WINDOW_SECONDS`, default 600). A wrong, revoked or someone else's worker key, a wrong operator or submitter token, or a bad enrollment code counts as one failure. That many failures in the window locks the address out (`429` on every endpoint) until the oldest falls out of the window. A **missing** key, token or code doesn't count: that's a setup mistake, not a guess. Worker keys and codes are 256-bit random, so this mostly protects the operator and submitter tokens, which you type in yourself.
+- **`/health` is never limited**, so a monitor can't be locked out by someone else's traffic.
+- **Logs never contain the address.** Limit and lock-out lines carry a short `client_tag` (a keyed hash with a random key made at start-up) so one client's lines can be grouped. Run uvicorn with `--no-access-log` as shown below, because uvicorn's own access log prints addresses. `/v1/operator/health` (operator only) adds `rate_limits`: totals since start, and each locked-out address with its tag and how long until it's let back in, plus a warning, so you can block it in a firewall if needed.
+- 20 new tests (210 in total). Each rule was switched off once on purpose (13 changes: the token check, counting each kind of wrong credential, not counting missing ones, the `/health` exemption, the lock-out, the bucket, the refill cap, forgetting old failures, the tag in logs, the health warning, a submitter header when no submitter token is set) and a test failed every time. Also run end to end with a real coordinator: no token `403`, submitter token `200` (and `403` on an operator endpoint), a demo worker finished the job, the worker's own 1000-point job refused, three wrong credentials locked `127.0.0.1` out (`429`, `Retry-After: 600`) while `/health` still answered, and the operator health page, reached from a second address, named it. A second run at 5 requests a minute gave `429` on the 6th request with `Retry-After: 12`.
+
+**Limits:** counts and lock-outs live in memory, so a restart clears them, and one coordinator process is assumed. "Client" means the connecting address: behind a reverse proxy or a home router, many machines share one address and its limits, and one rig with a bad key can lock the others on that address out for the window. Someone with many addresses gets many buckets; this slows a flood, it doesn't stop a distributed one (that needs the host's DDoS protection). A submitter can still queue jobs with up to 1000 points for a friend's rig to claim, so give the submitter token only to programs you run.
+
 ## Safety and correctness boundaries
 
 The Ed25519 signature shows a manifest came from the holder of the coordinator's private key, but only to a worker that checks it against the right public key. The demo worker verifies it before executing. Result hashes are integrity identifiers, not proofs of execution. The coordinator is trusted in this MVP. Rewards are simulated ledger points only; no token minting, private-key handling, wallet signing, or on-chain transfer is implemented.
@@ -221,7 +234,7 @@ Later runs reuse the saved worker key and the pinned coordinator key:
     python demo_worker.py --url http://127.0.0.1:8000 --worker-id rig-gpu0
 
 Create a demo job using the API docs at http://127.0.0.1:8000/docs:
-- POST /v1/jobs with {"payload":"hello from Boats N Hoes","task_type":"demo:sha256"}.
+- POST /v1/jobs with {"payload":"hello from Boats N Hoes","task_type":"demo:sha256"}, and your `OPERATOR_TOKEN` (or `SUBMITTER_TOKEN`) in the `x-operator-token` (or `x-submitter-token`) box. Without one you get `403`.
 - The demo worker claims and processes queued jobs.
 - GET /v1/ledger shows simulated points.
 
@@ -240,7 +253,7 @@ A GitHub Actions workflow runs these tests on pushes and pull requests affecting
 - `POST /v1/enrollments` — operator only: make a one-time enrollment code for an owner.
 - `POST /v1/workers/register` — new worker: send the enrollment code, get a key once. Existing worker: send its key to update capabilities.
 - `POST /v1/workers/{worker_id}/revoke` — operator only: block a worker's key and requeue its job.
-- `POST /v1/jobs` — create a deterministic demo job.
+- `POST /v1/jobs` — queue a job (needs `X-Submitter-Token` or `X-Operator-Token`).
 - `POST /v1/jobs/next` — worker claims the next queued job (needs its key).
 - `POST /v1/jobs/{job_id}/submit` — submit a versioned receipt (`bnh-receipt/1`) with the result (needs its key).
 - `GET /v1/ledger` — view simulated accepted-work entries and points by status.
@@ -277,7 +290,7 @@ Hostname, username and UUIDs are replaced with `[host]`, `[user]` and `[uuid]`. 
 ## Not implemented
 
 - Real model inference on RX 470.
-- Public deployment security, TLS, rate limits, and abuse prevention. Workers authenticate with per-worker keys; job creation does not require a login yet.
+- Public deployment security: TLS, DDoS protection and abuse prevention beyond the simple per-address limits above. Workers authenticate with per-worker keys; queuing jobs needs a submitter or operator token.
 - Ethereum ERC-20 integration or reward distribution.
 
 Treat this as an engineering starter, not production infrastructure.

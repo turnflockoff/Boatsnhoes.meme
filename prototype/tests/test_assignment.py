@@ -31,7 +31,10 @@ def make(tmp_path: Path, workers: tuple[str, ...], seed: int = 1, owners: dict |
     clock = Clock()
     settings = Settings(database_path=tmp_path / "db.sqlite3", lease_seconds=30,
                         max_attempts=2, audit_rate=1.0, operator_token=OPERATOR,
-                        auditor_active_seconds=active, audit_assign_seconds=assign)
+                        auditor_active_seconds=active, audit_assign_seconds=assign,
+                        # These tests send hundreds of requests in a second to measure the
+                        # random pick; request limits are tested in test_rate_limits.py.
+                        rate_limit_per_minute=0)
     app = create_app(settings, clock=clock, rng=random.Random(seed))
     client = WorkerClient(app)
     for w in workers:

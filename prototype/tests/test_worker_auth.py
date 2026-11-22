@@ -158,7 +158,7 @@ def test_claim_and_submit_need_the_workers_own_key(tmp_path: Path) -> None:
     client, _, ledger = make(tmp_path)
     key_a = join(client, "rig-a")
     key_b = join(client, "rig-b")
-    job = client.post("/v1/jobs", json={"payload": "hello boats"}).json()
+    job = client.post("/v1/jobs", json={"payload": "hello boats"}, headers=OP).json()
     assert client.post("/v1/jobs/next").status_code == 401  # no key
     assert client.post("/v1/jobs/next", params={"worker_id": "rig-a"}).status_code == 401
     assert claim(client, "bnhw_" + "z" * 43).status_code == 401  # unknown key
@@ -181,7 +181,7 @@ def test_revoked_worker_is_locked_out_and_its_job_requeued(tmp_path: Path) -> No
     client, _, ledger = make(tmp_path)
     key_a = join(client, "rig-a")
     key_b = join(client, "rig-b")
-    job = client.post("/v1/jobs", json={"payload": "revoke me"}).json()
+    job = client.post("/v1/jobs", json={"payload": "revoke me"}, headers=OP).json()
     assert claim(client, key_a).status_code == 200
     assert client.post("/v1/workers/rig-a/revoke").status_code == 403  # operator only
     r = client.post("/v1/workers/rig-a/revoke", headers=OP)
@@ -217,7 +217,7 @@ def pinned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 def llm_job(client: TestClient) -> str:
     payload = json.dumps({"model_id": MODEL_ID, "prompt": "Name a boat.", "max_tokens": 16,
                           "seed": 7, "timeout_s": 30})
-    r = client.post("/v1/jobs", json={"task_type": "llm:generate", "payload": payload})
+    r = client.post("/v1/jobs", json={"task_type": "llm:generate", "payload": payload}, headers=OP)
     assert r.status_code == 200, r.text
     return r.json()["job_id"]
 
@@ -276,7 +276,7 @@ def test_pre_auth_database_is_migrated_and_old_workers_must_enroll(tmp_path: Pat
     db.close()
     client, _, ledger = make(tmp_path)
     assert ledger.get_worker("old-rig")["key_hash"] is None
-    client.post("/v1/jobs", json={"payload": "x"})
+    client.post("/v1/jobs", json={"payload": "x"}, headers=OP)
     assert client.post("/v1/jobs/next", params={"worker_id": "old-rig"}).status_code == 401
     # An operator code gives the old worker id its first key.
     r = register(client, "old-rig", code_for(client, "owner"))

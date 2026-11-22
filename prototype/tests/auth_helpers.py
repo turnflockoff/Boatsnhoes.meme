@@ -4,6 +4,10 @@ Every worker now needs a one-time enrollment code from the operator and then sen
 key on every request. Most tests are about jobs, audits and rewards, not about auth, so
 `WorkerClient` remembers each worker's key and attaches it whenever a request names that
 worker. The auth rules themselves are tested without this helper in test_worker_auth.py.
+
+Queuing a normal job (POST /v1/jobs) also needs a token since 0.5.19. `WorkerClient` sends
+the app's operator token (or its submitter token) on that one request unless the test set
+a token header itself; test_rate_limits.py tests who may queue jobs without this helper.
 """
 from __future__ import annotations
 
@@ -49,6 +53,13 @@ class WorkerClient(TestClient):
         if worker_id in self.worker_keys and "Authorization" not in headers \
                 and "/v1/workers/register" not in str(url):
             headers["Authorization"] = f"Bearer {self.worker_keys[worker_id]}"
+        settings = self.app.state.settings
+        if (method.upper() == "POST" and str(url) == "/v1/jobs"
+                and "X-Operator-Token" not in headers and "X-Submitter-Token" not in headers):
+            if settings.operator_token:
+                headers["X-Operator-Token"] = settings.operator_token
+            elif settings.submitter_token:
+                headers["X-Submitter-Token"] = settings.submitter_token
         return super().request(method, url, headers=headers, **kwargs)
 
 
