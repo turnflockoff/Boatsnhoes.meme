@@ -13,7 +13,7 @@ from app import model_registry, tasks
 from app.config import Settings
 from app.ledger import Ledger
 from app.main import create_app
-from tests.auth_helpers import FirstPickRng, WorkerClient, enroll, receipt
+from tests.auth_helpers import flat_audit_rate, FirstPickRng, WorkerClient, enroll, receipt
 
 OPERATOR = "operator-token-that-is-long-enough-456"
 T0 = 1_800_000_000
@@ -48,7 +48,8 @@ def pinned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 def make(tmp_path: Path, audit_rate: float = 1.0, operator_token: str | None = OPERATOR):
     clock = Clock()
     settings = Settings(database_path=tmp_path / "db.sqlite3", lease_seconds=30,
-                        max_attempts=2, audit_rate=audit_rate, operator_token=operator_token)
+                        max_attempts=2, audit_rate=audit_rate,
+                        **flat_audit_rate(audit_rate), operator_token=operator_token)
     app = create_app(settings, clock=clock, rng=FirstPickRng(1))
     client = WorkerClient(app)
     for w in ("wk-a", "wk-b", "wk-c"):

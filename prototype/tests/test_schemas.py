@@ -20,7 +20,7 @@ from app.main import create_app
 from app.rewards import build_report
 from app.signing import ManifestSigner
 from demo_worker import ManifestError, check_manifest
-from tests.auth_helpers import OPERATOR, FirstPickRng, WorkerClient, enroll, receipt
+from tests.auth_helpers import flat_audit_rate, OPERATOR, FirstPickRng, WorkerClient, enroll, receipt
 
 T0 = 1_800_000_000
 MODEL_ID = "tiny-test-model"
@@ -58,7 +58,8 @@ def model(registry: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Pa
 
 def make(tmp_path: Path, audit_rate: float = 0.0) -> WorkerClient:
     settings = Settings(database_path=tmp_path / "db.sqlite3", lease_seconds=30,
-                        operator_token=OPERATOR, audit_rate=audit_rate)
+                        operator_token=OPERATOR, audit_rate=audit_rate,
+                        **flat_audit_rate(audit_rate))
     client = WorkerClient(create_app(settings, clock=lambda: T0, rng=FirstPickRng(1)))
     for w in ("wk-a", "wk-b"):
         enroll(client, w)

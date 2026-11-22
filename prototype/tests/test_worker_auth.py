@@ -18,7 +18,7 @@ from app import model_registry, workers
 from app.config import Settings
 from app.ledger import Ledger
 from app.main import create_app
-from tests.auth_helpers import OP, OPERATOR, FirstPickRng, receipt
+from tests.auth_helpers import flat_audit_rate, OP, OPERATOR, FirstPickRng, receipt
 
 T0 = 1_800_000_000
 MODEL_ID = "tiny-test-model"
@@ -39,7 +39,8 @@ class Clock:
 def make(tmp_path: Path, audit_rate: float = 0.0, operator_token: str | None = OPERATOR):
     clock = Clock()
     settings = Settings(database_path=tmp_path / "db.sqlite3", lease_seconds=30,
-                        max_attempts=2, audit_rate=audit_rate, operator_token=operator_token)
+                        max_attempts=2, audit_rate=audit_rate,
+                        **flat_audit_rate(audit_rate), operator_token=operator_token)
     app = create_app(settings, clock=clock, rng=FirstPickRng(1))
     return TestClient(app), clock, app.state.ledger
 

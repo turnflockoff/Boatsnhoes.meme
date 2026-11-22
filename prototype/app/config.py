@@ -22,6 +22,12 @@ class Settings:
     max_attempts: int = 3
     # Phase 4: share of "schema-only" results re-run by a different worker (0.0-1.0).
     audit_rate: float = 0.25
+    # Threat model #1 (`audit-tier-v1`, app/audit_policy.py): rigs with too few
+    # independently checked results, or with a strike (failed hidden test / outvoted),
+    # are re-checked more often. Never below `audit_rate`.
+    audit_rate_new: float = 0.5
+    audit_rate_suspect: float = 1.0
+    audit_new_until: int = 5
     # Required for operator endpoints (challenges, audits, trust). Unset = those are disabled.
     operator_token: str | None = None
     # Phase 4: when a re-run disagrees, ask a third worker to break the tie.
@@ -92,6 +98,9 @@ def get_settings() -> Settings:
         lease_seconds=_int_env("LEASE_SECONDS", 60, 5, 3600),
         max_attempts=_int_env("MAX_ATTEMPTS", 3, 1, 20),
         audit_rate=_rate_env("AUDIT_RATE", 0.25),
+        audit_rate_new=_rate_env("AUDIT_RATE_NEW", 0.5),
+        audit_rate_suspect=_rate_env("AUDIT_RATE_SUSPECT", 1.0),
+        audit_new_until=_int_env("AUDIT_NEW_UNTIL", 5, 0, 100000),
         operator_token=operator_token,
         tiebreak=_bool_env("TIEBREAK", True),
         auditor_active_seconds=_int_env("AUDITOR_ACTIVE_SECONDS", 300, 10, 86400),

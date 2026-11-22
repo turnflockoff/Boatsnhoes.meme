@@ -12,7 +12,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from .config import Settings, get_settings
-from . import observability, rewards, schemas, tasks, workers
+from . import audit_policy, observability, rewards, schemas, tasks, workers
 from .ledger import Ledger
 from .models import (ChallengeCreate, EnrollmentCreate, JobCreate, JobEnvelope, ResultSubmission,
                      WorkerRegistration)
@@ -179,6 +179,12 @@ def create_app(settings: Settings | None = None,
         if snap["queue"]["past_deadline"]:
             warnings.append(f"{snap['queue']['past_deadline']} job(s) past their deadline; "
                             "they expire on the next worker request")
+        struck = sorted(w for w, h in ledger.audit_history().items() if h["strikes"])
+        if struck:
+            warnings.append(f"{len(struck)} worker(s) with a strike (failed hidden test or "
+                            f"outvoted): {', '.join(struck)}. Their results are now re-checked "
+                            "more often; look at /v1/workers/<id>/trust and decide whether to "
+                            "revoke")
         if problems:
             warnings.append(f"{len(problems)} consistency problem(s): see "
                             "consistency_problems")
@@ -274,7 +280,8 @@ def create_app(settings: Settings | None = None,
     @app.get("/v1/audits")
     def list_audits(x_operator_token: str | None = Header(default=None)) -> dict[str, Any]:
         require_operator(x_operator_token)
-        return {"audits": ledger.audits(), "audit_rate": settings.audit_rate}
+        return {"audits": ledger.audits(), "audit_rate": settings.audit_rate,
+                "audit_policy": audit_policy.describe(settings)}
 
     @app.get("/v1/workers/{worker_id}/trust")
     def worker_trust(worker_id: str,
@@ -282,7 +289,12 @@ def create_app(settings: Settings | None = None,
         require_operator(x_operator_token)
         if not ledger.has_worker(worker_id):
             raise HTTPException(status_code=404, detail="unknown worker")
-        return ledger.worker_trust(worker_id)
+        # Operator-only: the tier says how closely this rig is watched (threat model #1).
+        decision = audit_policy.decide_for(ledger.audit_history(worker_id), settings)
+        return ledger.worker_trust(worker_id) | {
+            "audit_tier": decision.tier, "audit_rate": decision.rate,
+            "checks_passed": decision.checks_passed, "strikes": decision.strikes,
+            "audit_policy": audit_policy.AUDIT_POLICY_VERSION}
 
     @app.get("/v1/rewards/report")
     def reward_report(since: int = 0, until: int | None = None, sign: bool = False,
@@ -349,13 +361,16 @@ def create_app(settings: Settings | None = None,
         # marked "schema-only"); it never proves which hardware executed the task.
         executor = tasks.get(job["task_type"])
         verdict = executor.verify(job["payload"], body.result)
-        # Phase 4: an unproven work result is re-run by a different worker at `audit_rate`.
+        # Phase 4: an unproven work result is re-run by a different worker. How often
+        # depends on this worker's record (`audit-tier-v1`, threat model #1): new rigs and
+        # rigs with a strike are re-checked more often than established ones.
         # The audit job is prepared here and only stored if the result is accepted.
         # Same time window as the original, so the deadline doesn't give the audit away.
         window = job["expires_at"] - job["created_at"]
         audit_job = tiebreak_job = None
         if (verdict.ok and verdict.needs_audit and job["job_kind"] == "work"
-                and rng.random() < settings.audit_rate):
+                and rng.random() < audit_policy.decide_for(
+                    ledger.audit_history(worker_id), settings).rate):
             # Copy the original's model hash: a re-pin since then must not change the job.
             audit_job = new_job_fields(job["task_type"], job["payload"], job["reward_points"],
                                        t + window, job["model_sha256"])

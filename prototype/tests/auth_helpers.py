@@ -18,6 +18,13 @@ OPERATOR = "operator-token-that-is-long-enough-456"
 OP = {"X-Operator-Token": OPERATOR}
 
 
+def flat_audit_rate(rate: float) -> dict[str, float]:
+    """Settings that re-check every worker at the same `rate`, whatever its record.
+    Tests that aren't about trust tiers use it so `audit_rate` alone decides sampling;
+    test_audit_policy.py tests the tiers (`audit-tier-v1`) themselves."""
+    return {"audit_rate_new": rate, "audit_rate_suspect": rate}
+
+
 class FirstPickRng(random.Random):
     """Seeded rng whose auditor pick is always the alphabetically first eligible worker.
     Tests that aren't about auditor assignment use it so "who audits" is spelled out by

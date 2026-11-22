@@ -220,3 +220,21 @@
 2. **Watch out for llvmpipe.** If Vulkan only lists "llvmpipe", it's pretending: that's a software version of a GPU running on your processor. Something can "work on Vulkan" and never touch the RX 470s. The tool warns about this.
 3. **The `render` group is the permission slip.** On Ubuntu, compute programs talk to a card through `/dev/dri/renderD128`, `renderD129`, and so on. If your user isn't allowed to open those, everything fails with confusing errors. The tool checks that up front.
 4. **Diagnostics should be boring and safe.** A checkup tool that installs or "fixes" things can break a working machine. Read-only plus a clear report means you can run it any time without worrying.
+
+## 2026-11-22 (night): New rigs and rigs caught cheating now get checked more often
+
+**Shipped**
+- **The re-check rate now depends on the rig's record** (`audit-tier-v1`). Before, every rig had the same 1-in-4 chance of having an AI answer secretly re-run by another rig. Now there are three tiers:
+  - **New** (fewer than 5 answers that another rig or a hidden test has confirmed): re-checked half the time.
+  - **Suspect** (failed a hidden test job, or lost a 2-against-1 vote even once): every answer is re-checked.
+  - **Established** (everyone else): the normal 1-in-4.
+  It's never lower than the normal rate, so `AUDIT_RATE=1` still checks everything. Three new settings: `AUDIT_RATE_NEW`, `AUDIT_RATE_SUSPECT`, `AUDIT_NEW_UNTIL`.
+- **Only you can see the tier.** The operator trust report (`/v1/workers/<id>/trust`) now shows `audit_tier`, the rate that applies, `checks_passed` and `strikes`. `/v1/audits` lists the rule in force. The operator health page names any rig with a strike and suggests you look at it. Rigs never see their tier: it's not in any reply, job or public log line.
+- **It changes checking, not points.** A strike doesn't take points away. Whether caught cheaters should lose points is still your decision (scoring v2, already on your list).
+- Tests went from 151 to 158, all passing. I switched off five parts one at a time (the tier lookup, the strike rule, the "never below normal" floor, counting a lost vote as a strike, the health warning) and a test failed every time. I also ran it for real: started the coordinator, enrolled a rig with an invite code, and its trust report said `new` at rate 0.5; without the operator password the report was refused (403). Still software only: no real GPU yet.
+
+**What you learned**
+1. **Spend your checking where the risk is.** Re-running jobs costs other rigs' time. A rig with a long clean record needs fewer checks than a stranger, and a rig that was just caught needs every answer checked.
+2. **"Trust" here is just a count.** "Established" means "5 answers matched someone else's", nothing more. Two friends who check each other can fake that, which is why hidden test jobs (whose right answer only you know) matter: those can't be faked by agreeing.
+3. **Don't tell people they're being watched.** If a rig knew it was "suspect", it could behave until it isn't. So the tier lives only in your operator views.
+4. **Separate "check more" from "punish".** Extra checks are cheap and reversible. Taking points away is a policy choice with real fairness questions (what if the GPU just gave a slightly different answer?), so it stays your call.

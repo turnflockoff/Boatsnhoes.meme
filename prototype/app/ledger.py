@@ -46,6 +46,8 @@ from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
+from .audit_policy import PASSED_STATUSES, STRIKE_STATUSES
+
 FINAL_STATES = ("accepted", "rejected", "expired", "failed")
 
 # Public settlement buckets. Collapsing the detailed audit status keeps the public ledger
@@ -671,6 +673,27 @@ class Ledger:
             "note": "Agreement between workers is evidence, not proof: colluding workers "
                     "can agree on a wrong answer.",
         }
+
+    def audit_history(self, worker_id: str | None = None) -> dict[str, Any]:
+        """Threat model #1: per worker, how many of its accepted results passed an
+        independent check and how many are strikes (see app/audit_policy.py). With a
+        `worker_id`, that worker's counts; without, a dict of every worker's counts."""
+        passed = ",".join("?" * len(PASSED_STATUSES))
+        strikes = ",".join("?" * len(STRIKE_STATUSES))
+        sql = (f"SELECT w.worker_id, "
+               f"COALESCE(SUM(s.audit_status IN ({passed})), 0) AS checks_passed, "
+               f"COALESCE(SUM(s.audit_status IN ({strikes})), 0) AS strikes "
+               f"FROM workers w LEFT JOIN submissions s ON s.worker_id=w.worker_id "
+               f"{'WHERE w.worker_id=? ' if worker_id else ''}"
+               f"GROUP BY w.worker_id ORDER BY w.worker_id")
+        args = (*PASSED_STATUSES, *STRIKE_STATUSES, *((worker_id,) if worker_id else ()))
+        with closing(self._connect()) as db:
+            rows = {r["worker_id"]: {"checks_passed": int(r["checks_passed"]),
+                                     "strikes": int(r["strikes"])}
+                    for r in db.execute(sql, args).fetchall()}
+        if worker_id:
+            return rows.get(worker_id, {"checks_passed": 0, "strikes": 0})
+        return rows
 
     def reward_rows(self, since: int, until: int) -> list[dict[str, Any]]:
         """Phase 5: accepted results with `since <= accepted_at < until`, in a fixed order.
