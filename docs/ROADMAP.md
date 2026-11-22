@@ -47,6 +47,7 @@ This roadmap separates implemented repository assets from proposed work. A check
 - [x] Add idempotent receipt submission.
 - [x] Test coordinator restart (jobs persist) and silent-worker recovery (lease timeout → requeue).
 - [x] Require a token to queue jobs and limit requests per client. *(`X-Submitter-Token` or `X-Operator-Token` on `POST /v1/jobs`; `RATE_LIMIT_PER_MINUTE` with `429`/`Retry-After`; lock-out after `AUTH_FAILURE_LIMIT` wrong credentials; `/health` exempt. In memory, per connecting address. 20 tests, software only.)*
+- [x] Fix simulated points per task type so whoever queues a job can't pick them. *(`POINTS_TABLE`, rule `points-table-v1`, off by default; when set, jobs and hidden tests get the table's number and anything else is `422`, operator included; operator health shows the rule and warns while a submitter token has no table. 25 tests, software only.)*
 - [x] Apply request limits to the real client behind a reverse proxy. *(`TRUSTED_PROXIES`, empty by default; `X-Forwarded-For` read right to left and only from listed proxies; trust-everyone refused; missing/garbled headers warned about on operator health. 20 tests, software only.)*
 
 ## Track E — Verification and accounting

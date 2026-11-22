@@ -193,6 +193,21 @@ Tested in software only (0.5.12).
 
 **Limits:** logs go to stderr only (no rotation or shipping yet; use your service manager), and no metrics endpoint for graphs. The waiting-auditor warning is exactly what your two-card test will show if both RX 470s share one owner label.
 
+## Implemented: fixed points per task type (0.5.22)
+
+Tested in software only. Simulated off-chain points only.
+
+Since 0.5.19 only the operator or a submitter token can queue jobs, but whoever holds the submitter token still chose each job's points (0-1000), so it could queue a 1000-point job for a friend's rig to pick up (threat model #16). New in `app/points.py` (rule `points-table-v1`):
+
+- **`POINTS_TABLE`** (empty by default = no change): one fixed number per task type, e.g. `POINTS_TABLE=demo:sha256=1,llm:generate=10`. It must list every task type the coordinator runs, exactly once, each a whole number 0-1000; anything else stops the coordinator at start-up with a plain error.
+- **With a table, every new job and hidden test gets the table's number.** `reward_points` can be left out (recommended) or set to that same number. Any other number is refused with `422` and nothing is queued, for the submitter **and** the operator, so a hidden test always pays exactly what normal work of its type pays and can't be spotted by its points.
+- **Without a table nothing changes:** the request's number, or 1 if left out.
+- **Changing the table** means editing `.env` and restarting. Jobs already queued keep the points they were signed with; only new jobs use the new numbers.
+- **`/v1/operator/health`** adds `points` (`rule`: `points-table-v1` or `creator-chooses`, and the `table`) and warns while `SUBMITTER_TOKEN` is set without a `POINTS_TABLE`.
+- 25 new tests (270 in total). Each rule was switched off once on purpose (12 changes: using the table at all, refusing other numbers, hidden tests using the table, the health warning, the start-up check that the table covers every task type, refusing a missing task type, a duplicate, a number over 1000, an unknown task type, reading the setting, showing it on the health page, normal jobs using the table) and a test failed every time. Also run end to end with a real coordinator and `POINTS_TABLE=demo:sha256=2,llm:generate=10`: a submitter asking for 1000 got `422`, leaving it out got 2, the operator's hidden test asking for 50 got `422`, a demo worker finished the job and the public ledger showed 2 points; after a restart with `demo:sha256=5` a new job paid 5 (ledger 7), and the server log held no tokens or payloads. A table missing a task type stopped start-up.
+
+**Limits:** the table fixes *who* picks the number, not *what it should be*: the numbers themselves are your call (a real measure like tokens generated or seconds of GPU time would be fairer later, once the RX 470s are measured). A submitter can still queue many jobs; the per-address request limit slows that down but the submitter token should still only go to programs you run.
+
 ## Implemented: real client addresses behind a proxy (0.5.20)
 
 Tested in software only.
@@ -220,7 +235,7 @@ Tested in software only.
 - **Logs never contain the address.** Limit and lock-out lines carry a short `client_tag` (a keyed hash with a random key made at start-up) so one client's lines can be grouped. Run uvicorn with `--no-access-log` as shown below, because uvicorn's own access log prints addresses. `/v1/operator/health` (operator only) adds `rate_limits`: totals since start, and each locked-out address with its tag and how long until it's let back in, plus a warning, so you can block it in a firewall if needed.
 - 20 new tests (210 in total). Each rule was switched off once on purpose (13 changes: the token check, counting each kind of wrong credential, not counting missing ones, the `/health` exemption, the lock-out, the bucket, the refill cap, forgetting old failures, the tag in logs, the health warning, a submitter header when no submitter token is set) and a test failed every time. Also run end to end with a real coordinator: no token `403`, submitter token `200` (and `403` on an operator endpoint), a demo worker finished the job, the worker's own 1000-point job refused, three wrong credentials locked `127.0.0.1` out (`429`, `Retry-After: 600`) while `/health` still answered, and the operator health page, reached from a second address, named it. A second run at 5 requests a minute gave `429` on the 6th request with `Retry-After: 12`.
 
-**Limits:** counts and lock-outs live in memory, so a restart clears them, and one coordinator process is assumed. "Client" means the connecting address: behind a home router, many machines share one address and its limits, and one rig with a bad key can lock the others on that address out for the window. (Behind your own reverse proxy, set `TRUSTED_PROXIES`; see 0.5.20 above.) Someone with many addresses gets many buckets; this slows a flood, it doesn't stop a distributed one (that needs the host's DDoS protection). A submitter can still queue jobs with up to 1000 points for a friend's rig to claim, so give the submitter token only to programs you run.
+**Limits:** counts and lock-outs live in memory, so a restart clears them, and one coordinator process is assumed. "Client" means the connecting address: behind a home router, many machines share one address and its limits, and one rig with a bad key can lock the others on that address out for the window. (Behind your own reverse proxy, set `TRUSTED_PROXIES`; see 0.5.20 above.) Someone with many addresses gets many buckets; this slows a flood, it doesn't stop a distributed one (that needs the host's DDoS protection). A submitter could still queue jobs with up to 1000 points for a friend's rig to claim (fixed with `POINTS_TABLE`, see 0.5.22 above), so give the submitter token only to programs you run.
 
 ## Safety and correctness boundaries
 
@@ -274,7 +289,7 @@ A GitHub Actions workflow runs these tests on pushes and pull requests affecting
 - `POST /v1/enrollments` — operator only: make a one-time enrollment code for an owner.
 - `POST /v1/workers/register` — new worker: send the enrollment code, get a key once. Existing worker: send its key to update capabilities.
 - `POST /v1/workers/{worker_id}/revoke` — operator only: block a worker's key and requeue its job.
-- `POST /v1/jobs` — queue a job (needs `X-Submitter-Token` or `X-Operator-Token`).
+- `POST /v1/jobs` — queue a job (needs `X-Submitter-Token` or `X-Operator-Token`); with `POINTS_TABLE` set, its points come from the table.
 - `POST /v1/jobs/next` — worker claims the next queued job (needs its key).
 - `POST /v1/jobs/{job_id}/submit` — submit a versioned receipt (`bnh-receipt/1`) with the result (needs its key).
 - `GET /v1/ledger` — view simulated accepted-work entries and points by status.

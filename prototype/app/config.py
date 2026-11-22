@@ -8,6 +8,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from .client_address import parse_trusted_proxies
+from .points import parse_points_table
 
 load_dotenv()
 
@@ -54,6 +55,9 @@ class Settings:
     # app/client_address.py: reverse proxies whose X-Forwarded-For header is believed, so
     # limits apply to the real client. Empty = the header is ignored (the safe default).
     trusted_proxies: tuple[str, ...] = ()
+    # app/points.py (`points-table-v1`): fixed simulated points per task type, as sorted
+    # (task_type, points) pairs. Empty = whoever queues a job picks its points (0-1000).
+    points_table: tuple[tuple[str, int], ...] = ()
 
     def resolved_signing_key_path(self) -> Path:
         return self.signing_key_path or self.database_path.parent / "coordinator-signing.key"
@@ -102,6 +106,8 @@ def default_signing_key_path() -> Path:
 
 
 def get_settings() -> Settings:
+    from .tasks import EXECUTORS  # the task types a points table must cover
+
     db = _database_path()
     if os.getenv("PROTOTYPE_SECRET"):
         log.warning("PROTOTYPE_SECRET is no longer used: job manifests are now signed with the "
@@ -135,4 +141,5 @@ def get_settings() -> Settings:
         auth_failure_window_seconds=_int_env("AUTH_FAILURE_WINDOW_SECONDS", 600, 10, 86400),
         trusted_proxies=tuple(str(n) for n in
                               parse_trusted_proxies(os.getenv("TRUSTED_PROXIES"))),
+        points_table=parse_points_table(os.getenv("POINTS_TABLE"), EXECUTORS),
     )

@@ -12,8 +12,8 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from .config import Settings, get_settings
-from . import (audit_policy, client_address, key_rotation, observability, rate_limit, review, rewards, schemas,
-               tasks, workers)
+from . import (audit_policy, client_address, key_rotation, observability, points, rate_limit, review, rewards,
+               schemas, tasks, workers)
 from .ledger import Ledger
 from .models import (ChallengeCreate, EnrollmentCreate, JobCreate, JobEnvelope, ResultSubmission,
                      WorkerRegistration)
@@ -52,6 +52,8 @@ def create_app(settings: Settings | None = None,
     elapsed time rather than the coordinator's job clock."""
     rng = rng or random.SystemRandom()
     settings = settings or get_settings()
+    if settings.points_table and dict(settings.points_table).keys() != tasks.EXECUTORS.keys():
+        raise ValueError("points_table must list every task type exactly once")
     # Threat model #9: only the coordinator holds the private key; workers get the public one.
     signer = ManifestSigner.load_or_create(settings.resolved_signing_key_path())
     # Planned rotations (app/key_rotation.py): the public handover chain must end on the key
@@ -156,6 +158,13 @@ def create_app(settings: Settings | None = None,
         }
         assert set(fields) == set(SIGNED_FIELDS)
         return fields, signer.sign(fields)
+
+    def job_points(task_type: str, requested: int | None) -> int:
+        """app/points.py: the table's number when POINTS_TABLE is set, else the request's."""
+        try:
+            return points.resolve(settings.points_table, task_type, requested)
+        except points.PointsError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     def current_signature(job: dict[str, Any]) -> dict[str, Any]:
         """Return the job with a signature from the current key. A job queued before a
@@ -319,6 +328,12 @@ def create_app(settings: Settings | None = None,
             warnings.append(f"{len(limits['locked_out_clients'])} client address(es) locked out "
                             "after repeated wrong keys, tokens or enrollment codes: see "
                             "rate_limits. Could be a misconfigured rig or someone guessing")
+        # Threat model #16 follow-up: a submitter token without a points table can queue
+        # jobs worth up to 1000 points for a friend's rig to claim.
+        if settings.submitter_token and not settings.points_table:
+            warnings.append("SUBMITTER_TOKEN is set but POINTS_TABLE isn't, so whoever holds "
+                            f"the submitter token picks each job's points (up to "
+                            f"{points.MAX_POINTS}); set POINTS_TABLE to fix points per task type")
         if problems:
             warnings.append(f"{len(problems)} consistency problem(s): see "
                             "consistency_problems")
@@ -328,7 +343,7 @@ def create_app(settings: Settings | None = None,
                 **snap, "audit_dropouts": {w: f["dropped"] for w, f in follow.items()
                                            if f["dropped"]},
                 "review": queue["counts"] | {"points_held": queue["points_held"]},
-                "rate_limits": limits,
+                "rate_limits": limits, "points": points.describe(settings.points_table),
                 "consistency_problems": problems, "warnings": warnings}
 
     @app.get("/v1/operator/review")
@@ -405,9 +420,10 @@ def create_app(settings: Settings | None = None,
                    x_operator_token: str | None = Header(default=None),
                    x_submitter_token: str | None = Header(default=None)) -> JobEnvelope:
         require_job_creator(x_operator_token, x_submitter_token)
+        reward_points = job_points(body.task_type, body.reward_points)
         model_sha256 = validated_model_hash(body.task_type, body.payload)
         t = now()
-        fields, signature = new_job_fields(body.task_type, body.payload, body.reward_points,
+        fields, signature = new_job_fields(body.task_type, body.payload, reward_points,
                                            t + body.ttl_seconds, model_sha256)
         ledger.create_job(fields, signature, settings.max_attempts, t)
         log.info("job created", extra={"job_id": fields["job_id"], "task_type": body.task_type})
@@ -425,12 +441,14 @@ def create_app(settings: Settings | None = None,
                 raise HTTPException(status_code=404, detail="no such worker")
             if aimed.get("revoked_at") is not None:
                 raise HTTPException(status_code=409, detail="that worker is revoked")
+        # Same points as normal work of this type, so a test can't be spotted by them.
+        reward_points = job_points(body.task_type, body.reward_points)
         model_sha256 = validated_model_hash(body.task_type, body.payload)
         if not tasks.get(body.task_type).verify(body.payload, body.expected_result).ok:
             raise HTTPException(status_code=422,
                                 detail="expected_result fails this task's own verifier")
         t = now()
-        fields, signature = new_job_fields(body.task_type, body.payload, body.reward_points,
+        fields, signature = new_job_fields(body.task_type, body.payload, reward_points,
                                            t + body.ttl_seconds, model_sha256)
         ledger.create_job(fields, signature, settings.max_attempts, t, job_kind="challenge",
                           expected_result=body.expected_result, target=body.target())

@@ -23,7 +23,9 @@ class EnrollmentCreate(BaseModel):
 class JobCreate(BaseModel):
     task_type: str = Field(default="demo:sha256", pattern="^(demo:sha256|llm:generate)$")
     payload: str = Field(min_length=1, max_length=4096)
-    reward_points: int = Field(default=1, ge=0, le=1000)
+    # Leave out to get the default: 1, or the task type's number when POINTS_TABLE is set
+    # (app/points.py). With a table, any other number is refused.
+    reward_points: int | None = Field(default=None, ge=0, le=1000)
     ttl_seconds: int = Field(default=300, ge=10, le=3600)
 
 

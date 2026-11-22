@@ -341,3 +341,19 @@
 2. **A friend's vouching isn't a test.** A new rig could "graduate" just by being re-checked by a friend's rig that gives the same fake answer. A hidden test with a known answer can't be faked that way, so aiming them at new rigs closes that gap (as long as you create the tests).
 3. **Hide the aim, not just the test.** If the rig, the logs or a shared copy revealed who a test was aimed at, a cheater could learn "they're watching me" and behave. So the aim stays in your private records only.
 4. **Keep numbers meaning one thing.** A dodged test and a dodged audit look alike, but mixing them would change what the audit follow-through numbers mean. Separate names keep each number honest.
+
+## 2026-11-22 (19:15 UTC): Each kind of job pays a fixed number of points
+
+**Shipped**
+- **A points table, `POINTS_TABLE`.** Two sessions ago, adding jobs started needing a token. But whoever held the "add jobs" token (the submitter token) still chose how many simulated points each job paid, anywhere from 0 to 1000. A program with that token, or someone who stole it, could add 1000-point jobs for a friend's rig to pick up. Now you can set one fixed number per kind of job in `prototype/.env`, for example `POINTS_TABLE=demo:sha256=1,llm:generate=10`.
+- **With a table, nobody picks the number.** Every new job gets the table's points. A request can leave the number out or send the same number; any other number is refused (`422`) and nothing is added. That goes for your operator token too.
+- **Hidden tests can't be spotted by their points.** Hidden tests follow the same table, so a test always pays exactly what normal work of its kind pays. If they paid differently, a cheater could tell "this one's a test" just from the number.
+- **Mistakes stop the coordinator at start-up.** The table has to list every kind of job, once each, with a whole number from 0 to 1000. A typo or a missing kind gives a plain error instead of quietly letting some jobs fall back to "pick your own".
+- **Off until you set it.** Without a table everything works as before. Your operator health page now shows which rule is on (`points.rule`) and warns while a submitter token is set without a table. Changing the numbers needs a restart; jobs already waiting keep the points they were signed with.
+- Tests went from 245 to 270, all passing. I switched off 12 rules one at a time (using the table at all, refusing other numbers, hidden tests using the table, the health warning, the start-up coverage check, refusing a missing kind, a duplicate, a number over 1000, an unknown kind, reading the setting, showing it on the health page, normal jobs using the table) and a test failed every time. I also ran it for real: started the coordinator with `demo:sha256=2`. The submitter asking for 1000 points was refused, leaving the number out gave 2, your hidden test asking for 50 was refused, a demo rig finished the job and the public ledger showed 2 points. After a restart with `demo:sha256=5` a new job paid 5 (ledger total 7). A table missing a kind refused to start. The server log contained no tokens or job text. Still software only: no real GPU yet.
+
+**What you learned**
+1. **Whoever sets the price controls the payout.** Locking the door (tokens) wasn't enough while the person coming through it could still write their own paycheck. Fixing the price per kind of job closes that.
+2. **Hidden tests have to blend in on every detail.** Same envelope, same deadline, and now the same points. Any one difference can give them away.
+3. **Fail loudly at start-up.** A setting with a typo is better refusing to start than silently doing something you didn't mean.
+4. **The table decides who picks, not what's fair.** 1 vs 10 points is a guess for now. Once the RX 470s are measured, points could follow real work, like words generated or GPU seconds. Picking the numbers is your call (on your to-do list).
