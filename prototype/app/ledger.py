@@ -681,6 +681,32 @@ class Ledger:
             ).fetchall()
             return [dict(r) for r in rows]
 
+    def review_groups(self) -> list[dict[str, Any]]:
+        """Raw rows for the operator review queue (app/review.py, threat model #7). Read-only.
+
+        One group per original job that has points held: a work job with its audit and
+        tie-breaker (whatever state they're in), or a failed hidden test job on its own.
+        Contains answers and expected answers, so it must stay operator-only."""
+        held = tuple(s for s, bucket in SETTLEMENT.items() if bucket == "held")
+        marks = ",".join("?" * len(held))
+        with closing(self._connect()) as db:
+            roots = [r[0] for r in db.execute(
+                f"SELECT DISTINCT CASE WHEN j.job_kind IN ('audit','tiebreak') THEN j.audit_of "
+                f"ELSE j.job_id END FROM submissions s JOIN jobs j USING(job_id) "
+                f"WHERE s.audit_status IN ({marks}) ORDER BY 1", held).fetchall()]
+            groups = []
+            for root in roots:
+                jobs = db.execute(
+                    "SELECT j.job_id, j.job_kind, j.task_type, j.payload, j.status, "
+                    "j.expected_result, j.created_at, s.worker_id, s.result, s.audit_status, "
+                    "s.reward_points, s.accepted_at, w.owner FROM jobs j "
+                    "LEFT JOIN submissions s USING(job_id) "
+                    "LEFT JOIN workers w ON w.worker_id=s.worker_id "
+                    "WHERE j.job_id=? OR j.audit_of=? ORDER BY j.created_at, j.job_id",
+                    (root, root)).fetchall()
+                groups.append({"root": root, "jobs": [dict(r) for r in jobs]})
+        return groups
+
     def worker_trust(self, worker_id: str) -> dict[str, Any]:
         """Operator view: how a worker's results held up under audits and challenges."""
         with closing(self._connect()) as db:

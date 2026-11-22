@@ -64,6 +64,7 @@ This roadmap separates implemented repository assets from proposed work. A check
 - [x] Re-check new and previously caught workers more often. *(`audit-tier-v1`: strike (failed hidden test or outvoted) → every result re-run; fewer than 5 independently checked results → 0.5; otherwise the base `AUDIT_RATE`. Operator-only; changes checks, not points. 7 tests, software only.)*
 - [x] Rotate the coordinator signing key without re-pinning every worker by hand. *(`python -m app.key_rotation rotate`: handover signed by both the old and new key; workers follow a valid chain, refuse anything else; queued jobs re-signed only if their old signature is ours. Planned rotations only, not a fix for a stolen key. 10 tests, software only.)*
 - [x] Count audits a worker was picked for but let go. *(`audit_follow_through` in the operator trust report: not picked up in time, lease ran out, result refused; health warning at `AUDIT_DROP_WARN`. Operator-only; no effect on points or audit rates. 9 tests, software only.)*
+- [x] List held results that need a person in one place. *(`/v1/operator/review`, `python -m app.review`: stuck disputes, three-way disagreements and failed hidden tests side by side, with which answers agree; read-only, no override. 13 tests, software only.)*
 - [ ] Post signed reports and ledger copies in a fixed public place. *(Owner decision.)*
 
 ## Track F — Two-GPU proof of concept

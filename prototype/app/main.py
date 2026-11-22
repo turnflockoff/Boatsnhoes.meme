@@ -12,7 +12,8 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from .config import Settings, get_settings
-from . import audit_policy, key_rotation, observability, rewards, schemas, tasks, workers
+from . import (audit_policy, key_rotation, observability, review, rewards, schemas, tasks,
+               workers)
 from .ledger import Ledger
 from .models import (ChallengeCreate, EnrollmentCreate, JobCreate, JobEnvelope, ResultSubmission,
                      WorkerRegistration)
@@ -220,6 +221,12 @@ def create_app(settings: Settings | None = None,
                             f"assigned audit/tie-breaker job(s): {', '.join(droppers)}. Often just "
                             "a rig that went offline, but a rig skipping checks it doesn't like "
                             "looks the same; see audit_follow_through in /v1/workers/<id>/trust")
+        # Threat model #7: held results the software can't settle on its own.
+        queue = review.review_queue(ledger, t)
+        if queue["counts"]["needs_review"]:
+            warnings.append(f"{queue['counts']['needs_review']} held case(s) need a person "
+                            "(stuck dispute, three different answers, or a failed hidden "
+                            "test): see /v1/operator/review")
         if problems:
             warnings.append(f"{len(problems)} consistency problem(s): see "
                             "consistency_problems")
@@ -228,7 +235,20 @@ def create_app(settings: Settings | None = None,
                 "signing_key_rotations": len(rotations),
                 **snap, "audit_dropouts": {w: f["dropped"] for w, f in follow.items()
                                            if f["dropped"]},
+                "review": queue["counts"] | {"points_held": queue["points_held"]},
                 "consistency_problems": problems, "warnings": warnings}
+
+    @app.get("/v1/operator/review")
+    def operator_review(needs_person_only: bool = False,
+                        x_operator_token: str | None = Header(default=None)) -> dict[str, Any]:
+        """Operator-only review queue (threat model #7): every case with points held, the
+        answers side by side, and whether a person needs to look. Read-only: it shows
+        answers and hidden tests' expected answers, so it never goes in a log line."""
+        require_operator(x_operator_token)
+        queue = review.review_queue(ledger, now())
+        if needs_person_only:
+            queue["cases"] = [c for c in queue["cases"] if c["needs_person"]]
+        return queue
 
     @app.get("/v1/coordinator/key")
     def coordinator_key() -> dict[str, Any]:

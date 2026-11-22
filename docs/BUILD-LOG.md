@@ -271,3 +271,21 @@
 2. **Count first, decide later.** A number with no automatic consequence is safe to add today. Deciding what it should *do* (more checks? a warning to the owner?) is a fairness question, so it waits for you.
 3. **Same symptom, different causes.** A rig with a flaky Wi-Fi connection and a rig dodging checks both "drop" audits. Good monitoring says what it saw, not what it thinks it means.
 4. **Avoid double counting.** One event (a timeout) can show up in two places in the diary. Each drop is counted from exactly one kind of entry, and a test checks that.
+
+## 2026-11-22 (15:15 UTC): One list of held results that need a person
+
+**Shipped**
+- **An operator review queue** (`GET /v1/operator/review`, or `python -m app.review` on the coordinator machine). When a result's points are "held", the software has spotted a problem. Some of those it can settle itself (a third rig breaks the tie), but some it can't. Until now those just sat there and you'd have had to dig through the audit list and the diary to find them. Now there is one list, and each held case has a **stage**:
+  - **needs_review:** nothing in the software will settle it. Three kinds: a disagreement whose tie-breaker never ran (often because only two rigs were online) or was never scheduled; three runs with three different answers; and a rig that failed a hidden test job.
+  - **waiting:** a tie-breaker is queued or running. Check back later.
+  - **decided_by_majority:** two answers agreed against one. Listed so you can spot-check, because two rigs working together can outvote an honest one.
+- **Every answer side by side.** Each case shows the input, every rig's answer (and the expected answer for a hidden test), the rig, its owner label and strike count, **which answers agree** using the same rule the audits use (spacing differences don't count), how many points are held and for how long. `--all` adds the waiting and majority cases; `--json` prints everything.
+- **The health page nudges you.** `/v1/operator/health` now has `review` counts and a warning like "1 held case(s) need a person" whenever something is stuck.
+- **It only looks.** Nothing in the queue changes a status, a point or the diary, and there is no "override" button. What your verdict on a case should do to its points is part of scoring v2, which is still your decision (added to your to-do list). It shows answers and hidden tests' expected answers, so it needs the operator password and is never written to the logs.
+- Tests went from 177 to 190, all passing. I switched off nine parts one at a time (the "waiting" stage, using the task's tolerance rule, counting only held points, sorting the stuck cases first, the health warning, the operator password, the "needs a person only" filter, three-way disagreements needing a person, strike counts) and a test failed every time. I also ran it for real: started the coordinator, enrolled two rigs with invite codes, had them disagree on an AI job (with a fake pinned model file, since there's no GPU or llama.cpp here) and had one fail a hidden test. The queue was refused (403) without the password; with it, it showed the failed test as `needs_review` and the disagreement as `waiting` (no third rig for the tie-breaker), 3 points held; the health page warned; the public ledger and the server log contained none of the answers. Still software only: no real GPU yet.
+
+**What you learned**
+1. **Automation should know when to stop.** A good checking system settles the easy cases itself and hands the rest to a person with everything they need on one screen, instead of guessing.
+2. **"Held" isn't one thing.** Waiting for a tie-breaker, stuck with no tie-breaker, and outvoted all look like "held" in the public ledger, but only some of them need you. The stage tells them apart.
+3. **A failed hidden test isn't automatically cheating.** The rig might have the wrong model file, or real GPUs might give slightly different answers (we won't know until the RX 470s run). That's why it goes to a person instead of straight to a penalty.
+4. **Look first, decide the rules later.** Seeing real stuck cases side by side is the best way to decide what a reviewer's verdict should do to points (scoring v2).
