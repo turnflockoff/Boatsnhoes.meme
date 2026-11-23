@@ -77,7 +77,7 @@ This roadmap separates implemented repository assets from proposed work. A check
 - [ ] Run two independent workers on the two RX 470 cards.
 - [ ] Demonstrate coordinator dispatch to both workers.
 - [ ] Demonstrate accepted and rejected receipts.
-- [ ] Test duplicate, malformed, expired, and replayed submissions.
+- [ ] Test duplicate, malformed, expired, and replayed submissions. *(Rehearsal built: `python -m app.rehearsal` acts as two workers and records how the coordinator answers 28 good and bad cases, including duplicate, malformed, expired and replayed receipts. Passes in-process and against a real local coordinator; CPU SHA-256 jobs only, not yet run alongside the real workers on the two RX 470s.)*
 - [ ] Compare throughput and result quality.
 - [ ] Measure CPU, RAM, VRAM, thermal, and power behavior.
 - [ ] Publish reproducible setup and benchmark results.

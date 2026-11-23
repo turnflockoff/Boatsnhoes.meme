@@ -364,6 +364,22 @@ The key finding is **which card actually did the work** (`evidence.target_card_b
 
 It always says `"proves_inference": false`: one report is a record, and becomes evidence when someone else repeats the same command with the same file hashes and gets the same output. Tested only with small Python programs writing into fake sysfs trees (`tests/test_gpu_run.py`); never run on the real rig yet.
 
+## Two-worker rehearsal (Track F prep, `bnh-rehearsal/1`)
+
+Track F asks to show dispatch to two workers, accepted and rejected receipts, and how the coordinator handles duplicate, malformed, expired and replayed submissions. `python -m app.rehearsal` does that list from the outside, over HTTP, acting as two workers (`<run id>-gpu0`, `<run id>-gpu1`) that each get a one-time enrollment code:
+
+    # Anywhere, no setup: a throwaway coordinator with a temporary database
+    python -m app.rehearsal --local --out rehearsal.json
+
+    # Against a running coordinator with its OWN test database (it enrolls workers and queues jobs)
+    OPERATOR_TOKEN=... python -m app.rehearsal --url http://127.0.0.1:8000 --allow-writes --out rehearsal.json
+
+It runs 28 checks with tiny `demo:sha256` jobs, one job at a time: both workers' honest answers accepted; a tampered and an expired job refused by the worker's own check; a duplicate accepted as a replay and paid once (`200`); a changed answer or another worker's answer after acceptance (`409`); a job leased to someone else (`403`); a bad result hash, a missing field, a body that isn't JSON, impossible timestamps, an unknown receipt version (`422`); no key or a made-up key (`401`); an unknown job (`404`); a valid receipt from job 3 replayed onto job 4 (`422`, job 4 still leased); a wrong answer (`422`, job requeued, then done by the other worker); answering before claiming (`409`); answering after a 10 s deadline (`410`); then the ledger's own consistency checks, no rehearsal job left open, and both workers revoked. Each check records what it sent, the expected and actual status, and the coordinator's message.
+
+Refuses to start if `--out` exists, with `--url` but without `--allow-writes` or without `OPERATOR_TOKEN` in the environment (never on the command line), or while the coordinator has queued jobs. If someone queues a job mid-run and a rehearsal worker is handed it, it stops without running it, and revoking the worker puts that job back in the queue. Worker keys and the operator token never go in the report. Exit code 0 = every check passed, 1 = a check failed or the run stopped early, 2 = refused to start.
+
+`proves_gpu` and `proves_inference` are always false: it tests the coordinator's rules, with SHA-256 sums done on the CPU. Run in-process by `tests/test_rehearsal.py` (12 tests, including a coordinator that accepts any answer, which the rehearsal flags) and once against a real `uvicorn` coordinator on this cloud machine (28 of 28, about 11 s because the expiry check really waits). Running two real workers on the two RX 470s is still Track F's own step.
+
 ## Not implemented
 
 - Real model inference on RX 470.
