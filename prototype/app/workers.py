@@ -27,7 +27,7 @@ import sys
 import time
 from pathlib import Path
 
-from .ledger import Ledger
+from .ledger import CoordinatorPaused, Ledger
 from .security import sha256_text
 
 OWNER_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
@@ -78,6 +78,10 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as exc:
             print(str(exc), file=sys.stderr)
             return 2
+        except CoordinatorPaused as exc:
+            print(f"coordinator is paused (since {exc.since}); no new rigs until "
+                  "`python -m app.incident resume`", file=sys.stderr)
+            return 3
         print(code)
         print(f"owner={args.owner} expires_at={expires_at} (single use; share it privately)",
               file=sys.stderr)

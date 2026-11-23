@@ -1,5 +1,5 @@
 # BOATS N HOES: Project Task List (Claude + dev work)
-**Version:** 0.5.28 | **Last updated:** 2026-11-23 | Personal to-dos live in USER_TODO.md.
+**Version:** 0.5.29 | **Last updated:** 2026-11-23 | Personal to-dos live in USER_TODO.md.
 
 ## Phase 0: Foundation
 - [x] Buy boatsnhoes.meme
@@ -57,6 +57,7 @@
 - [x] One-run recorder for Phase 3: `python -m app.gpu_run --card cardN --out run.json -- <command>` (exit code, output sha256 and tail, expected-output check, program/model file hashes, sensor readings before/during/after for every card, flags when the test ran on another card or the CPU; refuses sudo, secret-looking env, overwrites; 397 tests, fake sysfs only)
 - [x] Two-worker rehearsal for Track F: `python -m app.rehearsal --local` (or `--url ... --allow-writes` against a test coordinator) checks dispatch to two workers and how duplicate, malformed, expired, replayed, wrong-worker and wrong-answer submissions are answered; 28 checks, report with no keys; CPU SHA-256 jobs only, says nothing about the GPUs (409 tests)
 - [x] Phase 3 evidence check: `python -m app.phase3_check --inventory inventory.json run-card0.json run-card1.json` reads the rig's reports and marks each Track B item evidenced/partial/missing/problem; a smoke test counts only with a clean exit, a matched answer and the right card busy, and "repeat on GPU 1" needs the same test in a second PCI slot (434 tests)
+- [x] Emergency pause for incidents (`pause-v1`): `POST /v1/operator/pause` or `python -m app.incident pause`; resume only from the server CLI; no new leases, jobs, hidden tests or enrollments while paused, in-flight results still accepted, interrupted audit picks get a fresh window; survives restarts (454 tests)
 - [ ] GPU worker Phase 3: RX 470 hardware validation (needs the real rig; start by running the inventory tool there)
 - [ ] Memory-hard, ASIC-resistant algorithm (pseudocode, reference miner)
 - [ ] Per-block difficulty adjustment
@@ -76,7 +77,8 @@
 - [ ] Public status page
 - [ ] Mining fairness review: pool distribution, botnet/insider checks
 - [ ] Casino: cold storage, withdrawal limits/delays, confirmations by deposit size, provably fair audit
-- [ ] Incident response plan (who does what if hacked)
+- [x] Incident response plan, draft: `docs/INCIDENT-RESPONSE.md` (first 15 minutes, pause, playbooks for leaked keys/tokens, signing key, points bug, account takeover, impersonation)
+- [ ] Fill in the plan's owner blanks: backup person and where public notices go (owner decision)
 
 ## Phase 5: Wallet, Casino, AgentWiki
 - [ ] Wallet and explorer

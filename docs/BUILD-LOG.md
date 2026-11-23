@@ -457,3 +457,21 @@
 2. **Names move, slots don't.** Linux numbers cards in the order it finds them at boot. The PCI slot is the card's physical address on the motherboard, so it's the safer ID.
 3. **"Same test" has to be defined.** Here it means same program, same files and same expected answer. The command line can differ, because pointing the test at card1 instead of card0 often changes a flag.
 4. **A checker shouldn't be more confident than its inputs.** Unsigned files can be edited, so the tool calls them consistent, never proven. That's why a second person repeating the run is still the real proof.
+
+## 2026-11-23 (02:30 UTC): An emergency brake, and a plan for when something goes wrong
+
+**Shipped**
+- **Emergency pause (`pause-v1`).** One command stops the coordinator handing out work, right away, and it stays stopped even if the server restarts:
+  - `POST /v1/operator/pause` with a short reason (operator token), or `python -m app.incident pause --reason "..."` on the server.
+  - **Resuming only works on the server:** `python -m app.incident resume --note "what you checked or fixed"`. There's no "resume" over the internet on purpose: if your operator token leaks, a stranger can stop things but can't restart them.
+  - **While paused:** no jobs handed out (workers are told "try again in 60 s"), no new jobs or hidden tests (not even yours), no new rigs, no audits assigned. **Still works:** answers for jobs already handed out (so honest work isn't wasted), revoking a rig, and the health pages.
+  - **Fair to rigs:** if a rig had been picked to audit something and the pause ran past its time limit, it gets a fresh window afterwards instead of a "didn't show up" mark.
+  - The public `/health` page says "paused" (never why); the operator health page shows the reason and a warning. The reason never goes in the logs, and shared ledger copies keep only the fact that a pause happened.
+- **Draft incident response plan:** [`docs/INCIDENT-RESPONSE.md`](INCIDENT-RESPONSE.md). The first 15 minutes for any incident, who does what (three blanks for you), and step-by-step playbooks for a leaked worker key, a leaked operator token, a copied signing key, a bug paying wrong points, a hacked GitHub/Netlify/domain/social account, and someone impersonating the project. It only uses commands that exist and were tested. Casino, wallet and chain incidents are explicitly out of scope until those exist.
+- Tests went from 434 to 454, all passing (20 new). I switched off 17 of the new rules one at a time and a test failed every time. One test is a "control": the same wait without a pause does count against the rig, which proves the fresh-window rule is what makes the difference. Also run on a real coordinator process here: paused over HTTP, job creation refused with `503`, status and resume from the command line, and the reason didn't appear in the log. Software only, like everything else on the worker side.
+
+**What you learned**
+1. **Easy to stop, hard to restart.** Make the safe action (stopping) available from anywhere, and the risky one (restarting) need access to the machine. A stolen password then can only make things quieter.
+2. **Pausing beats unplugging.** Killing the server also kills the tools you need during an incident (health page, revoking a rig) and loses honest work in progress. A pause keeps those.
+3. **Store the switch where the history is.** The pause is a line in the same audit trail as everything else, so it survives restarts and you can later see exactly when it started and ended.
+4. **A pause shouldn't punish bystanders.** Any rule with a timer (here, "pick up your audit within 2 minutes") needs to know the clock stopped, or the pause shows up as someone else's fault.

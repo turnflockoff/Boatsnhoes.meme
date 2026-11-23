@@ -71,6 +71,7 @@ This roadmap separates implemented repository assets from proposed work. A check
 - [x] Count audits a worker was picked for but let go. *(`audit_follow_through` in the operator trust report: not picked up in time, lease ran out, result refused; health warning at `AUDIT_DROP_WARN`. Operator-only; no effect on points or audit rates. 9 tests, software only.)*
 - [x] List held results that need a person in one place. *(`/v1/operator/review`, `python -m app.review`: stuck disputes, three-way disagreements and failed hidden tests side by side, with which answers agree; read-only, no override. 13 tests, software only.)*
 - [x] Aim hidden known-answer tests at one rig or at a trust tier. *(`target_worker` / `target_tier` on `POST /v1/challenges`; only the named rig, or a random active rig in the tier, can take it; workers can't tell. Operator-only; changes checks, not points. 15 tests, software only.)*
+- [x] Pause the coordinator during an incident without losing in-flight work. *(`pause-v1`: `POST /v1/operator/pause` or `python -m app.incident pause`; resume only on the server; no new leases, jobs, tests or rigs; in-flight results still accepted; interrupted audit picks get a fresh window. Plan: [`INCIDENT-RESPONSE.md`](INCIDENT-RESPONSE.md). 20 tests, software only.)*
 - [ ] Post signed reports and ledger copies in a fixed public place. *(Owner decision.)*
 
 ## Track F — Two-GPU proof of concept

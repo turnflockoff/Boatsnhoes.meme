@@ -1,5 +1,5 @@
 # YOUR Personal To-Do List (things only you can do)
-**Version:** 0.5.28 | **Last updated:** 2026-11-23
+**Version:** 0.5.29 | **Last updated:** 2026-11-23
 Never share passwords, API keys, or recovery phrases with anyone, including Claude.
 
 ## This week
@@ -43,4 +43,4 @@ Never share passwords, API keys, or recovery phrases with anyone, including Clau
 - [x] Waitlist planned: Netlify Forms on /contribute
 - [ ] Prepare moderators and rules for community channels
 - [ ] Choose cold-storage method for casino funds
-- [ ] Write an incident plan: who you call and what you post if something breaks
+- [ ] Incident plan: a draft is in `docs/INCIDENT-RESPONSE.md`. Fill in the three **(owner)** blanks (a backup person, who checks before you resume, where you post notices) and read the pause section once so you know the commands before you need them

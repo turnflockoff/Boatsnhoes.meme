@@ -14,9 +14,9 @@ from fastapi.responses import JSONResponse
 from .config import Settings, get_settings
 from . import (audit_policy, client_address, key_rotation, observability, points, rate_limit, review, rewards,
                schemas, tasks, workers)
-from .ledger import Ledger
-from .models import (ChallengeCreate, EnrollmentCreate, JobCreate, JobEnvelope, ResultSubmission,
-                     WorkerRegistration)
+from .ledger import PAUSE_VERSION, CoordinatorPaused, Ledger
+from .models import (ChallengeCreate, EnrollmentCreate, JobCreate, JobEnvelope, PauseRequest,
+                     ResultSubmission, WorkerRegistration)
 from .security import sha256_text
 from .signing import ManifestSigner, SigningKeyError, fingerprint, verify_manifest
 
@@ -33,6 +33,9 @@ PRIVATE_EVENTS = {"audit_scheduled", "audit_match", "audit_mismatch", "audit_not
                   "tiebreak_majority", "tiebreak_unresolved", "tiebreak_not_run",
                   "auditor_assigned", "auditor_unassigned", "audit_assignment_expired",
                   "test_assigned", "test_unassigned", "test_assignment_expired"}
+
+# How long a worker is asked to wait while the coordinator is paused (`pause-v1`).
+PAUSED_RETRY_AFTER = 60
 
 
 class AuthRefused(HTTPException):
@@ -149,6 +152,13 @@ def create_app(settings: Settings | None = None,
                 "client_tag": limiter.tag(client_of(request))})
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail},
                             headers=exc.headers)
+
+    @app.exception_handler(CoordinatorPaused)
+    async def coordinator_paused(request: Request, exc: CoordinatorPaused) -> JSONResponse:
+        """`pause-v1`: a polite "not now", not an error. The reason stays operator-only."""
+        return JSONResponse(status_code=503, headers={"Retry-After": str(PAUSED_RETRY_AFTER)},
+                            content={"detail": "coordinator is paused by its operator; "
+                                     "try again later", "paused_since": exc.since})
 
     def envelope(job: dict[str, Any]) -> JobEnvelope:
         return JobEnvelope(**{k: job[k] for k in JobEnvelope.model_fields})
@@ -281,7 +291,11 @@ def create_app(settings: Settings | None = None,
                                                     "error_type": type(exc).__name__})
             return JSONResponse(status_code=503, content=body | {
                 "status": "down", "checks": {"database": "error", "signing_key": "loaded"}})
-        return body | {"status": "ok", "jobs": jobs,
+        # `pause-v1`: public, so rigs and a status page can tell "paused" from "down".
+        # Still 200: results for jobs leased before the pause are accepted. No reason here.
+        pause = ledger.pause_state()
+        return body | {"status": "paused" if pause else "ok", "accepting_work": pause is None,
+                       "paused_since": pause["since"] if pause else None, "jobs": jobs,
                        "checks": {"database": "ok", "signing_key": "loaded"}}
 
     @app.get("/v1/operator/health")
@@ -293,6 +307,12 @@ def create_app(settings: Settings | None = None,
         snap = ledger.health_snapshot(t)
         problems = ledger.check_consistency()
         warnings: list[str] = []
+        pause = ledger.pause_state()
+        if pause:
+            warnings.append(f"coordinator PAUSED since {pause['since']} ({t - pause['since']} s, "
+                            f"by {pause['by']}): no jobs handed out or created, no new rigs. "
+                            f"Reason: {pause['reason']}. Resume on the server with "
+                            "`python -m app.incident resume`")
         if snap["workers"]["active"] == 0:
             warnings.append(f"no active workers in the last {settings.auditor_active_seconds} "
                             "seconds")
@@ -363,6 +383,7 @@ def create_app(settings: Settings | None = None,
                 "review": queue["counts"] | {"points_held": queue["points_held"]},
                 "rate_limits": limits, "points": points.describe(settings.points_table),
                 "auditor_pick": settings.auditor_pick,
+                "pause": {"rule": PAUSE_VERSION, "paused": pause is not None} | (pause or {}),
                 "consistency_problems": problems, "warnings": warnings}
 
     @app.get("/v1/operator/review")
@@ -376,6 +397,23 @@ def create_app(settings: Settings | None = None,
         if needs_person_only:
             queue["cases"] = [c for c in queue["cases"] if c["needs_person"]]
         return queue
+
+    @app.post("/v1/operator/pause")
+    def operator_pause(body: PauseRequest,
+                       x_operator_token: str | None = Header(default=None)) -> dict[str, Any]:
+        """Operator-only emergency stop (`pause-v1`, app/incident.py): stop handing out and
+        creating work and enrolling rigs, at once, across restarts. There is deliberately
+        no resume endpoint: resuming needs `python -m app.incident resume` on the server,
+        so a leaked operator token can stop the coordinator but can't restart it."""
+        require_operator(x_operator_token)
+        try:
+            newly, since = ledger.pause(now(), body.reason, by="api")
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        # The reason can describe the incident: never logged.
+        log.warning("coordinator paused", extra={"by": "api", "already_paused": not newly})
+        return {"status": "paused", "since": since, "already_paused": not newly,
+                "resume": "on the server: python -m app.incident resume --note '...'"}
 
     @app.get("/v1/coordinator/key")
     def coordinator_key() -> dict[str, Any]:

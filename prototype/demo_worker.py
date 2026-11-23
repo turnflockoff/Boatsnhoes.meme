@@ -230,7 +230,7 @@ MAX_BACKOFF_SECONDS = 60
 
 
 def retry_after_seconds(response: httpx.Response) -> int:
-    """How long the coordinator asked us to wait after a 429 (at least 1 s, at most 60 s)."""
+    """How long the coordinator asked us to wait after a 429 or 503 (1 to 60 s)."""
     try:
         wait = int(response.headers.get("Retry-After", "5"))
     except ValueError:
@@ -290,6 +290,12 @@ def main() -> None:
                                          params={"worker_id": args.worker_id})
             if response.status_code == 404:
                 print("No queued jobs.")
+                return
+            if response.status_code == 503:
+                # `pause-v1`: the operator paused the coordinator (an incident or upkeep).
+                # Not an error; a long-running worker would wait Retry-After and ask again.
+                print(f"Coordinator is paused by its operator; try again in "
+                      f"{retry_after_seconds(response)} s.")
                 return
             response.raise_for_status()
             job = response.json()

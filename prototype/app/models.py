@@ -20,6 +20,12 @@ class EnrollmentCreate(BaseModel):
     ttl_seconds: int = Field(default=86400, ge=60, le=7 * 86400)
 
 
+class PauseRequest(BaseModel):
+    """Operator-only emergency pause (`pause-v1`, app/incident.py). The reason is kept in
+    the audit trail and shown to the operator; it is never public or logged."""
+    reason: str = Field(min_length=1, max_length=200)
+
+
 class JobCreate(BaseModel):
     task_type: str = Field(default="demo:sha256", pattern="^(demo:sha256|llm:generate)$")
     payload: str = Field(min_length=1, max_length=4096)

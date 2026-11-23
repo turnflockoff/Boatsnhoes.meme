@@ -186,6 +186,10 @@ class Rehearsal:
         if health.status_code != 200:
             raise RehearsalAbort(f"the operator token was refused ({health.status_code}); "
                                  "check OPERATOR_TOKEN")
+        if health.json().get("pause", {}).get("paused"):
+            # `pause-v1`: every claim would get 503 and the run would only report failures.
+            raise RehearsalAbort("the coordinator is paused (python -m app.incident status); "
+                                 "resume it first, or rehearse against a test coordinator")
 
     def setup(self) -> None:
         from demo_worker import check_manifest  # noqa: F401  (fail early if it's missing)

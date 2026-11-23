@@ -37,9 +37,18 @@ avoiding the previous pick when anyone else is eligible. Each accepted submissio
     outvoted          the tie-breaker agreed with the other side; this result stays held
     unresolved        the tie-breaker agreed with neither side (or with both); all held
     passed-challenge / failed-challenge   outcome of a hidden known-answer job
+
+Emergency pause (`pause-v1`, see app/incident.py). The operator can pause the coordinator
+during an incident. While paused: no job is leased, no job or hidden test is created, no
+enrollment code is issued or used, and no audit/tie-breaker is assigned (so nobody's
+"not picked up" count grows because of the pause). Results for jobs leased before the pause
+are still accepted, and revocation still works. The state is the latest
+`coordinator_paused` / `coordinator_resumed` event, so it survives a restart and is part of
+the audit trail. On resume, audit assignments the pause interrupted get a fresh window.
 """
 from __future__ import annotations
 
+import json
 import random
 import sqlite3
 from contextlib import closing, contextmanager
@@ -49,6 +58,19 @@ from typing import Any, Callable, Iterator
 from .audit_policy import AUDITOR_PICK_RULES, PASSED_STATUSES, STRIKE_STATUSES, auditor_pool
 
 FINAL_STATES = ("accepted", "rejected", "expired", "failed")
+
+# Emergency pause (`pause-v1`): the latest of these two events is the coordinator's state.
+PAUSE_VERSION = "pause-v1"
+PAUSE_EVENTS = ("coordinator_paused", "coordinator_resumed")
+MAX_PAUSE_REASON = 200
+
+
+class CoordinatorPaused(Exception):
+    """Refused because the operator paused the coordinator (see app/incident.py)."""
+
+    def __init__(self, since: int):
+        super().__init__("coordinator is paused")
+        self.since = since
 
 # Public settlement buckets. Collapsing the detailed audit status keeps the public ledger
 # from revealing which jobs were hidden challenges.
@@ -128,6 +150,7 @@ CREATE TABLE IF NOT EXISTS events (
     detail TEXT,
     at INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS events_by_event ON events(event, id);
 """
 
 
@@ -267,6 +290,7 @@ class Ledger:
     # random tokens, so a fast hash is enough: there is nothing to brute-force.
     def create_enrollment(self, code_hash: str, owner: str, now: int, expires_at: int) -> None:
         with self._tx() as db:
+            self._refuse_if_paused(db)
             db.execute("INSERT INTO enrollments(code_hash, owner, created_at, expires_at) "
                        "VALUES(?,?,?,?)", (code_hash, owner, now, expires_at))
             self._event(db, now, "enrollment_created", detail=f"owner={owner}")
@@ -275,8 +299,10 @@ class Ledger:
                       now: int) -> tuple[str, str | None]:
         """Use a one-time enrollment code to register `worker_id` with a new key.
         Returns (outcome, owner): outcome is enrolled, bad_code, taken or revoked.
-        A failed attempt never consumes the code."""
+        A failed attempt never consumes the code. Raises CoordinatorPaused while paused
+        (the code stays unused)."""
         with self._tx() as db:
+            self._refuse_if_paused(db)
             code = db.execute("SELECT * FROM enrollments WHERE code_hash=?",
                               (code_hash,)).fetchone()
             if code is None or code["used_at"] is not None or code["expires_at"] <= now:
@@ -359,6 +385,7 @@ class Ledger:
         if target is not None and (job_kind != "challenge" or parse_target(target) is None):
             raise ValueError("only hidden test jobs can have a target")
         with self._tx() as db:
+            self._refuse_if_paused(db)
             self._insert_job(db, fields, signature, max_attempts, now, job_kind,
                              expected_result=expected_result, target=target)
             if target is not None:
@@ -396,6 +423,91 @@ class Ledger:
             if cur.rowcount:
                 self._event(db, now, "job_resigned", job_id=job_id, detail=detail)
             return bool(cur.rowcount)
+
+    # -- emergency pause (`pause-v1`, app/incident.py) ---------------------------------
+    @staticmethod
+    def _pause_row(db: sqlite3.Connection) -> sqlite3.Row | None:
+        """The `coordinator_paused` event in force, or None if running normally."""
+        row = db.execute(
+            f"SELECT id, event, detail, at FROM events WHERE event IN "
+            f"({','.join('?' * len(PAUSE_EVENTS))}) ORDER BY id DESC LIMIT 1",
+            PAUSE_EVENTS).fetchone()
+        return row if row is not None and row["event"] == "coordinator_paused" else None
+
+    def _refuse_if_paused(self, db: sqlite3.Connection) -> None:
+        row = self._pause_row(db)
+        if row is not None:
+            raise CoordinatorPaused(int(row["at"]))
+
+    def pause_state(self) -> dict[str, Any] | None:
+        """None while running; otherwise when, why and how it was paused (operator-only:
+        the reason can describe the incident)."""
+        with closing(self._connect()) as db:
+            row = self._pause_row(db)
+        if row is None:
+            return None
+        detail = json.loads(row["detail"] or "{}")
+        return {"since": int(row["at"]), "reason": detail.get("reason", ""),
+                "by": detail.get("by", "unknown")}
+
+    def pause(self, now: int, reason: str, by: str) -> tuple[bool, int]:
+        """Pause the coordinator. Returns (newly_paused, since). Pausing twice keeps the
+        first time and reason, so a second alarm can't hide when the incident started."""
+        reason = " ".join(reason.split())
+        if not reason or len(reason) > MAX_PAUSE_REASON or not reason.isprintable():
+            raise ValueError(f"reason must be 1-{MAX_PAUSE_REASON} printable characters")
+        with self._tx() as db:
+            row = self._pause_row(db)
+            if row is not None:
+                return False, int(row["at"])
+            self._event(db, now, "coordinator_paused",
+                        detail=json.dumps({"reason": reason, "by": by}, sort_keys=True))
+            return True, now
+
+    def resume(self, now: int, note: str, by: str) -> dict[str, Any] | None:
+        """Resume. Returns None if it wasn't paused. Audit/tie-breaker/aimed-test assignments
+        that were still live when the pause began, and whose pick hasn't taken the job since,
+        get a fresh `assign_seconds` window (never a shorter one), so the pause isn't counted
+        against those rigs as "not picked up"."""
+        note = " ".join(note.split())
+        if len(note) > MAX_PAUSE_REASON or not note.isprintable():
+            raise ValueError(f"note must be at most {MAX_PAUSE_REASON} printable characters")
+        with self._tx() as db:
+            row = self._pause_row(db)
+            if row is None:
+                return None
+            paused_at = int(row["at"])
+            extended = 0
+            for job in db.execute(
+                    "SELECT job_id, job_kind, target, assigned_worker FROM jobs "
+                    "WHERE status='queued' AND assigned_worker IS NOT NULL "
+                    "AND assigned_until IS NOT NULL AND assigned_until>?",
+                    (paused_at,)).fetchall():
+                kind = "challenge" if job["job_kind"] == "challenge" and job["target"] else "audit"
+                if self._leased_since_assignment(db, job["job_id"], job["assigned_worker"],
+                                                 _EVENTS[kind][0]):
+                    continue  # its pick already had the job; its turn is over
+                cur = db.execute("UPDATE jobs SET assigned_until=MAX(assigned_until, ?) "
+                                 "WHERE job_id=? AND assigned_until<?",
+                                 (now + self.assign_seconds, job["job_id"],
+                                  now + self.assign_seconds))
+                extended += cur.rowcount
+            self._event(db, now, "coordinator_resumed", detail=json.dumps(
+                {"note": note, "by": by, "paused_seconds": now - paused_at,
+                 "assignments_extended": extended}, sort_keys=True))
+            # Hand out anything queued during the pause that still has no pick.
+            self._assign_auditors(db, now)
+            return {"paused_since": paused_at, "paused_seconds": now - paused_at,
+                    "assignments_extended": extended}
+
+    def pause_history(self) -> list[dict[str, Any]]:
+        """Every pause and resume, oldest first (operator-only: details can name the incident)."""
+        with closing(self._connect()) as db:
+            rows = db.execute(
+                f"SELECT event, detail, at FROM events WHERE event IN "
+                f"({','.join('?' * len(PAUSE_EVENTS))}) ORDER BY id", PAUSE_EVENTS).fetchall()
+        return [{"event": r["event"], "at": int(r["at"])} | json.loads(r["detail"] or "{}")
+                for r in rows]
 
     def note(self, now: int, event: str, job_id: str | None = None,
              worker_id: str | None = None, detail: str | None = None) -> None:
@@ -504,7 +616,10 @@ class Ledger:
         assignment to one eligible worker picked at random. A live assignment is one that
         hasn't run out and whose worker isn't revoked. The previous pick is avoided when
         anyone else is eligible. A test aimed at one named worker stays with it until the
-        job's own deadline."""
+        job's own deadline. Does nothing while the coordinator is paused: a pick couldn't
+        claim its job, and would be counted as not picking it up."""
+        if self._pause_row(db) is not None:
+            return
         kinds = ",".join("?" * len(ASSIGNED_KINDS))
         for row in db.execute(
             f"SELECT j.job_id, j.job_kind, j.target, j.expires_at, j.assigned_worker, "
@@ -574,36 +689,45 @@ class Ledger:
     def claim_next(self, worker_id: str, lease_seconds: int, now: int) -> dict[str, Any] | None:
         """Atomically lease the oldest queued job `worker_id` may take, or return None.
         Work and challenge jobs are first-come; audits, tie-breakers and aimed hidden tests
-        only go to the worker they were assigned to (see _assign_auditors)."""
+        only go to the worker they were assigned to (see _assign_auditors).
+        Raises CoordinatorPaused while paused; the worker still counts as seen, so rigs
+        that keep asking during a pause stay active for audit picks after it."""
         with self._tx() as db:
-            self._sweep(db, now)
+            pause = self._pause_row(db)
             db.execute("UPDATE workers SET last_seen_at=? WHERE worker_id=?", (now, worker_id))
-            self._assign_auditors(db, now)
-            # An excluded worker's owner is excluded too, so one person's rigs never
-            # audit or break ties on each other's results.
-            owner = db.execute("SELECT owner FROM workers WHERE worker_id=?",
-                               (worker_id,)).fetchone()
-            row = db.execute(
-                "SELECT job_id FROM jobs j WHERE status='queued' AND NOT EXISTS ("
-                "SELECT 1 FROM job_exclusions x LEFT JOIN workers w ON w.worker_id=x.worker_id "
-                "WHERE x.job_id=j.job_id AND (x.worker_id=? OR "
-                "(w.owner IS NOT NULL AND w.owner=?))) "
-                f"AND ((j.job_kind NOT IN ({','.join('?' * len(ASSIGNED_KINDS))}) "
-                "AND j.target IS NULL) OR j.assigned_worker=?) "
-                "ORDER BY created_at, job_id LIMIT 1",
-                (worker_id, owner["owner"] if owner else None, *ASSIGNED_KINDS, worker_id)
-            ).fetchone()
-            if row is None:
-                return None
-            lease_until = min(now + lease_seconds, self._job_deadline(db, row["job_id"]))
-            db.execute(
-                "UPDATE jobs SET status='leased', worker_id=?, lease_expires_at=?, "
-                "attempts=attempts+1, updated_at=? WHERE job_id=? AND status='queued'",
-                (worker_id, lease_until, now, row["job_id"]),
-            )
-            self._event(db, now, "job_leased", row["job_id"], worker_id)
-            job = db.execute("SELECT * FROM jobs WHERE job_id=?", (row["job_id"],)).fetchone()
-            return dict(job)
+            if pause is None:
+                return self._claim(db, worker_id, lease_seconds, now)
+        raise CoordinatorPaused(int(pause["at"]))
+
+    def _claim(self, db: sqlite3.Connection, worker_id: str, lease_seconds: int,
+               now: int) -> dict[str, Any] | None:
+        self._sweep(db, now)
+        self._assign_auditors(db, now)
+        # An excluded worker's owner is excluded too, so one person's rigs never
+        # audit or break ties on each other's results.
+        owner = db.execute("SELECT owner FROM workers WHERE worker_id=?",
+                           (worker_id,)).fetchone()
+        row = db.execute(
+            "SELECT job_id FROM jobs j WHERE status='queued' AND NOT EXISTS ("
+            "SELECT 1 FROM job_exclusions x LEFT JOIN workers w ON w.worker_id=x.worker_id "
+            "WHERE x.job_id=j.job_id AND (x.worker_id=? OR "
+            "(w.owner IS NOT NULL AND w.owner=?))) "
+            f"AND ((j.job_kind NOT IN ({','.join('?' * len(ASSIGNED_KINDS))}) "
+            "AND j.target IS NULL) OR j.assigned_worker=?) "
+            "ORDER BY created_at, job_id LIMIT 1",
+            (worker_id, owner["owner"] if owner else None, *ASSIGNED_KINDS, worker_id)
+        ).fetchone()
+        if row is None:
+            return None
+        lease_until = min(now + lease_seconds, self._job_deadline(db, row["job_id"]))
+        db.execute(
+            "UPDATE jobs SET status='leased', worker_id=?, lease_expires_at=?, "
+            "attempts=attempts+1, updated_at=? WHERE job_id=? AND status='queued'",
+            (worker_id, lease_until, now, row["job_id"]),
+        )
+        self._event(db, now, "job_leased", row["job_id"], worker_id)
+        job = db.execute("SELECT * FROM jobs WHERE job_id=?", (row["job_id"],)).fetchone()
+        return dict(job)
 
     @staticmethod
     def _job_deadline(db: sqlite3.Connection, job_id: str) -> int:

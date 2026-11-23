@@ -208,6 +208,21 @@ Tested in software only (0.5.12).
 
 **Limits:** logs go to stderr only (no rotation or shipping yet; use your service manager), and no metrics endpoint for graphs. The waiting-auditor warning is exactly what your two-card test will show if both RX 470s share one owner label.
 
+## Implemented: emergency pause for incidents (0.5.29, `pause-v1`)
+
+If something looks wrong (a leaked worker key or operator token, a suspected copy of the signing key, a bug paying the wrong points), the first move is "stop new work while I look". Killing the server does that badly: in-flight results are lost, revocation and the health page go dark, and the next restart quietly hands out work again.
+
+- **Pause:** `POST /v1/operator/pause` with `{"reason": "..."}` (operator token) or `python -m app.incident pause --reason "..."` on the server. **Resume:** only `python -m app.incident resume --note "what you checked or fixed"` on the server. There is no resume endpoint, so a leaked operator token can stop the coordinator but never restart it. `python -m app.incident status [--json]` shows the state and past pauses.
+- **While paused:** no job is leased (workers get `503` with `Retry-After: 60` and still count as seen, so they stay eligible for audit picks afterwards); no job or hidden test is created, operator included; no enrollment code is issued or used (a refused code stays unused); no audit or tie-breaker is assigned.
+- **Still working while paused:** results for jobs leased before the pause are accepted (an audit they trigger waits, unassigned, until resume), revoking a rig, and a known rig updating its capabilities.
+- **Fair to rigs:** an audit assignment the pause interrupted gets a fresh `AUDIT_ASSIGN_SECONDS` window on resume, so a pause never counts as "not picked up" in audit follow-through. A pick that had already taken its job doesn't get a second turn. Jobs whose own deadline passes during a long pause still expire.
+- **Visible:** public `/health` says `"status": "paused"`, `"accepting_work": false` and `paused_since` (still HTTP 200, no reason); `/v1/operator/health` shows the reason, who paused (`api`/`cli`) and a warning. The reason is never logged.
+- **Durable and audited:** the state is the latest `coordinator_paused` / `coordinator_resumed` event, so it survives a restart and sits in the audit trail. Pausing twice keeps the first time and reason. Ledger copies keep that a pause happened, never the reason or note. The rehearsal tool refuses to run against a paused coordinator, the demo worker exits politely on `503`, and `python -m app.workers enroll` refuses codes while paused.
+- 20 tests (454 in total). I switched off 17 rules one at a time (refusing claims, job creation, codes, registration; skipping assignment; the fresh window; no second turn; marking rigs seen; keeping the first reason; reason checks; no public reason; the operator warning; `Retry-After`; the rehearsal, workers-CLI, missing-database and empty-note checks) and a test failed every time. Also run against a real uvicorn coordinator: pause over HTTP, `503` on job creation, CLI status and resume, reason absent from the log.
+- The full plan around it (who does what, playbooks per incident): [`docs/INCIDENT-RESPONSE.md`](../docs/INCIDENT-RESPONSE.md).
+
+**Limits:** it doesn't stop a rig finishing a job it already has, revoke anyone, rotate keys or touch the website. One pause state for the whole coordinator (no per-task-type pause).
+
 ## Implemented: fixed points per task type (0.5.22)
 
 Tested in software only. Simulated off-chain points only.
@@ -314,7 +329,8 @@ A GitHub Actions workflow runs these tests on pushes and pull requests affecting
 - `GET /v1/workers/{worker_id}/trust` — operator only: how a worker's results held up, plus its audit tier (`new`/`established`/`suspect`), the re-check rate that applies to it, `checks_passed` and `strikes`.
 - `GET /v1/rewards/report?since=&until=&sign=` — operator only: simulated reward report for a period; `sign=true` adds the coordinator's signature (closed periods only).
 - `python -m app.ledger_copy export|info` — CLI only: redacted ledger copy for a closed, settled period (see above).
-- `GET /health` — public health check: `200` ok / `503` down, uptime, job counts, and the job/receipt schema versions spoken.
+- `GET /health` — public health check: `200` ok or paused / `503` down, `accepting_work`, `paused_since`, uptime, job counts, and the job/receipt schema versions spoken.
+- `POST /v1/operator/pause` — operator only: emergency pause (`pause-v1`). Resume only on the server: `python -m app.incident resume --note ...`.
 - `GET /v1/operator/health` — operator only: workers, queue, waiting audits, review-queue counts, recent events, consistency problems and warnings.
 - `GET /v1/operator/review?needs_person_only=` — operator only: held cases with every answer side by side and whether a person needs to look (read-only). CLI: `python -m app.review`.
 
