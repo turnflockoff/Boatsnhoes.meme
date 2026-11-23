@@ -1,5 +1,5 @@
 # YOUR Personal To-Do List (things only you can do)
-**Version:** 0.5.45 | **Last updated:** 2026-11-23
+**Version:** 0.5.46 | **Last updated:** 2026-11-23
 Never share passwords, API keys, or recovery phrases with anyone, including Claude.
 
 ## This week
@@ -13,6 +13,7 @@ Never share passwords, API keys, or recovery phrases with anyone, including Clau
 - [ ] After merging the drafts PR: on GitHub, open **Actions > site-check > Run workflow** (keep the address `https://boatsnhoes.meme`). It checks the live site's security headers, the http→https and www redirects, that /docs/ etc. stay hidden, and the share image. Green = done; red = open the run and read the FAIL lines (or tell Claude). Nothing is changed by running it
 - [ ] Optional: add a canonical link (`<link rel="canonical" href="https://boatsnhoes.meme/">`) to the homepage's `<head>` so shares always show the main address. It's invisible on the page, but it's your homepage, so I didn't touch it; say the word if you want it added
 - [ ] Upload mine.html, tokenomics.html, stay-safe.html (not on GitHub yet)
+- [ ] Optional: on GitHub, **Settings > Code security > Dependabot alerts > Enable**. GitHub then emails you if a package in `prototype/requirements.lock` gets a known security hole. Alerts only; it changes nothing by itself (leave "Dependabot security updates" off unless you want it opening pull requests)
 - [ ] Turn on hardware-key or authenticator 2FA for Netlify, GitHub, your registrar, email, and every social account
 - [ ] Lock the domain at the registrar and enable auto-renew
 - [ ] Registrar: enable DNSSEC if supported. (Cloudflare WAF/Bot Fight only if you later put Cloudflare DNS in front)

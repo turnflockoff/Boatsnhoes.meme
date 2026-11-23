@@ -1,5 +1,5 @@
 # BOATS N HOES: Project Task List (Claude + dev work)
-**Version:** 0.5.45 | **Last updated:** 2026-11-23 | Personal to-dos live in USER_TODO.md.
+**Version:** 0.5.46 | **Last updated:** 2026-11-23 | Personal to-dos live in USER_TODO.md.
 
 ## Phase 0: Foundation
 - [x] Buy boatsnhoes.meme
@@ -88,6 +88,9 @@
 - [x] `_headers` added to repo; CSP verified locally against all pages
 - [x] Build a checker for the live headers, HTTPS and www redirects, hidden folders and share image *(`site-check-v1`, 0.5.45: `python -m app.site_check live`, or one click in GitHub: Actions > site-check > Run workflow. 37 tests against a local server and a fake site; not yet run against boatsnhoes.meme, which this sandbox can't reach)*
 - [ ] Verify `_headers` on the live Netlify URL (run the site-check workflow once after merging; owner click)
+- [x] Pin every prototype dependency to exact, sha256-checked files and review each license *(`deps-check-v1`, 0.5.46: `requirements.lock` with a 7-day cooldown, `licenses.json`, `python -m app.deps_check lock|installed`; CI installs with `--require-hashes` and fails on a new package or version until its license is re-read; 764 tests)*
+- [ ] Scan locked packages for known vulnerabilities (e.g. pip-audit or GitHub Dependabot alerts; Dependabot is a repo setting, owner click)
+- [ ] Pin the CI workflow's GitHub Actions to commit hashes instead of version tags
 - [ ] Signed miner releases with checksums (multi-signer)
 - [ ] Many seed nodes in different regions
 - [ ] Node peer limits and rate limits

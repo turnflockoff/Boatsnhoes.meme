@@ -754,3 +754,26 @@
 2. **A CSP fails quietly.** If the policy forbids something a page uses, the browser just doesn't load it and the page looks broken with no error for the visitor. Checking every page against the policy before deploy catches that early.
 3. **Don't follow the redirect when testing the redirect.** To know that `http://` really sends people to `https://`, you have to look at the first answer, not where you end up, so the checker turns redirect-following off.
 4. **"Starts with" is a classic security bug.** `https://boatsnhoes.meme.evil.com` starts with `https://boatsnhoes.meme`. Checking for the trailing `/` (`https://boatsnhoes.meme/`) is what makes the match exact.
+
+## 2026-11-23 (18:25 UTC): Every installed package pinned, hash-checked and license-reviewed (0.5.46)
+
+**Why this, why now.** PR #5 had green CI and no conflicts, and the GPU prototype's remaining items need the rig or your decisions. The implementation prompt's security rules still had one open line: "Pin dependencies where practical and review licenses." Until now, `pip install -r requirements.txt` took whatever versions inside a range were newest that day, so two installs a week apart could run different code, and nobody had written down what licenses we ship.
+
+**Shipped**
+- **`prototype/requirements.lock`.** All 31 packages the prototype installs (the 8 we ask for plus the 23 they pull in) at one exact version each, with the sha256 fingerprint of every file. Installing with `pip install --require-hashes -r requirements.lock` refuses any file whose fingerprint doesn't match. Made with a **7-day cooldown**: only releases at least a week old, because a hijacked package is usually caught within days of being published.
+- **`prototype/licenses.json`.** Each package's license at its locked version, a plain sentence on why it's there, and the allowed list (MIT, MIT-0, BSD, Apache-2.0, ISC, PSF-2.0, MPL-2.0). Everything is permissive; the only MPL-2.0 one is `certifi` (the list of trusted HTTPS certificates), which we use unchanged, so it asks nothing of us.
+- **`python -m app.deps_check lock`** (reads files only): every package pinned with `==` and hashed; no line that points pip at another package index, a web address or a local folder; every package in `requirements.txt` is in the lock inside its allowed range; and `licenses.json` matches the lock version for version. A new package or a version bump **fails CI until someone reads its license** and updates the entry.
+- **`python -m app.deps_check installed`**: the environment it runs in has exactly the locked versions, and each package's own license metadata says the same thing as our review.
+- **CI** now installs from the lock with `--require-hashes` and runs both checks before the tests. The quick start in `prototype/README.md` uses the lock too. I added `packaging` to `requirements.txt` because the checker uses it directly.
+- **Proof.**
+  - 71 new tests, 764 total, all passing on Python 3.11 (what CI uses) and 3.12 (Ubuntu 24.04's default, likely your rig's), both installed from the lock.
+  - I broke the checker 18 ways on purpose (hash not required, `>=` accepted, other indexes allowed, OR read as AND and the reverse, license exceptions accepted, stale or outdated license entries ignored, Windows-only packages required everywhere, wrong versions ignored, files overwritten, duplicates and web addresses allowed, uppercase hashes accepted, ...). All 18 were caught.
+  - **The real thing:** I changed one package's fingerprints in a copy of the lock and asked pip to install it. pip stopped with "THESE PACKAGES DO NOT MATCH THE HASHES ... someone may have tampered with them" and installed nothing.
+  - A fresh clone, following the quick start word for word, installed from the lock, made a signing key, started the coordinator (`/health` said ok) and made an enrollment code, and left no untracked files behind.
+- **Honest limits:** a matching hash proves you got the same files as the day the lock was made, not that those files are safe. No scan for known security holes runs yet (I tried to fetch a scanner on the fly and this sandbox's safety check refused it; turning on Dependabot alerts is an optional one-click item in USER_TODO). The GitHub Actions in CI are pinned by version tag, not by commit (new TASKS item). Updating the lock needs a tool called `uv` (commands at the top of the file). Nothing here touches the GPUs or the website.
+
+**What you learned**
+1. **A version range is a promise about the future you can't check.** `fastapi>=0.110,<1` means "whatever's newest that day". A lock file turns that into one exact, repeatable list, so the code you tested is the code you run.
+2. **A hash is a fingerprint for a file.** Change one byte of a download and its sha256 is completely different. Writing the fingerprint down in advance means a swapped file is caught *before* it runs, not after.
+3. **Waiting a week is a cheap defense.** Most hijacked packages are found and pulled within days. Only accepting releases that have been out for 7 days lets the rest of the world find them first.
+4. **Licenses are part of what you ship.** Every package comes with rules. Writing each one down, and making CI fail when a new package arrives unread, means a restrictive license can't sneak in through a dependency of a dependency.
