@@ -600,3 +600,19 @@
 2. **Punish what was proven, not what's merely in doubt.** A dispute with no clear winner isn't proof anyone cheated, so it costs nothing; only a failed known-answer test or losing a 2-against-1 vote counts.
 3. **Version your rules so old results stay checkable.** Because each report names its scoring rule inside the signature, last month's v1 reports still verify after v2 exists.
 4. **Fail loudly at start-up.** A misspelled setting that silently falls back to the old rule is worse than a coordinator that refuses to start and tells you why.
+
+## 2026-11-23 (09:20 UTC): Busy rigs are no longer counted as dodging audits (0.5.37)
+
+**Shipped**
+- **The bug.** When a rig is picked to re-check someone's work (an audit), it gets 2 minutes (`AUDIT_ASSIGN_SECONDS`) to pick it up, or the coordinator writes it down as a "drop" and hands the audit to someone else. But jobs go out oldest first. If the rig was busy with jobs that were queued *before* the audit, it kept getting those older jobs and the 2 minutes ran out before it ever reached the audit. It never saw the audit and had no say in it, yet it was counted as dropping it, and after 3 of those the operator health page warned about it as if it might be dodging checks. On a busy queue that would have flagged every honest rig.
+- **The fix (`follow-through-v2`).** The trust report's `audit_follow_through` now has a new count, `not_reached`: the pick's window ran out *while it was taking other jobs*. That is not a drop and doesn't count toward the warning. `not_claimed` (which does count) now means the rig went silent: it took no job at all in that window.
+- **Only the window counts.** Work a rig took *before* it was picked doesn't excuse going silent afterwards (tested). And because every job hand-out runs the "has the window run out?" check first, a rig that comes back late can't make an old silence look busy.
+- **What didn't change:** which job a rig gets, points, audit rates. I deliberately did *not* make audits jump the queue: a rig can see roughly when a job was created, so a brand-new job arriving while older ones wait would be a hint that it's a check.
+- Tests went from 559 to 562, all passing (3 new; 2 older tests updated for the new field). The first new test failed before the fix with exactly the bug (`not_claimed: 1, dropped: 1` for a rig that was working the whole time). I then broke the fix 4 ways (forget the start of the window, forget the end, never count busy, drop the new field) and a test failed every time. Software only; nothing here touches the GPUs.
+- **Honest limits:** it's still a lifetime count and still a warning only. A rig that went offline mid-job in its window counts as busy for that one pick. What repeated drops should *do* is still your call (on your to-do list).
+
+**What you learned**
+1. **A rule can blame the wrong person when the system, not the user, caused the miss.** The rig didn't skip the audit; the queue order kept it out of reach. Before flagging someone, check whether they could have done otherwise.
+2. **Write the failing test first.** Reproducing the bug as a test before touching the code proves the bug was real and that the fix is what made it go away.
+3. **The obvious fix can create a new leak.** "Just give audits priority" would have fixed the count, but it would also tell a rig "this fresh job skipped the queue, so it's probably a check." Fixing the measurement instead of the behaviour avoided that.
+4. **Order of events is evidence.** Because every hand-out checks the clock first, the order of entries in the audit trail is enough to tell "busy" from "silent" without trusting anyone's timestamps.

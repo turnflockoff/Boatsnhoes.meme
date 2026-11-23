@@ -354,7 +354,8 @@ def create_app(settings: Settings | None = None,
             warnings.append(f"{len(droppers)} worker(s) dropped {settings.audit_drop_warn} or more "
                             f"assigned audit/tie-breaker job(s): {', '.join(droppers)}. Often just "
                             "a rig that went offline, but a rig skipping checks it doesn't like "
-                            "looks the same; see audit_follow_through in /v1/workers/<id>/trust")
+                            "looks the same; see audit_follow_through in /v1/workers/<id>/trust "
+                            "(rigs busy with older jobs are not counted: not_reached)")
         # Threat model #7: held results the software can't settle on its own.
         queue = review.review_queue(ledger, t)
         if queue["counts"]["needs_review"]:

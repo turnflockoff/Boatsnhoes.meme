@@ -216,6 +216,17 @@ MIGRATIONS = {
 # Job kinds that go to a randomly chosen worker instead of whoever asks first.
 ASSIGNED_KINDS = ("audit", "tiebreak")
 
+# `follow-through-v2` (threat model #4 follow-up): an audit/tie-breaker pick whose window ran
+# out (event `e`) while the pick was taking other jobs. Busy means it leased some other job
+# after it was handed this one (its latest `auditor_assigned` for the job before `e`) and
+# before the window was closed. Every lease runs the expiry check first, so a lease written
+# after the window ran out always comes after `e` and can't make a silent rig look busy.
+_BUSY_IN_WINDOW = (
+    "EXISTS (SELECT 1 FROM events l WHERE l.worker_id=e.worker_id "
+    "AND l.event='job_leased' AND l.id<e.id AND l.id>(SELECT MAX(a.id) FROM events a "
+    "WHERE a.job_id=e.job_id AND a.worker_id=e.worker_id AND a.event='auditor_assigned' "
+    "AND a.id<e.id))")
+
 # Aimed hidden tests (threat model #1 and #8): a challenge with a `target` goes only to the
 # worker it names, or to a random active worker in the named trust tier, instead of to
 # whoever asks first. Their private events have their own names, so they never count
@@ -1097,7 +1108,12 @@ class Ledger:
 
             assigned      times it was picked for one (a re-pick of the same job counts again)
             completed     audit/tie-breaker results it got accepted
-            not_claimed   picks it never took up before `assign_seconds` ran out
+            not_claimed   picks it never took up before `assign_seconds` ran out, and it
+                          took no other job in that window either (silent)
+            not_reached   picks it never took up because it was busy: it took other jobs
+                          in that window. Jobs go out oldest first, so work queued before
+                          the audit comes first; the rig never saw the audit and had no
+                          say in it (`follow-through-v2`). Not a drop.
             lease_expired ones it took, then went silent until its lease ran out
             refused       ones whose result the coordinator rejected (e.g. empty output)
             dropped       not_claimed + lease_expired + refused
@@ -1113,7 +1129,11 @@ class Ledger:
             f"(SELECT COUNT(*) FROM submissions s JOIN jobs j USING(job_id) "
             f" WHERE s.worker_id=w.worker_id AND j.job_kind IN ({kinds})) AS completed, "
             "(SELECT COUNT(*) FROM events e WHERE e.worker_id=w.worker_id "
-            " AND e.event='audit_assignment_expired') AS not_claimed, "
+            " AND e.event='audit_assignment_expired' AND NOT " + _BUSY_IN_WINDOW + ") "
+            " AS not_claimed, "
+            "(SELECT COUNT(*) FROM events e WHERE e.worker_id=w.worker_id "
+            " AND e.event='audit_assignment_expired' AND " + _BUSY_IN_WINDOW + ") "
+            " AS not_reached, "
             f"(SELECT COUNT(*) FROM events e JOIN jobs j USING(job_id) "
             f" WHERE e.worker_id=w.worker_id AND j.job_kind IN ({kinds}) "
             f" AND e.event IN ('lease_timeout_requeued','lease_timeout_failed')) "
@@ -1129,14 +1149,14 @@ class Ledger:
             rows = {}
             for r in db.execute(sql, args).fetchall():
                 counts = {k: int(r[k]) for k in ("assigned", "completed", "not_claimed",
-                                                  "lease_expired", "refused")}
+                                                  "not_reached", "lease_expired", "refused")}
                 counts["dropped"] = (counts["not_claimed"] + counts["lease_expired"]
                                      + counts["refused"])
                 rows[r["worker_id"]] = counts
         if worker_id:
             return rows.get(worker_id, dict.fromkeys(
-                ("assigned", "completed", "not_claimed", "lease_expired", "refused",
-                 "dropped"), 0))
+                ("assigned", "completed", "not_claimed", "not_reached", "lease_expired",
+                 "refused", "dropped"), 0))
         return rows
 
     def reward_rows(self, since: int, until: int) -> list[dict[str, Any]]:

@@ -32,9 +32,9 @@ def test_unclaimed_assignment_counts_against_the_silent_pick_only(tmp_path: Path
     audit = claim(client, second).json()
     assert submit(client, audit["job_id"], second, "The Salty Hoe").status_code == 200
     assert follow(client, first) == {"assigned": 1, "completed": 0, "not_claimed": 1,
-                                     "lease_expired": 0, "refused": 0, "dropped": 1}
+                                     "not_reached": 0, "lease_expired": 0, "refused": 0, "dropped": 1}
     assert follow(client, second) == {"assigned": 1, "completed": 1, "not_claimed": 0,
-                                      "lease_expired": 0, "refused": 0, "dropped": 0}
+                                      "not_reached": 0, "lease_expired": 0, "refused": 0, "dropped": 0}
     assert follow(client, "wk-a")["assigned"] == 0  # the original worker is never a pick
     assert ledger.check_consistency() == []
 
@@ -76,7 +76,7 @@ def test_picked_again_for_the_same_audit_is_judged_on_the_latest_pick(tmp_path: 
     audit = claim(client, "wk-b").json()  # re-picked (nobody else) and claims this time
     assert submit(client, audit["job_id"], "wk-b", "The Salty Hoe").status_code == 200
     assert follow(client, "wk-b") == {"assigned": 2, "completed": 1, "not_claimed": 1,
-                                      "lease_expired": 0, "refused": 0, "dropped": 1}
+                                      "not_reached": 0, "lease_expired": 0, "refused": 0, "dropped": 1}
 
 
 def test_revoked_pick_is_not_counted_as_a_drop(tmp_path: Path) -> None:
@@ -139,3 +139,70 @@ def test_old_lease_does_not_excuse_a_later_unclaimed_pick(tmp_path: Path) -> Non
     f = follow(client, "wk-b")
     # Picked a third time (still its turn), so assigned is 3; two drops so far.
     assert (f["assigned"], f["lease_expired"], f["not_claimed"], f["dropped"]) == (3, 1, 1, 2)
+
+
+def queue_backlog(client, clock, n: int) -> None:
+    for i in range(n):
+        job = {"task_type": "llm:generate", "payload": llm_payload(f"Backlog boat {i}.")}
+        assert client.post("/v1/jobs", json=job).status_code == 200
+    clock.t += 1  # the backlog is strictly older than what comes next
+
+
+def test_busy_pick_working_through_older_jobs_is_not_counted_as_a_drop(tmp_path: Path) -> None:
+    """Jobs are handed out oldest first, so a pick that is online and busy with work queued
+    before the audit can't reach the audit before its window runs out. It never saw the
+    audit and had no say in it: `not_reached`, not a drop."""
+    client, clock, ledger = make(tmp_path, ("wk-a", "wk-b"), assign=60)
+    queue_backlog(client, clock, 4)
+    first = claim(client, "wk-a").json()
+    assert submit(client, first["job_id"], "wk-a", "The Salty Hoe").status_code == 200
+    assert assigned(ledger, first["job_id"]) == "wk-b"  # the only eligible auditor
+    audits = {a["job_id"] for a in ledger.audits() if a["audit_of"] == first["job_id"]}
+    took = []
+    for _ in range(4):  # wk-b keeps working: older backlog first, then the audit
+        job = claim(client, "wk-b").json()
+        took.append(job["job_id"])
+        clock.t += 25  # inside the 30s lease
+        assert submit(client, job["job_id"], "wk-b", "The Salty Hoe").status_code == 200
+    assert took[-1] in audits and not set(took[:-1]) & audits
+    f = follow(client, "wk-b")
+    assert f == {"assigned": 2, "completed": 1, "not_claimed": 0, "not_reached": 1,
+                 "lease_expired": 0, "refused": 0, "dropped": 0}
+    # wk-a never came back for the audits it was handed: those still count.
+    fa = follow(client, "wk-a")
+    assert fa["not_claimed"] >= 1 and fa["not_reached"] == 0
+    assert fa["dropped"] == fa["not_claimed"]
+    assert ledger.check_consistency() == []
+
+
+def test_work_taken_before_the_pick_does_not_make_it_busy(tmp_path: Path) -> None:
+    """Only jobs leased inside the assignment window count as being busy."""
+    client, clock, ledger = make(tmp_path, ("wk-a", "wk-b"), assign=60)
+    queue_backlog(client, clock, 2)
+    assert claim(client, "wk-b").status_code == 200  # takes backlog 0, then goes silent
+    job = claim(client, "wk-a").json()
+    assert submit(client, job["job_id"], "wk-a", "The Salty Hoe").status_code == 200
+    assert assigned(ledger, job["job_id"]) == "wk-b"
+    clock.t += 61
+    claim(client, "wk-a")  # triggers the re-assignment check
+    f = follow(client, "wk-b")
+    assert (f["not_claimed"], f["not_reached"], f["dropped"]) == (1, 0, 1)
+
+
+def test_busy_misses_do_not_trigger_the_health_warning(tmp_path: Path) -> None:
+    # Warn at the very first drop.
+    client, clock, ledger = make(tmp_path, ("wk-a", "wk-b"), assign=60, audit_drop_warn=1)
+    queue_backlog(client, clock, 4)
+    first = claim(client, "wk-a").json()
+    assert submit(client, first["job_id"], "wk-a", "The Salty Hoe").status_code == 200
+    for _ in range(4):  # same as above: busy with older work, then the audit
+        job = claim(client, "wk-b").json()
+        clock.t += 25
+        assert submit(client, job["job_id"], "wk-b", "The Salty Hoe").status_code == 200
+    f = follow(client, "wk-b")
+    assert (f["not_reached"], f["dropped"]) == (1, 0)
+    health = client.get("/v1/operator/health", headers=OP).json()
+    assert "wk-b" not in health["audit_dropouts"]
+    assert not any("wk-b" in w and "dropped" in w for w in health["warnings"])
+    # wk-a, handed wk-b's audits and silent ever since, is still flagged.
+    assert health["audit_dropouts"].get("wk-a", 0) >= 1
