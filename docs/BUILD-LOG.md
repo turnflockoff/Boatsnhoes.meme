@@ -475,3 +475,22 @@
 2. **Pausing beats unplugging.** Killing the server also kills the tools you need during an incident (health page, revoking a rig) and loses honest work in progress. A pause keeps those.
 3. **Store the switch where the history is.** The pause is a line in the same audit trail as everything else, so it survives restarts and you can later see exactly when it started and ended.
 4. **A pause shouldn't punish bystanders.** Any rule with a timer (here, "pick up your audit within 2 minutes") needs to know the clock stopped, or the pause shows up as someone else's fault.
+
+## 2026-11-23 (03:15 UTC): Catching a rewritten history between two ledger copies
+
+**Shipped**
+- **`python -m app.ledger_copy compare older-copy newer-copy`.** Ledger copies let anyone re-run a signed report, but you make every copy. So one gap was left: share an honest copy for November, then later quietly change November (move points, turn a held result into a confirmed one, delete a failed hidden test) and share a December copy that includes the changed November. Each copy passes its own checks. This tool compares the two and catches it.
+- **What it checks**, using the fact that each copy contains everything up to its end date:
+  - **Nothing edited or deleted:** every job, result, "this rig may not re-check this job" rule, rig and event in the older copy is still in the newer copy, with the same values.
+  - **Nothing back-dated:** the newer copy has no job, rig, result or event dated inside the older period that the older copy didn't have.
+  - **Same numbers:** a reward report for everything up to the older end date comes out with the identical fingerprint (`report_sha256`) from both copies.
+  - Both copies must also pass their own consistency check.
+- **Two things are compared by pattern, not value.** Every copy renames owners (`owner-1`, ...) and scrambles input fingerprints with a fresh random key, so the raw values always differ. The tool checks the *grouping* instead: rigs that shared an owner still do (and no new pairs appear), and jobs that had the same input still do. One honest change is allowed: a rig revoked *after* the older copy's end date shows as active in the older copy.
+- **Safe to run by anyone.** It only reads both files (their sha256 stay valid), refuses a full ledger, a junk file or the copies in the wrong order with a plain message, lists the differences if it finds any, and `--out` writes the result as JSON without ever overwriting.
+- Tests went from 454 to 467, all passing (13 new). They build two real copies a period apart (with a dispute, a tie-breaker, a failed hidden test and a later revocation), then tamper with the newer one in nine different ways. I switched off 20 of the tool's rules one at a time and a test failed every time (the first run found one rule with no test, "an extra exclusion added later", so I added one). Software only; nothing here touches the GPUs.
+
+**What you learned**
+1. **One honest snapshot isn't enough; a chain of them is.** A single copy can't show it wasn't edited before you shared it. Two copies can show the older part wasn't edited *between* them. That's the same idea as an append-only log: new pages are fine, changing old pages isn't.
+2. **Compare the pattern when the values are disguised.** Owner names and input fingerprints are deliberately scrambled differently in each copy for privacy. "Who was grouped with whom" survives the scrambling, so that's what gets compared.
+3. **Back-dating is its own kind of cheating.** Adding a fake job "from last month" doesn't change any old row, so a plain "did anything change?" check would miss it. You have to also ask "is there anything new in the old period?".
+4. **This only works if someone keeps the old copy.** When you pick where reports and copies get posted, keep every old one there rather than replacing it.

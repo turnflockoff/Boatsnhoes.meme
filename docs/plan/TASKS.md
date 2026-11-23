@@ -1,5 +1,5 @@
 # BOATS N HOES: Project Task List (Claude + dev work)
-**Version:** 0.5.29 | **Last updated:** 2026-11-23 | Personal to-dos live in USER_TODO.md.
+**Version:** 0.5.30 | **Last updated:** 2026-11-23 | Personal to-dos live in USER_TODO.md.
 
 ## Phase 0: Foundation
 - [x] Buy boatsnhoes.meme
@@ -36,6 +36,7 @@
 - [x] Signed reward reports (threat model #10, first step): coordinator signs closed-period reports with its Ed25519 key, anyone can check offline with the public key (109 tests)
 - [x] Structured logs and health reporting: one JSON line per event, no secrets or prompts in logs, request ids, public `/health` (503 when the database fails), operator `/v1/operator/health` with plain-language warnings (127 tests)
 - [x] Shareable ledger copies: redacted copy of a closed, settled period (no keys, codes, prompts, answers or real owner names) that anyone can re-run a signed report and the consistency checks against (137 tests)
+- [x] Compare ledger copies across periods (threat model #10 follow-up, `bnh-ledger-compare/1`): `python -m app.ledger_copy compare older.sqlite3 newer.sqlite3` checks nothing in the older period was edited, deleted or back-dated and its report numbers are identical; read-only (467 tests)
 - [ ] Post signed reports and ledger copies in a fixed public place (owner decision: where)
 - [x] Read-only rig inventory tool for Phase 3: `python -m app.hw_inventory` (OS, kernel, PCI IDs, bound driver, Vulkan devices/Mesa version, /dev/dri access, redacted JSON; 151 tests, format samples only)
 - [x] Trust-based audit rate (threat model #1, `audit-tier-v1`): new rigs and rigs caught once (failed hidden test or outvoted) are re-checked more often; operator-only, changes checks not points (158 tests)

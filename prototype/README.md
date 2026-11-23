@@ -179,6 +179,21 @@ A signed report proves who issued the numbers. To check the numbers themselves, 
 
 **Trade-off and limits:** for the closed period, the copy shows which jobs were hidden re-runs and hidden tests and how they came out (not their prompts or answers). Outsiders need that to check that no worker audited itself, but it is more than the report shows (threat model #14), so share copies with a delay. A copy proves the report matches *this* copy; an operator could still edit the ledger before exporting. Copies from many periods that later disagree, or independent observers, are what catch that. There is still no fixed public place to post reports and copies (owner decision).
 
+### Comparing copies across periods (since 0.5.30)
+
+Each copy covers everything up to its `until`, so a later copy must contain an earlier copy's history unchanged. If the operator quietly rewrote period 1 (moved points, turned a held result into a confirmed one, dropped a failed hidden test) and then shared a period-2 copy, each copy would still pass its own checks. Comparing the two catches it:
+
+    python -m app.ledger_copy compare ledger-copy-2026-11.sqlite3 ledger-copy-2026-12.sqlite3 [--out compare.json]
+
+- **Nothing edited or deleted:** every job, result, re-check exclusion, rig and event in the older copy is still in the newer one with the same values.
+- **Nothing back-dated:** the newer copy has no job, rig, event or result dated before the older `until` that the older copy didn't have.
+- **Same numbers:** a reward report for everything before the older `until` gives the same `report_sha256` from both copies.
+- **Compared by shape, not value:** owner labels and masked input hashes are redacted differently in every copy, so it checks that rigs which shared an owner still do (and others still don't), and jobs which had equal inputs still do. One field may legitimately change: a rig revoked after the older `until` shows as active in the older copy.
+- **Also:** each copy must pass its own consistency check; a full ledger, a junk file or the copies in the wrong order are refused with a message (exit 2). Exit 0 = history intact, 1 = differences listed. Read-only: neither file changes, so their sha256 stay valid. `--out` never overwrites.
+- 13 new tests (467 in total). Twenty of the tool's rules were switched off one at a time and a test failed every time.
+
+**What it doesn't prove:** that the older copy was true in the first place. It only shows the operator didn't rewrite history that was already shared, and only helps if someone kept the older copy. Publishing copies somewhere others save them (owner decision) is what gives it teeth.
+
 ## Implemented: versioned job and receipt schemas (Track E)
 
 Tested in software only (0.5.10). Code: `app/schemas.py`.
@@ -328,7 +343,7 @@ A GitHub Actions workflow runs these tests on pushes and pull requests affecting
 - `GET /v1/audits` — operator only: every audit and challenge with its outcome.
 - `GET /v1/workers/{worker_id}/trust` — operator only: how a worker's results held up, plus its audit tier (`new`/`established`/`suspect`), the re-check rate that applies to it, `checks_passed` and `strikes`.
 - `GET /v1/rewards/report?since=&until=&sign=` — operator only: simulated reward report for a period; `sign=true` adds the coordinator's signature (closed periods only).
-- `python -m app.ledger_copy export|info` — CLI only: redacted ledger copy for a closed, settled period (see above).
+- `python -m app.ledger_copy export|info|compare` — CLI only: redacted ledger copy for a closed, settled period, and a check that a newer copy kept an older one's history unchanged (see above).
 - `GET /health` — public health check: `200` ok or paused / `503` down, `accepting_work`, `paused_since`, uptime, job counts, and the job/receipt schema versions spoken.
 - `POST /v1/operator/pause` — operator only: emergency pause (`pause-v1`). Resume only on the server: `python -m app.incident resume --note ...`.
 - `GET /v1/operator/health` — operator only: workers, queue, waiting audits, review-queue counts, recent events, consistency problems and warnings.

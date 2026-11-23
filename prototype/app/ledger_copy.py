@@ -7,6 +7,7 @@ the ledger, up to the end of a closed period, that anyone can re-run a report ag
     python -m app.ledger_copy export --db ./data/prototype.sqlite3 --until 1800000000 \\
         --out ledger-copy.sqlite3
     python -m app.rewards verify report.json --db ledger-copy.sqlite3 --public-key <hex>
+    python -m app.ledger_copy compare older-copy.sqlite3 newer-copy.sqlite3  # app/ledger_compare.py
 
 The copy keeps the structure the checks need (which job re-ran which, who did each job,
 which workers share an owner, when things happened, points and settlement) so both the
@@ -39,6 +40,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import hmac
+import json
 import os
 import sqlite3
 import sys
@@ -194,6 +196,41 @@ def copy_info(path: Path) -> dict[str, Any] | None:
     return {"format": row[0], "until": row[1], "created_at": row[2], "note": row[3]}
 
 
+def _compare_cli(older: Path, newer: Path, out: Path | None) -> int:
+    from .ledger_compare import CompareError, compare_copies  # it imports this module
+
+    if out is not None and out.exists():
+        print(f"{out} already exists; pick a new file name", file=sys.stderr)
+        return 2
+    try:
+        result = compare_copies(older, newer)
+    except CompareError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    o, n, c = result["older"], result["newer"], result["compared"]
+    print(f"older: {o['file']} until={o['until']} sha256={o['sha256']}")
+    print(f"newer: {n['file']} until={n['until']} sha256={n['sha256']}")
+    print(f"compared {c['jobs']} jobs, {c['results']} results, {c['rigs']} rigs, "
+          f"{c['events']} events from the older copy")
+    if result["ok"]:
+        print("OK: the newer copy keeps the older copy's history unchanged "
+              "(nothing edited, deleted or back-dated)")
+    else:
+        print(f"PROBLEM: {result['problem_count']} difference(s) in history that was "
+              "already shared:")
+        for line in result["problems"]:
+            print(f"  - {line}")
+        hidden = result["problem_count"] - len(result["problems"])
+        if hidden:
+            print(f"  ... and {hidden} more")
+    print(result["note"])
+    if out is not None:
+        tmp = out.with_name(out.name + ".partial")
+        tmp.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+        tmp.replace(out)
+    return 0 if result["ok"] else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.ledger_copy",
                                      description="Redacted ledger copies for re-running reports.")
@@ -205,7 +242,15 @@ def main(argv: list[str] | None = None) -> int:
     exp.add_argument("--out", type=Path, required=True)
     info = sub.add_parser("info", help="show what a copy covers")
     info.add_argument("copy", type=Path)
+    cmp_ = sub.add_parser("compare", help="check that a newer copy kept an older copy's "
+                          "history unchanged (nothing edited, deleted or back-dated)")
+    cmp_.add_argument("older", type=Path)
+    cmp_.add_argument("newer", type=Path)
+    cmp_.add_argument("--out", type=Path, help="also write the result as JSON (never overwrites)")
     args = parser.parse_args(argv)
+
+    if args.cmd == "compare":
+        return _compare_cli(args.older, args.newer, args.out)
 
     if args.cmd == "info":
         if not args.copy.exists():
