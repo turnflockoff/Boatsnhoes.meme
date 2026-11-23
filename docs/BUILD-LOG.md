@@ -524,3 +524,23 @@
 **What you learned**
 1. **A health check must never crash.** Its whole job is to report trouble, so everything it reads goes inside the same error guard.
 2. **Prove the test catches the bug.** Running the new test against the old code first (it failed) shows the test actually checks the fix.
+
+## 2026-11-23 (05:15 UTC): A private stock of hidden tests (0.5.33)
+
+**Shipped**
+- **The gap.** Aimed hidden tests (0.5.21) are the best way to check a brand-new or just-caught rig, but each one had to be typed into an HTTP request by hand, and since 0.5.31 each one must also be fresh. In practice that means they'd rarely happen.
+- **`python -m app.challenge_pool`** keeps prepared tests (an input plus its known answer) in one private file and sends them to the coordinator a few at a time:
+  - `init` makes the file readable by you only, and refuses to create it inside a git folder, so the answers can't be committed by accident. Every other command refuses the file if someone else can read it.
+  - `add --file tests.jsonl` checks each test the same way the coordinator will (task type, size, payload, and "does the answer pass the task's own check?") and skips anything already in the pool or used before. `make-demo` adds SHA-256 practice tests.
+  - `status` shows counts only, and warns when you're running low.
+  - `issue --count 3 --tier new` (or `--worker rig-c`) picks tests at random and queues them as hidden tests. It never sends points, so the points table decides them like for normal work and a test can't be spotted that way.
+- **Each test is used once, even when things go wrong.** A test is crossed off and saved *before* it's sent. If the connection drops or the program crashes, it stays crossed off (marked `unknown` or `sending`) rather than risk sending it twice. It only goes back into the pool when the coordinator clearly refused it and created nothing (wrong token, unknown or revoked rig, paused, refused test). A test refused because a ledger copy already revealed it is retired. It stops at the first problem instead of burning through the pool.
+- **Nothing it prints contains an input or an answer**, and the coordinator logs these like any normal job.
+- Tests went from 480 to 509, all passing (29 new). I switched off 16 of the tool's rules one at a time and a test failed every time. Also ran it against a real coordinator process here: 2 practice tests aimed at new rigs were queued, an unknown rig and a paused coordinator were refused with the tests put back, and no test input showed up in the log. Software only; nothing here touches the GPUs.
+- **Honest limits:** the tool doesn't write good tests. For AI jobs, the known answer has to come from running the pinned model yourself on the rig (Phase 3), so the real pool is still empty.
+
+**What you learned**
+1. **A defense you have to do by hand mostly doesn't happen.** Turning "write a test, send it" into "keep a stock, send three" is what makes regular spot checks realistic.
+2. **When unsure, assume it was sent.** If the network fails mid-send, you can't know whether the test arrived. Treating it as used costs one test; treating it as unused could send the same test twice, which is exactly what makes tests recognisable.
+3. **Save before you act.** Writing "used" to disk before sending means even a power cut can't undo the cross-off.
+4. **Secrets need a home outside the repo.** The answers to hidden tests are as sensitive as a password: the tool refuses to keep them anywhere git could pick them up.

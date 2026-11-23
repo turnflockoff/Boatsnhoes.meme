@@ -74,6 +74,7 @@ This roadmap separates implemented repository assets from proposed work. A check
 - [x] Pause the coordinator during an incident without losing in-flight work. *(`pause-v1`: `POST /v1/operator/pause` or `python -m app.incident pause`; resume only on the server; no new leases, jobs, tests or rigs; in-flight results still accepted; interrupted audit picks get a fresh window. Plan: [`INCIDENT-RESPONSE.md`](INCIDENT-RESPONSE.md). 20 tests, software only.)*
 - [x] Check that a later ledger copy didn't rewrite an earlier one. *(`python -m app.ledger_copy compare older newer`: nothing edited, deleted or back-dated before the older copy's end, same report numbers; owner labels and masked inputs compared by shape. 13 tests, software only.)*
 - [x] Don't reuse a hidden test that a shared ledger copy revealed. *(`test-reuse-v1`: each export is recorded; a hidden test with the exact input of one from a copied period gets `409`; operator health warns while open tests share an input. 12 tests, software only.)*
+- [x] Keep a private stock of hidden tests and hand them out a few at a time, each used once. *(`test-pool-v1`, `python -m app.challenge_pool`: owner-only file outside git; every test checked like the coordinator would; crossed off before sending so a crash can't send it twice; tests a ledger copy revealed are retired. 29 tests, software only; no real model answers in a pool yet.)*
 - [ ] Post signed reports and ledger copies in a fixed public place. *(Owner decision.)*
 
 ## Track F — Two-GPU proof of concept
