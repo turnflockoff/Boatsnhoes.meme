@@ -90,7 +90,8 @@
 - [ ] Verify `_headers` on the live Netlify URL (run the site-check workflow once after merging; owner click)
 - [x] Pin every prototype dependency to exact, sha256-checked files and review each license *(`deps-check-v1`, 0.5.46: `requirements.lock` with a 7-day cooldown, `licenses.json`, `python -m app.deps_check lock|installed`; CI installs with `--require-hashes` and fails on a new package or version until its license is re-read; 764 tests)*
 - [ ] Scan locked packages for known vulnerabilities (e.g. pip-audit or GitHub Dependabot alerts; Dependabot is a repo setting, owner click)
-- [ ] Pin the CI workflow's GitHub Actions to commit hashes instead of version tags
+- [x] Pin the CI workflow's GitHub Actions to commit hashes instead of version tags *(`actions-pin-v1`, 0.5.47: both workflows pinned, hashes taken from this repo's own CI log; `persist-credentials: false`; upload-artifact dropped; `python -m app.workflow_check` in CI also requires read-only tokens, no risky triggers and no `${{ }}` in scripts; 61 tests)*
+- [ ] Keep the pinned actions up to date (optional `.github/dependabot.yml` for GitHub Actions; opens pull requests, so owner decision)
 - [ ] Signed miner releases with checksums (multi-signer)
 - [ ] Many seed nodes in different regions
 - [ ] Node peer limits and rate limits
