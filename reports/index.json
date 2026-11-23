@@ -1,0 +1,8 @@
+{
+  "coordinator": null,
+  "format": "bnh-reports-index/1",
+  "notice": "Simulated, off-chain points from a test network. Not tokens, not money, and no promise of either.",
+  "periods": [],
+  "rule": "reports-v1",
+  "site": "https://boatsnhoes.meme/reports/"
+}

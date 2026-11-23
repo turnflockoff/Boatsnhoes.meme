@@ -1,5 +1,5 @@
 # BOATS N HOES: Project Task List (Claude + dev work)
-**Version:** 0.5.42 | **Last updated:** 2026-11-23 | Personal to-dos live in USER_TODO.md.
+**Version:** 0.5.43 | **Last updated:** 2026-11-23 | Personal to-dos live in USER_TODO.md.
 
 ## Phase 0: Foundation
 - [x] Buy boatsnhoes.meme
@@ -43,7 +43,8 @@
 - [x] Near copies of revealed hidden tests refused too (threat model #11, `test-reuse-v2`): input fingerprint ignores case, spacing, punctuation, invisible characters and, for `llm:generate`, seed/max_tokens/timeout/model; same rule in operator health and the private pool (596 tests)
 - [x] Private stock of hidden tests (threat model #1, #8, #11, `test-pool-v1`): `python -m app.challenge_pool init|add|make-demo|status|issue`; owner-only file outside git, each test checked like the coordinator would, used once (crossed off before sending), revealed ones retired, aimed at a rig or tier; prints no inputs or answers (509 tests)
 - [ ] Fill the hidden-test pool with real `llm:generate` answers from the pinned model (needs the rig, Phase 3)
-- [ ] Post signed reports and ledger copies in a fixed public place (owner decision: where)
+- [x] Post signed reports and ledger copies in a fixed public place (owner chose 2026-11-23: a page on the site and on GitHub). `reports/` folder served at boatsnhoes.meme/reports/; `python -m app.publish_report add|check` (`reports-v1`): only signed reports that re-check against a redacted copy, 7-day wait, no overlaps, history unchanged, never replaced; CI re-checks the folder (626 tests). Nothing published yet
+- [ ] Publish the first period once rigs run real jobs (owner step; see USER_TODO.md)
 - [x] Read-only rig inventory tool for Phase 3: `python -m app.hw_inventory` (OS, kernel, PCI IDs, bound driver, Vulkan devices/Mesa version, /dev/dri access, redacted JSON; 151 tests, format samples only)
 - [x] Trust-based audit rate (threat model #1, `audit-tier-v1`): new rigs and rigs caught once (failed hidden test or outvoted) are re-checked more often; operator-only, changes checks not points (158 tests)
 - [x] Planned coordinator key rotation (threat model #9 follow-up): `python -m app.key_rotation rotate`, handover signed by old and new key, pinned workers follow a valid chain, queued jobs re-signed on claim, crash-safe (168 tests)
@@ -54,7 +55,7 @@
 - [x] Batched public job counts (threat model #14, last open hint, `public-counts-v1`): `/health` and `GET /v1/ledger` show job counts taken once per clock-aligned `PUBLIC_COUNTS_INTERVAL_SECONDS` window (default 900), for everyone, because live `queued` rose the instant a rig's result was picked for a re-check; operator token sees them live; `0` = live with a health warning; the rehearsal's safety check now reads live counts (615 tests)
 - [ ] Decide what repeated audit drops should change, if anything (owner decision; today it's a warning only)
 - [x] Operator review queue (threat model #7): read-only list of held cases (stuck disputes, three-way disagreements, failed hidden tests) with answers side by side, `python -m app.review`, health warning (190 tests)
-- [x] Vouch check (threat model #3, `vouch-check-v1`): once a rig is caught, list the rigs that agreed with its answers and the confirmations that rest only on a caught rig; `GET /v1/operator/vouches`, `python -m app.vouches`; health warns about unchecked leads; read-only (627 tests)
+- [x] Vouch check (threat model #3, `vouch-check-v1`): once a rig is caught, list the rigs that agreed with its answers and the confirmations that rest only on a caught rig; `GET /v1/operator/vouches`, `python -m app.vouches`; health warns about unchecked leads; read-only (638 tests)
 - [ ] Decide what a reviewer's decision should do to held points (part of scoring v2; owner decision)
 - [x] Close open job creation and limit requests (threat model #16, #17): `POST /v1/jobs` needs the operator or a job-only submitter token; per-address request limit with `429`/`Retry-After`; lock-out after repeated wrong keys, tokens or codes; addresses kept out of logs (210 tests)
 - [x] Trusted-proxy setting (threat model #17 follow-up): `TRUSTED_PROXIES` so limits and lock-outs apply to the real client behind your own reverse proxy; header ignored from anyone else; trust-everyone refused (230 tests)
@@ -108,6 +109,7 @@
 - [x] Contribute a GPU page (browser check, Linux check, tester form)
 - [x] Desktop/mobile testing (390, 768, 1440 px)
 - [x] Subpages restyled to match the orange/black homepage
+- [x] Public logbook page (`/reports/`): lists published periods from `reports/index.json`, how to check them, FAQ; linked from /contribute (homepage unchanged)
 - [ ] Rebuild or upload Mine, Tokenomics, Stay Safe pages
 - [ ] Litepaper, Casino coming-soon, Meme Lab
 - [x] Waitlist backend: Netlify Forms (`gpu-testers`)
