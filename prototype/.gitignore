@@ -4,3 +4,7 @@ __pycache__/
 .env
 data/
 *.py[cod]
+
+# Model weights are never committed; only their pinned hashes in models/registry.json
+models/*.gguf
+models/*.part

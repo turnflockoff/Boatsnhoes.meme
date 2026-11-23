@@ -1,0 +1,18 @@
+{
+  "_notice": "Pinned model registry. A model can be used for jobs only after its sha256 and size are pinned from a file you downloaded yourself: python -m app.model_registry pin <model_id> <path-to-file>. Nothing is downloaded automatically.",
+  "models": [
+    {
+      "model_id": "qwen2.5-0.5b-instruct-q4_k_m",
+      "file_name": "Qwen2.5-0.5B-Instruct-Q4_K_M.gguf",
+      "source_url": "https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf",
+      "upstream": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct",
+      "license": "Apache-2.0",
+      "approx_size_mb": 400,
+      "min_vram_mb": 2048,
+      "runtime": "llama.cpp (Vulkan backend)",
+      "sha256": null,
+      "size_bytes": null,
+      "notes": "Candidate first model for the 4 GB RX 470. Not yet downloaded or tested on project hardware."
+    }
+  ]
+}

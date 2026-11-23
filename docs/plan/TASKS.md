@@ -1,5 +1,5 @@
 # BOATS N HOES: Project Task List (Claude + dev work)
-**Version:** 0.5 | **Last updated:** 2026-11-21 | Personal to-dos live in USER_TODO.md.
+**Version:** 0.5.41 | **Last updated:** 2026-11-23 | Personal to-dos live in USER_TODO.md.
 
 ## Phase 0: Foundation
 - [x] Buy boatsnhoes.meme
@@ -22,6 +22,56 @@
 - [ ] Tail emission decision
 
 ## Phase 3: Chain and Mining
+- [x] GPU worker backend, Phase 1: durable SQLite job queue, leases and retries, signed manifests verified by workers, audit log (13 tests passing)
+- [x] GPU worker Phase 2: pluggable task executors, `llm:generate` task, pinned model registry with licenses, opt-in download (32 tests)
+- [ ] Pin the first model (download on the GPU box, then `model_registry pin`)
+- [x] Safer llama-cli runs (`llm-run-v1`): prompt in a private file (not the command line), allow-list environment so no tokens or codes reach llama-cli, `LLM_VK_DEVICE` one card per worker, `LLM_GPU_LAYERS`/`LLM_THREADS`, fixed context 2048, closed stdin, 64 KiB output cap, process-group stop on timeout; worker skips a job it can't run instead of crashing (546 tests, fake llama-cli only)
+- [x] GPU worker Phase 4 (first slice): hidden re-run audits, hidden known-answer challenges, tolerance rule, worker trust report (44 tests)
+- [x] GPU worker Phase 4 (rest): tie-breaker re-run for disputes, written fraud/collusion threat model (`docs/VERIFICATION-THREAT-MODEL.md`, 51 tests)
+- [x] Random (not first-come) auditor assignment (threat model #4): one random active, eligible worker per audit/tie-breaker, re-assigned if silent (82 tests)
+- [x] GPU worker Phase 5: simulated reward reports (off-chain points, versioned scoring `sim-points-v1`, reproducible sha256, `verify` tool; 61 tests)
+- [x] Candidate penalty rule built, off by default: `sim-points-v2-forfeit` (a rig with a strike in a period loses that period's unverified points; confirmed points kept). `REWARD_SCORING` or `report --scoring`; v1 reports unchanged (559 tests)
+- [ ] Decide a penalty rule for caught cheaters (scoring v2; owner decision: switch on `sim-points-v2-forfeit`, keep v1, or ask for a different rule)
+- [x] Authenticated worker registration / per-worker keys: one-time operator codes, per-worker keys stored as hashes, same-owner workers never audit each other, revocation (73 tests)
+- [x] Asymmetric job signatures (threat model #9): coordinator signs with an Ed25519 private key, workers verify with a pinned public key, no shared secret (89 tests)
+- [x] Versioned job/receipt schemas: signed job version and pinned model hash, receipts must match version, input hash and model hash (97 tests)
+- [x] Signed reward reports (threat model #10, first step): coordinator signs closed-period reports with its Ed25519 key, anyone can check offline with the public key (109 tests)
+- [x] Structured logs and health reporting: one JSON line per event, no secrets or prompts in logs, request ids, public `/health` (503 when the database fails), operator `/v1/operator/health` with plain-language warnings (127 tests)
+- [x] Shareable ledger copies: redacted copy of a closed, settled period (no keys, codes, prompts, answers or real owner names) that anyone can re-run a signed report and the consistency checks against (137 tests)
+- [x] Compare ledger copies across periods (threat model #10 follow-up, `bnh-ledger-compare/1`): `python -m app.ledger_copy compare older.sqlite3 newer.sqlite3` checks nothing in the older period was edited, deleted or back-dated and its report numbers are identical; read-only (467 tests)
+- [x] Retire hidden tests a ledger copy revealed (threat model #11, #14, `test-reuse-v1`): every export is recorded in the live ledger; a new hidden test with the exact input of one from a period a copy covers is refused (`409`); operator health warns while open hidden tests share an input (479 tests)
+- [x] Near copies of revealed hidden tests refused too (threat model #11, `test-reuse-v2`): input fingerprint ignores case, spacing, punctuation, invisible characters and, for `llm:generate`, seed/max_tokens/timeout/model; same rule in operator health and the private pool (596 tests)
+- [x] Private stock of hidden tests (threat model #1, #8, #11, `test-pool-v1`): `python -m app.challenge_pool init|add|make-demo|status|issue`; owner-only file outside git, each test checked like the coordinator would, used once (crossed off before sending), revealed ones retired, aimed at a rig or tier; prints no inputs or answers (509 tests)
+- [ ] Fill the hidden-test pool with real `llm:generate` answers from the pinned model (needs the rig, Phase 3)
+- [ ] Post signed reports and ledger copies in a fixed public place (owner decision: where)
+- [x] Read-only rig inventory tool for Phase 3: `python -m app.hw_inventory` (OS, kernel, PCI IDs, bound driver, Vulkan devices/Mesa version, /dev/dri access, redacted JSON; 151 tests, format samples only)
+- [x] Trust-based audit rate (threat model #1, `audit-tier-v1`): new rigs and rigs caught once (failed hidden test or outvoted) are re-checked more often; operator-only, changes checks not points (158 tests)
+- [x] Planned coordinator key rotation (threat model #9 follow-up): `python -m app.key_rotation rotate`, handover signed by old and new key, pinned workers follow a valid chain, queued jobs re-signed on claim, crash-safe (168 tests)
+- [x] Audit follow-through (threat model #4 follow-up): per-rig count of assigned audits/tie-breakers it never picked up, let time out, or had refused; operator health warns at `AUDIT_DROP_WARN`; operator-only, changes nothing about points (177 tests)
+- [x] Busy rigs aren't counted as dropping audits (`follow-through-v2`): a pick that took other, older jobs during its window counts as `not_reached`, not a drop, so the health warning only flags rigs that went silent or let a taken audit go (562 tests)
+- [x] Public ledger delay (threat model #14, `public-delay-v1`): `GET /v1/ledger` counts every result as `pending` and withholds its confidence for `PUBLIC_SETTLE_DELAY_SECONDS` (default 3600) after it is accepted, so a rig can't spot a hidden test (or a re-check) by watching the public totals right after it submits; operator token sees it live (573 tests)
+- [x] No result hashes in public views (threat model #14 follow-up, `public-no-hashes-v1`): `GET /v1/ledger` entries drop `result_hash`, because a re-check that agrees has the same hash as its original, which paired them for anyone and let an auditor know its job was a re-check; operator view keeps them (602 tests)
+- [x] Batched public job counts (threat model #14, last open hint, `public-counts-v1`): `/health` and `GET /v1/ledger` show job counts taken once per clock-aligned `PUBLIC_COUNTS_INTERVAL_SECONDS` window (default 900), for everyone, because live `queued` rose the instant a rig's result was picked for a re-check; operator token sees them live; `0` = live with a health warning; the rehearsal's safety check now reads live counts (615 tests)
+- [ ] Decide what repeated audit drops should change, if anything (owner decision; today it's a warning only)
+- [x] Operator review queue (threat model #7): read-only list of held cases (stuck disputes, three-way disagreements, failed hidden tests) with answers side by side, `python -m app.review`, health warning (190 tests)
+- [ ] Decide what a reviewer's decision should do to held points (part of scoring v2; owner decision)
+- [x] Close open job creation and limit requests (threat model #16, #17): `POST /v1/jobs` needs the operator or a job-only submitter token; per-address request limit with `429`/`Retry-After`; lock-out after repeated wrong keys, tokens or codes; addresses kept out of logs (210 tests)
+- [x] Trusted-proxy setting (threat model #17 follow-up): `TRUSTED_PROXIES` so limits and lock-outs apply to the real client behind your own reverse proxy; header ignored from anyone else; trust-everyone refused (230 tests)
+- [x] Aimed hidden tests (threat model #1, #8): `target_worker` or `target_tier` on `POST /v1/challenges`, so new or caught rigs are sure to get known-answer tests; operator-only, changes checks not points (245 tests)
+- [x] Fixed points per task type (threat model #16 follow-up, `points-table-v1`): optional `POINTS_TABLE`; when set, every new job and hidden test gets the table's points and any other number is refused, operator included; health warning while a submitter token has no table (270 tests)
+- [x] Trust-aware auditor pick (threat model #4, #6, `auditor-pick-v1`): optional `AUDITOR_PICK=trusted-first` sends audits and tie-breakers to established rigs first, then new, and a rig with a strike only when nobody else is eligible; off by default; health warning while a caught rig can still audit (281 tests)
+- [ ] Decide whether to switch on `AUDITOR_PICK=trusted-first` (owner decision: it shifts who earns audit points)
+- [x] Trust check before a tie-breaker settles a dispute (threat model #6, `tiebreak-trust-v1`): optional `TIEBREAK_DECIDES=established-only` lets a majority settle only when the tie-breaker and the rig it sided with are both established; otherwise all three results stay held for the review queue, no strike; off by default (520 tests)
+- [ ] Decide whether to switch on `TIEBREAK_DECIDES=established-only` (owner decision: early on, while rigs are new, every dispute waits for you)
+- [x] Offline handover key (threat model #9 follow-up, `handover-key-v1`): `python -m app.key_rotation make-handover-key`; coordinator announces its public half (signed by the current key), workers pin it and then only follow key handovers it also signed, so a stolen signing key file can't move them; `rotate` refuses without it once set (294 tests)
+- [ ] Make the offline handover key and keep it on a USB stick (owner step, before rigs go online)
+- [ ] Pick the numbers for `POINTS_TABLE` (owner decision; e.g. 1 for the demo task, 10 for an AI job)
+- [x] Read-only GPU sensor tool for Phase 3: `python -m app.gpu_sensors` (temperature, power, VRAM, busy %, clocks, fan from amdgpu sysfs; one snapshot or a watch with min/max/avg; warns on heat, nearly full VRAM, wrong driver, idle card; 341 tests, fake sysfs only)
+- [x] One-run recorder for Phase 3: `python -m app.gpu_run --card cardN --out run.json -- <command>` (exit code, output sha256 and tail, expected-output check, program/model file hashes, sensor readings before/during/after for every card, flags when the test ran on another card or the CPU; refuses sudo, secret-looking env, overwrites; 397 tests, fake sysfs only)
+- [x] Two-worker rehearsal for Track F: `python -m app.rehearsal --local` (or `--url ... --allow-writes` against a test coordinator) checks dispatch to two workers and how duplicate, malformed, expired, replayed, wrong-worker and wrong-answer submissions are answered; 28 checks, report with no keys; CPU SHA-256 jobs only, says nothing about the GPUs (409 tests)
+- [x] Phase 3 evidence check: `python -m app.phase3_check --inventory inventory.json run-card0.json run-card1.json` reads the rig's reports and marks each Track B item evidenced/partial/missing/problem; a smoke test counts only with a clean exit, a matched answer and the right card busy, and "repeat on GPU 1" needs the same test in a second PCI slot (434 tests)
+- [x] Emergency pause for incidents (`pause-v1`): `POST /v1/operator/pause` or `python -m app.incident pause`; resume only from the server CLI; no new leases, jobs, hidden tests or enrollments while paused, in-flight results still accepted, interrupted audit picks get a fresh window; survives restarts (455 tests)
+- [ ] GPU worker Phase 3: RX 470 hardware validation (needs the real rig; start by running the inventory tool there)
 - [ ] Memory-hard, ASIC-resistant algorithm (pseudocode, reference miner)
 - [ ] Per-block difficulty adjustment
 - [ ] Testnet, then public testnet
@@ -40,7 +90,8 @@
 - [ ] Public status page
 - [ ] Mining fairness review: pool distribution, botnet/insider checks
 - [ ] Casino: cold storage, withdrawal limits/delays, confirmations by deposit size, provably fair audit
-- [ ] Incident response plan (who does what if hacked)
+- [x] Incident response plan, draft: `docs/INCIDENT-RESPONSE.md` (first 15 minutes, pause, playbooks for leaked keys/tokens, signing key, points bug, account takeover, impersonation)
+- [ ] Fill in the plan's owner blanks: backup person and where public notices go (owner decision)
 
 ## Phase 5: Wallet, Casino, AgentWiki
 - [ ] Wallet and explorer
@@ -55,12 +106,14 @@
 - [x] Custom graphics: logo mark, favicon, boat art, OG share image
 - [x] Contribute a GPU page (browser check, Linux check, tester form)
 - [x] Desktop/mobile testing (390, 768, 1440 px)
+- [x] Subpages restyled to match the orange/black homepage
 - [ ] Rebuild or upload Mine, Tokenomics, Stay Safe pages
 - [ ] Litepaper, Casino coming-soon, Meme Lab
 - [x] Waitlist backend: Netlify Forms (`gpu-testers`)
 - [x] Netlify project created (`boatsnhoes-dik6`), form detection on
-- [ ] Link Netlify to GitHub and confirm live deploy
-- [ ] Point boatsnhoes.meme DNS at Netlify, verify HTTPS
+- [x] Link Netlify to GitHub and confirm live deploy
+- [x] Point boatsnhoes.meme DNS at Netlify (Cloudflare CNAMEs, DNS only)
+- [ ] Verify HTTPS, security headers and share card on the live URL
 
 ## Phase 7: Launch
 - [ ] Mainnet plan, miner onboarding, listings outreach
