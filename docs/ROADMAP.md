@@ -34,7 +34,7 @@ This roadmap separates implemented repository assets from proposed work. A check
 - [ ] Select a small, reproducible workload that fits the 4 GB card.
 - [ ] Pin model files and cryptographic hashes. *(Registry and `pin` tool built; first model listed but not yet downloaded or pinned.)*
 - [ ] Build or obtain a compatible llama.cpp Vulkan runtime (only after hardware validation).
-- [ ] Run inference separately on each GPU.
+- [ ] Run inference separately on each GPU. *(Worker side ready, untested on hardware: `LLM_VK_DEVICE=N` pins a worker to one card via `GGML_VK_VISIBLE_DEVICES`; prompts go to llama-cli in a private file and it gets no secrets (`llm-run-v1`). 26 tests with a fake llama-cli only.)*
 - [ ] Record model, quantization, prompt/input, output, timing, and resource use.
 - [ ] Define expected output and task-specific acceptance criteria.
 

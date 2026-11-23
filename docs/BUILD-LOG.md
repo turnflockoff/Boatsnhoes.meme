@@ -560,3 +560,26 @@
 2. **Don't let a decision count toward the voter's own reputation.** The tie-breaker earns a "passed check" from the very vote in question, so trust is read from before the vote.
 3. **"Hold and ask a person" is a valid answer.** When the software can't tell honest from collusion, freezing the points and flagging the case is safer than guessing, as long as someone actually looks.
 4. **Safety settings have a cost.** Stricter rules mean more manual work early on, which is why this ships switched off and you decide when to turn it on.
+
+## 2026-11-23 (07:25 UTC): Safer llama-cli runs on the worker (0.5.35)
+
+**Shipped**
+- **The gap.** Everything around an AI job was hardened except the moment the worker actually starts llama-cli. Four problems there:
+  1. The prompt went on llama-cli's command line. Any user on the rig can read another program's command line with `ps`, and a hidden test's prompt is exactly what a cheater wants to see.
+  2. llama-cli got the worker's whole environment. The worker loads `.env`, and on your machine that file can hold `OPERATOR_TOKEN`, `SUBMITTER_TOKEN` or an enrollment code. A third-party program should never see those.
+  3. Nothing said which card to use, so two workers (one per card) could both land on card 0.
+  4. If llama-cli failed or ran out of time, the worker crashed instead of moving on.
+- **The fix (`llm-run-v1`, new `app/llm_runner.py`):**
+  - The prompt is written to a private file (folder only you can open, file `0600`) and llama-cli reads it with `-f`. The file is deleted after the run. As a bonus, a prompt with an invisible NUL character, which used to crash the worker, now works.
+  - llama-cli gets a short allow-list: PATH, HOME, language and temp settings, and GPU driver settings (`VK_ICD_FILENAMES`, `MESA_*`, `RADV_*`, `GGML_VK_*`). Anything with TOKEN, SECRET, KEY, CODE and similar in its name is dropped even from that list.
+  - New worker settings: `LLM_VK_DEVICE=1` pins that worker to card 1; `LLM_GPU_LAYERS` (default 99 = whole model on the GPU, 0 = CPU only); `LLM_THREADS`. A typo stops the worker offering AI jobs rather than running on the wrong card.
+  - Every run uses the same context size (2048) so VRAM use is predictable on the 4 GB card; input is closed so it can't hang waiting for typing; output over 64 KiB stops the run; a timeout stops llama-cli *and anything it started*.
+  - The worker now prints `Could not run job <id>: <reason>` and carries on. The reason never contains the prompt. The job goes back to the queue when its lease runs out.
+- Tests went from 520 to 546, all passing (26 new), all with a **fake** llama-cli script that records what it was given. I switched off 20 of the new rules one at a time; the first round showed 2 gaps (a test couldn't tell whether input was really closed, because pytest's own input was already empty, and one line of timeout clean-up duplicated another). I fixed the test to feed real typed input and removed the duplicate line; after that, every rule was caught.
+- **Honest limits:** no model has run here and nothing touched a GPU. The flag names match llama.cpp's `llama-cli`; newer llama.cpp builds may move plain text completion to a separate `llama-completion` program with the same flags. Phase 3 on the rig has to confirm which build works on the RX 470s and that `GGML_VK_VISIBLE_DEVICES` really keeps each worker on its card (the `gpu_run` recorder shows which card was busy).
+
+**What you learned**
+1. **The command line is public on a shared machine.** Passwords and secret inputs go in files only you can read, or through a pipe, never as arguments.
+2. **Give a program only what it needs (least privilege).** Copying your whole environment into a helper program hands it every token you loaded, whether it needs them or not. An allow-list ("only these") is safer than a block-list ("everything except these").
+3. **A worker should survive one bad job.** Crashing on one timeout takes the whole rig offline; skipping the job and letting the lease run out keeps it earning and lets someone else try.
+4. **Kill the whole family.** A program can start helpers. Starting it in its own process group means a timeout stops all of them, not just the parent.

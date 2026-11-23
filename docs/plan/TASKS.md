@@ -1,5 +1,5 @@
 # BOATS N HOES: Project Task List (Claude + dev work)
-**Version:** 0.5.34 | **Last updated:** 2026-11-23 | Personal to-dos live in USER_TODO.md.
+**Version:** 0.5.35 | **Last updated:** 2026-11-23 | Personal to-dos live in USER_TODO.md.
 
 ## Phase 0: Foundation
 - [x] Buy boatsnhoes.meme
@@ -25,6 +25,7 @@
 - [x] GPU worker backend, Phase 1: durable SQLite job queue, leases and retries, signed manifests verified by workers, audit log (13 tests passing)
 - [x] GPU worker Phase 2: pluggable task executors, `llm:generate` task, pinned model registry with licenses, opt-in download (32 tests)
 - [ ] Pin the first model (download on the GPU box, then `model_registry pin`)
+- [x] Safer llama-cli runs (`llm-run-v1`): prompt in a private file (not the command line), allow-list environment so no tokens or codes reach llama-cli, `LLM_VK_DEVICE` one card per worker, `LLM_GPU_LAYERS`/`LLM_THREADS`, fixed context 2048, closed stdin, 64 KiB output cap, process-group stop on timeout; worker skips a job it can't run instead of crashing (546 tests, fake llama-cli only)
 - [x] GPU worker Phase 4 (first slice): hidden re-run audits, hidden known-answer challenges, tolerance rule, worker trust report (44 tests)
 - [x] GPU worker Phase 4 (rest): tie-breaker re-run for disputes, written fraud/collusion threat model (`docs/VERIFICATION-THREAT-MODEL.md`, 51 tests)
 - [x] Random (not first-come) auditor assignment (threat model #4): one random active, eligible worker per audit/tie-breaker, re-assigned if silent (82 tests)

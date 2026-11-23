@@ -257,6 +257,18 @@ def execute(job: dict[str, Any]) -> str:
     return tasks.get(job["task_type"]).execute(job["payload"])
 
 
+def run_job(job: dict[str, Any]) -> str | None:
+    """Run the job, or return None (after saying why) if it can't be run here: a timeout,
+    llama-cli failing, a bad LLM_* setting or a model file that no longer matches its pin.
+    Nothing is submitted then; the lease runs out and the coordinator hands the job to
+    another worker. The reason never contains the prompt."""
+    try:
+        return execute(job)
+    except tasks.TaskError as exc:
+        print(f"Could not run job {job.get('job_id')}: {exc}")
+        return None
+
+
 def main() -> None:
     load_dotenv()
     parser = argparse.ArgumentParser(description="Local deterministic demo worker")
@@ -308,7 +320,11 @@ def main() -> None:
                     return
                 continue
             started = int(time.time())
-            result = execute(job)
+            result = run_job(job)
+            if result is None:
+                if args.once:
+                    return
+                continue
             completed = int(time.time())
             accepted = post_with_backoff(client, f"/v1/jobs/{job['job_id']}/submit", json={
                 "worker_id": args.worker_id, "result": result, "result_hash": sha256_text(result),

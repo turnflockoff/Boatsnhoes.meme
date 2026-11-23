@@ -20,12 +20,11 @@ import hashlib
 import json
 import os
 import shutil
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import model_registry
+from . import llm_runner, model_registry
 
 
 class TaskError(ValueError):
@@ -105,7 +104,8 @@ class LlmGenerateTask(TaskExecutor):
     Payload (JSON): {"model_id", "prompt", "max_tokens" (1-256), "seed", "timeout_s" (5-300)}.
     Greedy decoding (temperature 0) with a fixed seed, so honest re-runs on the same
     model + runtime should usually match; Phase 4 audits will rely on that.
-    Worker config: LLAMA_CLI (path to llama-cli binary) and MODEL_DIR (folder of model files).
+    Worker config: LLAMA_CLI (path to llama-cli binary) and MODEL_DIR (folder of model files);
+    LLM_VK_DEVICE, LLM_GPU_LAYERS and LLM_THREADS (see app/llm_runner.py).
     """
     task_type = "llm:generate"
     MAX_OUTPUT_CHARS = 4000
@@ -154,6 +154,10 @@ class LlmGenerateTask(TaskExecutor):
     def available(self) -> tuple[bool, str]:
         if not self._binary():
             return False, "llama-cli not found (set LLAMA_CLI)"
+        try:
+            llm_runner.config_from_env()
+        except llm_runner.RunError as exc:
+            return False, str(exc)
         pinned = [m for m in self.registry.values() if m.pinned]
         if not pinned:
             return False, "no pinned models in the registry"
@@ -162,7 +166,10 @@ class LlmGenerateTask(TaskExecutor):
             return False, "no pinned model files in MODEL_DIR"
         return True, f"{len(present)} model(s) ready"
 
-    def execute(self, payload: str) -> str:  # pragma: no cover - needs real hardware/runtime
+    def execute(self, payload: str) -> str:
+        """Run the job through `llm_runner` (rule `llm-run-v1`): prompt in a private file,
+        a short allow-list environment, one card via LLM_VK_DEVICE, fixed context size,
+        bounded output and time. Raises TaskError with a reason that never holds the prompt."""
         spec = self.validate(payload)
         entry = self.registry[spec.model_id]
         path = self._model_path(entry)
@@ -172,13 +179,13 @@ class LlmGenerateTask(TaskExecutor):
         binary = self._binary()
         if not binary:
             raise TaskError("llama-cli not available")
-        proc = subprocess.run(
-            [binary, "-m", str(path), "-p", spec.prompt, "-n", str(spec.max_tokens),
-             "--temp", "0", "--seed", str(spec.seed), "--no-display-prompt", "-no-cnv"],
-            capture_output=True, text=True, timeout=spec.timeout_s, check=False)
-        if proc.returncode != 0:
-            raise TaskError(f"llama-cli exited {proc.returncode}")
-        return proc.stdout.strip()[: self.MAX_OUTPUT_CHARS]
+        try:
+            config = llm_runner.config_from_env()
+            out = llm_runner.run(binary, path, spec.prompt, max_tokens=spec.max_tokens,
+                                 seed=spec.seed, timeout_s=spec.timeout_s, config=config)
+        except llm_runner.RunError as exc:
+            raise TaskError(str(exc)) from None
+        return out.strip()[: self.MAX_OUTPUT_CHARS]
 
     def verify(self, payload: str, result: str) -> Verdict:
         if not result.strip():
