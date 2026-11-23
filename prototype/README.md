@@ -344,7 +344,7 @@ are research references only. Their PoW/consensus implementations are not integr
     cd prototype
     python3 -m venv .venv
     . .venv/bin/activate
-    pip install -r requirements.txt
+    pip install --require-hashes -r requirements.lock   # exact versions, each file sha256-checked
     cp .env.example .env
     python -m app.signing   # creates the signing key; share the printed public key
     uvicorn app.main:app --host 127.0.0.1 --port 8000 --no-access-log --no-proxy-headers
@@ -365,6 +365,18 @@ Create a demo job using the API docs at http://127.0.0.1:8000/docs:
 - POST /v1/jobs with {"payload":"hello from Boats N Hoes","task_type":"demo:sha256"}, and your `OPERATOR_TOKEN` (or `SUBMITTER_TOKEN`) in the `x-operator-token` (or `x-submitter-token`) box. Without one you get `403`.
 - The demo worker claims and processes queued jobs.
 - GET /v1/ledger shows simulated points.
+
+## Pinned dependencies and licenses (`deps-check-v1`, `bnh-deps-check/1`)
+
+`requirements.txt` lists what the prototype needs and which version ranges work. `requirements.lock` pins **every** installed package (31 for Python 3.11+ on Linux, plus `colorama` on Windows) to one exact version with sha256 hashes, made with a 7-day cooldown (only releases at least a week old; brand-new releases are where hijacked packages show up first). `pip install --require-hashes -r requirements.lock` refuses any file whose hash doesn't match, so a swapped file on the package index stops the install instead of running. `licenses.json` records each locked package's license at that version, why it's there, and the allowed list (MIT, MIT-0, BSD-2/3-Clause, Apache-2.0, ISC, PSF-2.0, MPL-2.0; `certifi` is the only MPL-2.0 one and is used unchanged).
+
+    python -m app.deps_check lock        # files only: pins, hashes, no other indexes/URLs/files,
+                                         # requirements.txt ranges, licenses.json in step with the lock
+    python -m app.deps_check installed   # this environment: exact locked versions, declared licenses
+
+CI installs from the lock and runs both. A new package or a version bump fails `lock` until someone reads its license and updates `licenses.json`. To update the lock, see the commands at the top of `requirements.lock` (needs `uv`). Both write JSON with `--out` (never over an existing file); exit 0 ok, 1 problems, 2 usage/file error.
+
+**Limits:** hashes prove you got the same files as when the lock was made, not that those files are safe; the cooldown lowers the odds of a fresh hijack but doesn't remove them. No known-vulnerability scan runs yet. Package metadata is the publisher's own claim; "BSD License" without a clause count, or no license at all, is a note for a person to check. The CI workflow's GitHub Actions are pinned by version tag, not by commit.
 
 ## Website checker (`site-check-v1`, `bnh-site-check/1`)
 
