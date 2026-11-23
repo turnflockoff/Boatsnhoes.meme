@@ -26,7 +26,7 @@ This roadmap separates implemented repository assets from proposed work. A check
 - [ ] Confirm `/dev/dri` permissions.
 - [ ] Confirm both RX 470 cards enumerate independently.
 - [ ] Run a minimal Vulkan compute smoke test on GPU 0. *(Run recorder built: `python -m app.gpu_run --card card0 --out run.json -- <test command>` saves exit code, output hash, expected-output match, file hashes and which card was actually busy. 56 tests with fake sysfs and small Python programs; no test has been run on a GPU.)*
-- [ ] Repeat on GPU 1.
+- [ ] Repeat on GPU 1. *(Evidence check built: `python -m app.phase3_check --inventory inventory.json run-card0.json run-card1.json` marks each Track B item evidenced/partial/missing/problem and only counts the same test passing in two different PCI slots. 25 tests on sample files; nothing from the rig yet.)*
 - [ ] Record temperature, power, VRAM use, throughput, errors, and stability. *(Sensor tool built: `python -m app.gpu_sensors` reads temperature, power, VRAM, busy %, clocks and fan from amdgpu sysfs, read-only, with min/max/avg over a watch. 47 tests against fake sysfs trees; never run on the real rig. Throughput and errors come from the test itself.)*
 - [ ] Document exact working driver/runtime versions.
 

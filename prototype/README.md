@@ -364,6 +364,16 @@ The key finding is **which card actually did the work** (`evidence.target_card_b
 
 It always says `"proves_inference": false`: one report is a record, and becomes evidence when someone else repeats the same command with the same file hashes and gets the same output. Tested only with small Python programs writing into fake sysfs trees (`tests/test_gpu_run.py`); never run on the real rig yet.
 
+## Phase 3 evidence check (`bnh-phase3-check/1`)
+
+Once the inventory and one `gpu_run` report per card exist, `python -m app.phase3_check` reads them (files only, no commands, no GPU needed) and walks the ten Track B items in `docs/ROADMAP.md`:
+
+    python -m app.phase3_check --inventory inventory.json gpu0-run1.json gpu1-run1.json --out phase3-check.json
+
+Each item gets `evidenced`, `partial`, `missing` or `problem` with a one-line reason (wrong driver, CPU-only Vulkan, a render node your user can't open, counts that disagree between lspci, Vulkan and `/dev/dri`, cards that aren't PCI device `1002:67df`). A run only counts as a smoke test if it exited cleanly, matched a known-good answer (`--expect-file`/`--expect-sha256`), kept the card it was aimed at busy and no other card, the card is on `amdgpu`, and its PCI slot is one the inventory saw. Cards are matched by PCI slot, not by `cardN`, because names can change after a reboot. "Repeat on GPU 1" needs the same test (same program hash, same argument-file hashes, same expected answer) passing in a second slot; the command line itself may differ, since device flags do. Sensors and versions are never more than `partial`: stability and the runtime's own version (for llama.cpp, the commit) are yours to judge and write down.
+
+The result lists each input by file name and sha256 (never full paths). A run file saying `proves_inference: true` is treated as edited. Exit code 0 = the eight required items are evidenced, 1 = not yet, 2 = a file is missing, not JSON, the wrong kind of report, or `--out` exists. The files are unsigned, so this catches mistakes and mismatches, not a forger; `proves_inference` stays false. Tested with inventories built from format samples and runs recorded against fake sysfs trees (`tests/test_phase3_check.py`); never run on rig output yet.
+
 ## Two-worker rehearsal (Track F prep, `bnh-rehearsal/1`)
 
 Track F asks to show dispatch to two workers, accepted and rejected receipts, and how the coordinator handles duplicate, malformed, expired and replayed submissions. `python -m app.rehearsal` does that list from the outside, over HTTP, acting as two workers (`<run id>-gpu0`, `<run id>-gpu1`) that each get a one-time enrollment code:
