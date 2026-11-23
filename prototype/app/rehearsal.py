@@ -174,7 +174,12 @@ class Rehearsal:
 
     def preflight(self) -> None:
         """Refuse to run where rehearsal workers could take someone's queued work."""
-        response = self.request("GET", "/v1/ledger")
+        # Operator view: the public job counts are batched (`public-counts-v1`) and could
+        # still say 0 minutes after someone queued real work.
+        response = self.request("GET", "/v1/ledger", headers=self.op)
+        if response.status_code in (401, 403):
+            raise RehearsalAbort(f"the operator token was refused ({response.status_code}); "
+                                 "check OPERATOR_TOKEN")
         if response.status_code != 200:
             raise RehearsalAbort(f"could not read /v1/ledger ({response.status_code})")
         queued = int(response.json().get("jobs", {}).get("queued", 0))

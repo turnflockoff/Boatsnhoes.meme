@@ -78,6 +78,12 @@ class Settings:
     # confirmed/held while normal AI work lands in pending/unverified, so a rig could spot
     # its hidden tests. 0 = live (old behaviour). The operator token always sees it live.
     public_settle_delay_seconds: int = 3600
+    # `public-counts-v1` (threat model #14): the public job counts (/health, GET /v1/ledger)
+    # are taken once per clock-aligned window of this many seconds and repeated until the
+    # next window, for everyone. Live, `queued` rose the instant a rig's result was picked
+    # for a re-check, so a rig could tell which of its results get re-checked. 0 = live
+    # (old behaviour). The operator token always sees live counts.
+    public_counts_interval_seconds: int = 900
 
     def resolved_signing_key_path(self) -> Path:
         return self.signing_key_path or self.database_path.parent / "coordinator-signing.key"
@@ -209,4 +215,6 @@ def get_settings() -> Settings:
         reward_scoring=reward_scoring_env(),
         public_settle_delay_seconds=_int_env("PUBLIC_SETTLE_DELAY_SECONDS", 3600, 0,
                                              30 * 86400),
+        public_counts_interval_seconds=_int_env("PUBLIC_COUNTS_INTERVAL_SECONDS", 900, 0,
+                                                86400),
     )

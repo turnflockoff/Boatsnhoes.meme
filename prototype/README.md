@@ -371,7 +371,7 @@ A GitHub Actions workflow runs these tests on pushes and pull requests affecting
 - `POST /v1/jobs` — queue a job (needs `X-Submitter-Token` or `X-Operator-Token`); with `POINTS_TABLE` set, its points come from the table.
 - `POST /v1/jobs/next` — worker claims the next queued job (needs its key).
 - `POST /v1/jobs/{job_id}/submit` — submit a versioned receipt (`bnh-receipt/1`) with the result (needs its key).
-- `GET /v1/ledger` — view simulated accepted-work entries and points by status. Public view shows each result's bucket and confidence only `PUBLIC_SETTLE_DELAY_SECONDS` after it was accepted (`public-delay-v1`) and never shows result hashes (`public-no-hashes-v1`); with `X-Operator-Token` it is live and complete.
+- `GET /v1/ledger` — view simulated accepted-work entries and points by status. Public view shows each result's bucket and confidence only `PUBLIC_SETTLE_DELAY_SECONDS` after it was accepted (`public-delay-v1`) and never shows result hashes (`public-no-hashes-v1`); its job counts (like `/health`'s) are taken once per `PUBLIC_COUNTS_INTERVAL_SECONDS` window, default 900, and repeated until the next one (`public-counts-v1`, with `jobs_counted_at` and `jobs_next_count_at`); with `X-Operator-Token` it is live and complete.
 - `GET /v1/jobs/{job_id}` — job status and its public audit trail.
 - `POST /v1/challenges` — operator only: queue a hidden known-answer job; optional `target_worker` or `target_tier` aims it at one rig or a trust tier; refused (`409`) if its input, or a near copy of it (same words ignoring case, spacing, punctuation and settings such as the seed), was a hidden test in a period a ledger copy already covers (`test-reuse-v2`).
 - `GET /v1/audits` — operator only: every audit and challenge with its outcome.

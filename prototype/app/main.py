@@ -12,8 +12,8 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from .config import Settings, get_settings
-from . import (audit_policy, client_address, key_rotation, observability, points, rate_limit, review, rewards,
-               schemas, tasks, workers)
+from . import (audit_policy, client_address, key_rotation, observability, points,
+               public_counts, rate_limit, review, rewards, schemas, tasks, workers)
 from .ledger import PAUSE_VERSION, CoordinatorPaused, HiddenTestRevealed, Ledger
 from .models import (ChallengeCreate, EnrollmentCreate, JobCreate, JobEnvelope, PauseRequest,
                      ResultSubmission, WorkerRegistration)
@@ -92,6 +92,9 @@ def create_app(settings: Settings | None = None,
     limiter = rate_limit.RateLimiter(settings.rate_limit_per_minute, settings.auth_failure_limit,
                                      settings.auth_failure_window_seconds, limiter_clock)
     app.state.limiter = limiter
+    # `public-counts-v1` (threat model #14): public job counts are batched per window.
+    batched_counts = public_counts.BatchedCounts(settings.public_counts_interval_seconds,
+                                                 ledger.status_counts)
     # Threat model #17 follow-up: behind a listed proxy, limits apply to the real client.
     resolver = client_address.ClientResolver(
         client_address.parse_trusted_proxies(settings.trusted_proxies))
@@ -289,7 +292,7 @@ def create_app(settings: Settings | None = None,
                                 "receipt_schema": schemas.RECEIPT_SCHEMA_VERSION}
         try:
             ledger.ping()
-            jobs = ledger.status_counts()
+            counts = batched_counts.view(now())
             pause = ledger.pause_state()
         except Exception as exc:  # noqa: BLE001 - any database failure means "down"
             # The error text can contain file paths: log its type, don't return it.
@@ -300,7 +303,7 @@ def create_app(settings: Settings | None = None,
         # `pause-v1`: public, so rigs and a status page can tell "paused" from "down".
         # Still 200: results for jobs leased before the pause are accepted. No reason here.
         return body | {"status": "paused" if pause else "ok", "accepting_work": pause is None,
-                       "paused_since": pause["since"] if pause else None, "jobs": jobs,
+                       "paused_since": pause["since"] if pause else None, **counts,
                        "checks": {"database": "ok", "signing_key": "loaded"}}
 
     @app.get("/v1/operator/health")
@@ -388,6 +391,11 @@ def create_app(settings: Settings | None = None,
                             "each result's bucket the moment it is accepted: a rig can tell "
                             "its hidden tests from normal work (threat model #14). Set it "
                             "longer than an audit and tie-breaker take, e.g. 3600.")
+        if settings.public_counts_interval_seconds == 0:
+            warnings.append("PUBLIC_COUNTS_INTERVAL_SECONDS is 0, so the public job counts "
+                            "are live: right after a rig submits, `queued` going up by one "
+                            "tells it that result is being re-checked (threat model #14). "
+                            "Set it to batch the counts, e.g. 900.")
         if problems:
             warnings.append(f"{len(problems)} consistency problem(s): see "
                             "consistency_problems")
@@ -405,6 +413,7 @@ def create_app(settings: Settings | None = None,
                 "tiebreak_decides": settings.tiebreak_decides, "hidden_test_reuse": reuse,
                 "reward_scoring": settings.reward_scoring,
                 "public_settle_delay_seconds": settings.public_settle_delay_seconds,
+                "public_counts_interval_seconds": settings.public_counts_interval_seconds,
                 "pause": {"rule": PAUSE_VERSION, "paused": pause is not None} | (pause or {}),
                 "consistency_problems": problems, "warnings": warnings}
 
@@ -682,22 +691,30 @@ def create_app(settings: Settings | None = None,
         and confidence show only PUBLIC_SETTLE_DELAY_SECONDS after it was accepted; until
         then it counts as "pending". `public-no-hashes-v1` (threat model #14 follow-up):
         public entries never show `result_hash`, because a re-check that agrees has the
-        same hash as the job it re-checked. With the operator token the view is live and
-        complete."""
+        same hash as the job it re-checked. `public-counts-v1` (threat model #14): public job
+        counts are taken once per PUBLIC_COUNTS_INTERVAL_SECONDS window, because live
+        `queued` rose the instant a result was picked for a re-check. With the operator
+        token the view is live and complete."""
         operator = x_operator_token is not None
         if operator:
             require_operator(x_operator_token)
             delay, view = 0, "operator-live"
         else:
             delay, view = settings.public_settle_delay_seconds, "public-delayed"
-        cutoff = now() - delay if delay else None
-        rules = [] if operator else (["public-delay-v1"] if delay else []) + ["public-no-hashes-v1"]
+        t = now()
+        cutoff = t - delay if delay else None
+        counts = (public_counts.live(ledger.status_counts, t) if operator
+                  else batched_counts.view(t))
+        rules = [] if operator else ((["public-delay-v1"] if delay else [])
+                                     + ["public-no-hashes-v1"]
+                                     + ([public_counts.RULE]
+                                        if counts["public_counts_interval_seconds"] else []))
         return {"entries": ledger.entries(cutoff, with_hashes=operator),
                 "total_simulated_points": ledger.total_points(),
                 "points_by_status": ledger.points_by_status(cutoff),
                 "view": view, "public_settle_delay_seconds": delay,
                 "public_rules": rules, "hidden_fields": [] if operator else ["result_hash"],
-                "jobs": ledger.status_counts(), "consistency_problems": ledger.check_consistency(),
+                **counts, "consistency_problems": ledger.check_consistency(),
                 "notice": "Simulated points only; not tokens or money."}
 
     return app

@@ -108,6 +108,9 @@ def test_an_audit_match_does_not_show_early_as_replicated(pinned, tmp_path: Path
 
 
 def test_totals_and_job_counts_are_not_delayed(pinned, tmp_path: Path) -> None:
+    """The settle delay doesn't touch totals or job counts. (Job counts are batched per
+    window by a separate rule, `public-counts-v1`: see test_public_counts.py. This is the
+    window's first read, so they are current here.)"""
     client, _, _ = make(tmp_path)
     run_llm_job(client, "wk-a", "The Salty Hoe")
     body = public(client)

@@ -95,4 +95,5 @@ def test_zero_delay_still_hides_hashes(pinned, tmp_path: Path) -> None:
     audit = claim(client, "wk-b").json()["job_id"]
     assert submit(client, audit, "wk-b", "The Salty Hoe").status_code == 200
     assert sha("The Salty Hoe") not in everything_public(client, [original, audit])
-    assert public(client)["public_rules"] == ["public-no-hashes-v1"]
+    rules = public(client)["public_rules"]
+    assert "public-no-hashes-v1" in rules and "public-delay-v1" not in rules

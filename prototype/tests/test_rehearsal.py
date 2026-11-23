@@ -113,6 +113,20 @@ def test_refuses_a_coordinator_with_queued_work() -> None:
         assert client.app.state.ledger.status_counts() == {"queued": 1}
 
 
+def test_sees_queued_work_the_batched_public_counts_do_not_show_yet() -> None:
+    """`public-counts-v1`: the public counts are taken once per window, so a job queued
+    after they were taken doesn't show there. The safety check reads the live counts."""
+    with local_coordinator() as (client, token, clock):
+        assert client.get("/health").json()["jobs"] == {}  # this window's public counts
+        r = client.post("/v1/jobs", json={"payload": "someone's real job"},
+                        headers={"X-Operator-Token": token})
+        assert r.status_code == 200
+        assert client.get("/v1/ledger").json()["jobs"] == {}  # still the old snapshot
+        report = Rehearsal(client, token, now=clock, wait=clock.advance).run()
+        assert "queued job" in report["aborted"]
+        assert client.app.state.ledger.status_counts() == {"queued": 1}
+
+
 def test_refuses_a_wrong_operator_token() -> None:
     with local_coordinator() as (client, _token, clock):
         report = Rehearsal(client, "x" * 40, now=clock, wait=clock.advance).run()
