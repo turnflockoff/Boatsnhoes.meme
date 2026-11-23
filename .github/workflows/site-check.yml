@@ -1,0 +1,39 @@
+name: site-check
+
+# Run by hand from GitHub: Actions > site-check > Run workflow.
+# Checks the live site's security headers, HTTPS and www redirects, hidden folders and
+# share image against _headers and netlify.toml (python -m app.site_check live).
+# Plain GET requests only; it changes nothing. No secrets needed.
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "Site address to check"
+        required: true
+        default: "https://boatsnhoes.meme"
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: prototype
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Check the live site
+        env:
+          SITE_URL: ${{ inputs.url }}
+        run: python -m app.site_check live --url "$SITE_URL" --out site-check.json
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: site-check
+          path: prototype/site-check.json
+          if-no-files-found: ignore

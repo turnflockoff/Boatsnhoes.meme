@@ -732,3 +732,25 @@
 2. **"Safe to run twice" is a feature you design.** The trick is checking what's already in flight before sending more. Programmers call this *idempotent*: doing it again changes nothing.
 3. **Names can collide in surprising places.** In SQL, the label I gave a calculated column had the same name as a real column, and the database picked the real one. The bug only showed up with two rigs, which is why tests with more than one of something matter.
 4. **Dry runs build trust.** Seeing exactly who would get a test, before anything is sent, lets you sanity-check a tool you didn't write.
+
+## 2026-11-23 (17:20 UTC): A checker for the live website's headers, redirects and links (0.5.45)
+
+**Why this, why now.** The GPU prototype's software work is done up to what needs the real rig or your decisions, so I took the next website item that needs neither: TASKS.md has had "Verify `_headers` on the live Netlify URL" and "Verify HTTPS, security headers and share card on the live URL" open since the site went live.
+
+**Shipped**
+- **`python -m app.site_check static`** (reads files only; CI now runs it whenever a page, `_headers`, `netlify.toml` or `assets/` changes). It checks:
+  - `_headers` gives every page the security headers: HSTS for at least 180 days, `nosniff`, a referrer policy that doesn't leak full addresses, a Content-Security-Policy, and framing by other sites blocked;
+  - everything each page loads (scripts, styles, images, icons, frames, form targets, and URLs its scripts `fetch()`) is allowed by that CSP. If not, the browser silently blocks it and the page breaks only on the live site;
+  - every local link and file exists (with Netlify's pretty URLs, so `/contribute` means `contribute.html`), and nothing links into a folder `netlify.toml` hides (`/docs/`, `/prototype/`, ...);
+  - pages with a share card have a title, description, image and `twitter:card`, the image is on this site and exists, and its stated size matches the real file.
+- **`python -m app.site_check live --url https://boatsnhoes.meme`** asks the real site, without following redirects: each main page answers 200 with *exactly* the values in `_headers`; `http://` redirects to `https://` on the same host; `www.` redirects to the bare domain; a real file inside each hidden folder answers 404, not 200; and the homepage's share image loads as an image. HTTPS certificates are checked by the request itself. Plain GET requests only, like a browser; it changes nothing.
+- **One-click version on GitHub:** a new workflow, **Actions > site-check > Run workflow**, runs the live check and keeps the JSON report. It only appears once this PR is merged into main. No secrets needed.
+- **Result on the repo today:** 0 problems, 3 notes: the homepage has no canonical URL (it's your homepage, so I didn't add one; it's in USER_TODO as optional), and the 404 and thanks pages have no share card (fine).
+- **Proof.** 37 new tests, 693 total, all passing. The live check runs against a real local web server and against a fake site that I break in specific ways (http not redirecting, redirecting to a look-alike host such as `example.test.evil`, www going elsewhere, a header dropped or changed, a page 404ing, a hidden folder served, a share image that's really HTML, the site unreachable). Then I broke the checker itself 20 ways; 18 were caught at once. The 2 that survived were real test gaps: `*.googleapis.com` also matching `evilgoogleapis.com`, and a www redirect to any site counting as fine. I added a test for each, and now all 20 are caught.
+- **Honest limits:** I could **not** run the live check against boatsnhoes.meme: this sandbox's network blocks the site (the run is recorded as "could not connect", not as a pass). So the TASKS items stay open until the workflow runs once. Links to other sites (GitHub) aren't fetched. If Netlify adds its own HSTS header on top of ours, the live check will show the combined value as a mismatch; that would be worth knowing, not a crisis. No site page changed in this session, so there was no layout to check at 390 px.
+
+**What you learned**
+1. **Headers are invisible instructions.** Every page comes with a few lines the visitor never sees ("only load scripts from here", "never let another site frame this page"). `_headers` is where you write them; the live check confirms Netlify actually sends them.
+2. **A CSP fails quietly.** If the policy forbids something a page uses, the browser just doesn't load it and the page looks broken with no error for the visitor. Checking every page against the policy before deploy catches that early.
+3. **Don't follow the redirect when testing the redirect.** To know that `http://` really sends people to `https://`, you have to look at the first answer, not where you end up, so the checker turns redirect-following off.
+4. **"Starts with" is a classic security bug.** `https://boatsnhoes.meme.evil.com` starts with `https://boatsnhoes.meme`. Checking for the trailing `/` (`https://boatsnhoes.meme/`) is what makes the match exact.

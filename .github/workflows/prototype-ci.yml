@@ -5,11 +5,19 @@ on:
     paths:
       - "prototype/**"
       - "reports/**"
+      - "**.html"
+      - "_headers"
+      - "netlify.toml"
+      - "assets/**"
       - ".github/workflows/prototype-ci.yml"
   pull_request:
     paths:
       - "prototype/**"
       - "reports/**"
+      - "**.html"
+      - "_headers"
+      - "netlify.toml"
+      - "assets/**"
       - ".github/workflows/prototype-ci.yml"
 
 permissions:
@@ -36,3 +44,5 @@ jobs:
         run: pytest -q
       - name: Re-check published reports (reports/)
         run: python -m app.publish_report check
+      - name: Check site pages, links and headers (static, reads files only)
+        run: python -m app.site_check static

@@ -1,5 +1,5 @@
 # BOATS N HOES: Project Task List (Claude + dev work)
-**Version:** 0.5.44 | **Last updated:** 2026-11-23 | Personal to-dos live in USER_TODO.md.
+**Version:** 0.5.45 | **Last updated:** 2026-11-23 | Personal to-dos live in USER_TODO.md.
 
 ## Phase 0: Foundation
 - [x] Buy boatsnhoes.meme
@@ -86,7 +86,8 @@
 - [x] Stay Safe page built
 - [x] `_headers` security file built
 - [x] `_headers` added to repo; CSP verified locally against all pages
-- [ ] Verify `_headers` on the live Netlify URL
+- [x] Build a checker for the live headers, HTTPS and www redirects, hidden folders and share image *(`site-check-v1`, 0.5.45: `python -m app.site_check live`, or one click in GitHub: Actions > site-check > Run workflow. 37 tests against a local server and a fake site; not yet run against boatsnhoes.meme, which this sandbox can't reach)*
+- [ ] Verify `_headers` on the live Netlify URL (run the site-check workflow once after merging; owner click)
 - [ ] Signed miner releases with checksums (multi-signer)
 - [ ] Many seed nodes in different regions
 - [ ] Node peer limits and rate limits
@@ -117,7 +118,8 @@
 - [x] Netlify project created (`boatsnhoes-dik6`), form detection on
 - [x] Link Netlify to GitHub and confirm live deploy
 - [x] Point boatsnhoes.meme DNS at Netlify (Cloudflare CNAMEs, DNS only)
-- [ ] Verify HTTPS, security headers and share card on the live URL
+- [x] Check every page's links, files, share cards and CSP fit offline, in CI *(`python -m app.site_check static`, 0.5.45: passes on all 5 pages; homepage has no canonical URL, noted only)*
+- [ ] Verify HTTPS, security headers and share card on the live URL (same site-check workflow as above)
 
 ## Phase 7: Launch
 - [ ] Mainnet plan, miner onboarding, listings outreach

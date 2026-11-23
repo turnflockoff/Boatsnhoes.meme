@@ -366,6 +366,24 @@ Create a demo job using the API docs at http://127.0.0.1:8000/docs:
 - The demo worker claims and processes queued jobs.
 - GET /v1/ledger shows simulated points.
 
+## Website checker (`site-check-v1`, `bnh-site-check/1`)
+
+Not part of the worker; it checks the static site at the repo root (served by Netlify).
+
+    python -m app.site_check static                 # reads files only; CI runs it
+    python -m app.site_check live --url https://boatsnhoes.meme --out site-check.json
+
+`static` checks that `_headers` has the security headers (HSTS ≥ 180 days, nosniff, referrer
+policy, CSP, framing blocked), that every page's scripts, styles, images, frames, form
+targets and scripts' `fetch()` URLs fit the CSP, that every local link and file exists and
+none points into a folder `netlify.toml` hides, and that share cards are complete.
+`live` sends plain GETs (redirects not followed) and checks each page answers 200 with
+exactly the `_headers` values, http→https and www→bare-domain redirects, a real file in each
+hidden folder answers 404, and the homepage's share image loads. Exit 0 = all good, 1 =
+something failed, 2 = usage error. On GitHub: **Actions > site-check > Run workflow** runs the
+live check with one click. Tested against a local server and a fake site; not yet run
+against boatsnhoes.meme from here (this sandbox can't reach it).
+
 ## Tests
 
     cd prototype

@@ -1,5 +1,5 @@
 # YOUR Personal To-Do List (things only you can do)
-**Version:** 0.5.44 | **Last updated:** 2026-11-23
+**Version:** 0.5.45 | **Last updated:** 2026-11-23
 Never share passwords, API keys, or recovery phrases with anyone, including Claude.
 
 ## This week
@@ -10,6 +10,8 @@ Never share passwords, API keys, or recovery phrases with anyone, including Clau
 - [x] HTTPS certificate requested (Let's Encrypt via Netlify)
 - [ ] Optional: block email spoofing with Cloudflare TXT records `@` = `v=spf1 -all` and `_dmarc` = `v=DMARC1; p=reject;`
 - [ ] Netlify: Forms > `gpu-testers` > add an email notification to your Netlify account email
+- [ ] After merging the drafts PR: on GitHub, open **Actions > site-check > Run workflow** (keep the address `https://boatsnhoes.meme`). It checks the live site's security headers, the http→https and www redirects, that /docs/ etc. stay hidden, and the share image. Green = done; red = open the run and read the FAIL lines (or tell Claude). Nothing is changed by running it
+- [ ] Optional: add a canonical link (`<link rel="canonical" href="https://boatsnhoes.meme/">`) to the homepage's `<head>` so shares always show the main address. It's invisible on the page, but it's your homepage, so I didn't touch it; say the word if you want it added
 - [ ] Upload mine.html, tokenomics.html, stay-safe.html (not on GitHub yet)
 - [ ] Turn on hardware-key or authenticator 2FA for Netlify, GitHub, your registrar, email, and every social account
 - [ ] Lock the domain at the registrar and enable auto-renew
