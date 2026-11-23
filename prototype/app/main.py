@@ -31,6 +31,7 @@ SIGNED_FIELDS = schemas.SIGNED_FIELDS
 PRIVATE_EVENTS = {"audit_scheduled", "audit_match", "audit_mismatch", "audit_not_run",
                   "passed_challenge", "failed_challenge", "tiebreak_scheduled",
                   "tiebreak_majority", "tiebreak_unresolved", "tiebreak_not_run",
+                  "tiebreak_held_for_review",
                   "auditor_assigned", "auditor_unassigned", "audit_assignment_expired",
                   "test_assigned", "test_unassigned", "test_assignment_expired"}
 
@@ -79,7 +80,9 @@ def create_app(settings: Settings | None = None,
                     # Hidden tests aimed at a trust tier use the same rule as the audit rate.
                     tier_of=lambda h: audit_policy.decide_for(h, settings).tier,
                     # `auditor-pick-v1`: who may be picked to audit or break a tie.
-                    auditor_pick=settings.auditor_pick)
+                    auditor_pick=settings.auditor_pick,
+                    # `tiebreak-trust-v1`: whether a tie-breaker's majority needs trusted rigs.
+                    tiebreak_decides=settings.tiebreak_decides)
     app = FastAPI(title="Boats N Hoes Useful-Compute MVP", version="0.5.0")
     app.state.ledger = ledger
     app.state.settings = settings
@@ -388,7 +391,8 @@ def create_app(settings: Settings | None = None,
                                            if f["dropped"]},
                 "review": queue["counts"] | {"points_held": queue["points_held"]},
                 "rate_limits": limits, "points": points.describe(settings.points_table),
-                "auditor_pick": settings.auditor_pick, "hidden_test_reuse": reuse,
+                "auditor_pick": settings.auditor_pick,
+                "tiebreak_decides": settings.tiebreak_decides, "hidden_test_reuse": reuse,
                 "pause": {"rule": PAUSE_VERSION, "paused": pause is not None} | (pause or {}),
                 "consistency_problems": problems, "warnings": warnings}
 

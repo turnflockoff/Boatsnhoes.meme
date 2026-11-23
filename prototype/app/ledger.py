@@ -35,6 +35,9 @@ avoiding the previous pick when anyone else is eligible. Each accepted submissio
     disputed          an independent re-run disagreed; both results are held while a
                       tie-breaker runs (or until a person looks, if it never runs)
     outvoted          the tie-breaker agreed with the other side; this result stays held
+                      (with `tiebreak_decides="established-only"`, a majority whose rigs
+                      aren't both `established` settles nothing: all three stay `disputed`
+                      for a person, see audit_policy.tiebreak_settles)
     unresolved        the tie-breaker agreed with neither side (or with both); all held
     passed-challenge / failed-challenge   outcome of a hidden known-answer job
 
@@ -55,7 +58,14 @@ from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-from .audit_policy import AUDITOR_PICK_RULES, PASSED_STATUSES, STRIKE_STATUSES, auditor_pool
+from .audit_policy import (
+    AUDITOR_PICK_RULES,
+    PASSED_STATUSES,
+    STRIKE_STATUSES,
+    TIEBREAK_DECIDES_RULES,
+    auditor_pool,
+    tiebreak_settles,
+)
 
 FINAL_STATES = ("accepted", "rejected", "expired", "failed")
 
@@ -234,7 +244,7 @@ class Ledger:
                  active_seconds: int = 300, assign_seconds: int = 120,
                  read_only: bool = False,
                  tier_of: Callable[[dict[str, int]], str] | None = None,
-                 auditor_pick: str = "uniform"):
+                 auditor_pick: str = "uniform", tiebreak_decides: str = "always"):
         """`rng` picks auditors; the default uses the OS's secure randomness so workers
         can't predict who gets an audit. A worker counts as active for `active_seconds`
         after it last asked for a job, sent a result, or enrolled. An assigned worker has
@@ -245,11 +255,18 @@ class Ledger:
         app/audit_policy.py); without it, hidden tests aimed at a tier find nobody.
         `auditor_pick` is "uniform" (any eligible worker) or "trusted-first" (audits and
         tie-breakers go to the most trusted tier that has an eligible worker; needs
-        `tier_of`, see audit_policy.auditor_pool)."""
+        `tier_of`, see audit_policy.auditor_pool).
+        `tiebreak_decides` is "always" (a tie-breaker's majority settles a dispute) or
+        "established-only" (only when both rigs on the winning side are established;
+        needs `tier_of`, see audit_policy.tiebreak_settles)."""
         if auditor_pick not in AUDITOR_PICK_RULES:
             raise ValueError(f"unknown auditor_pick {auditor_pick!r}")
         if auditor_pick == "trusted-first" and tier_of is None:
             raise ValueError("auditor_pick='trusted-first' needs tier_of")
+        if tiebreak_decides not in TIEBREAK_DECIDES_RULES:
+            raise ValueError(f"unknown tiebreak_decides {tiebreak_decides!r}")
+        if tiebreak_decides == "established-only" and tier_of is None:
+            raise ValueError("tiebreak_decides='established-only' needs tier_of")
         self.path = Path(path)
         self.rng = rng or random.SystemRandom()
         self.active_seconds = active_seconds
@@ -257,6 +274,7 @@ class Ledger:
         self.read_only = read_only
         self.tier_of = tier_of
         self.auditor_pick = auditor_pick
+        self.tiebreak_decides = tiebreak_decides
         if read_only:
             if not self.path.exists():
                 raise FileNotFoundError(self.path)
@@ -920,7 +938,10 @@ class Ledger:
                           agree: Agree, now: int) -> None:
         """Majority of three. The tie-breaker sides with exactly one of the two disputed
         results: that result and the tie-breaker are confirmed, the other is outvoted.
-        Siding with neither (or, under a loose tolerance, with both) settles nothing."""
+        Siding with neither (or, under a loose tolerance, with both) settles nothing.
+        `tiebreak-trust-v1`: under "established-only" a majority settles only when the
+        tie-breaker and the rig it sided with are both established (records from before
+        this vote); otherwise all three stay `disputed` for the review queue, no strike."""
         original = db.execute("SELECT * FROM submissions WHERE job_id=?",
                               (tb["audit_of"],)).fetchone()
         audit = db.execute(
@@ -930,6 +951,31 @@ class Ledger:
             return
         sides = [s for s in (original, audit)
                  if result is not None and s["result"] is not None and agree(s["result"], result)]
+        held_detail = None
+        if len(sides) == 1 and self.tiebreak_decides != "always":
+            # Worked out before any status below changes, so this vote can't lift a rig
+            # into `established` on its own.
+            tb_worker = db.execute("SELECT worker_id FROM submissions WHERE job_id=?",
+                                   (tb["job_id"],)).fetchone()["worker_id"]
+            history = self._audit_history_rows(db)
+            assert self.tier_of is not None
+            blank = {"checks_passed": 0, "strikes": 0}
+            winner_tier = self.tier_of(history.get(sides[0]["worker_id"], blank))
+            tb_tier = self.tier_of(history.get(tb_worker, blank))
+            if not tiebreak_settles(self.tiebreak_decides, [winner_tier, tb_tier]):
+                side = "original" if sides[0] is original else "audit"
+                # Private: it names trust tiers. Ledger copies drop event details.
+                held_detail = (f"held for review (tie-breaker {tb['job_id']}; sided with "
+                               f"{side}; winner {winner_tier}, tie-breaker {tb_tier}; "
+                               f"{self.tiebreak_decides})")
+        if held_detail is not None:
+            updates = dict.fromkeys((original["job_id"], audit["job_id"], tb["job_id"]),
+                                    "disputed")
+            for job_id in updates:
+                db.execute("UPDATE submissions SET audit_status='disputed' WHERE job_id=?",
+                           (job_id,))
+                self._event(db, now, "tiebreak_held_for_review", job_id, detail=held_detail)
+            return
         if len(sides) == 1:
             winner = sides[0]
             loser = audit if winner is original else original

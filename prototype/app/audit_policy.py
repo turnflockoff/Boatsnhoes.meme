@@ -29,6 +29,17 @@ The same tiers can also decide who is picked to audit others (`auditor-pick-v1`,
 rig when one is eligible, else a `new` one, and a `suspect` rig only as a last resort. It is
 off by default because audit work pays the same points as normal work, so it shifts who
 earns that share; switching it on is the owner's call.
+
+The tiers also decide whether a tie-breaker may settle a dispute on its own
+(`tiebreak-trust-v1`, setting `TIEBREAK_DECIDES`, threat model #6). A tie-breaker that sides
+with one of the two disputed results normally decides the case: two rigs agree, the odd one
+out is `outvoted`. If those two rigs are in the same ring, they outvote an honest one. With
+`established-only`, the majority settles the dispute only when both rigs on the winning side
+(the tie-breaker and the rig it agreed with) are `established`, judged from their records
+just before the vote. Otherwise all three results stay held (`disputed`) and the case goes
+to the operator review queue (app/review.py), with no strike for anyone until a person
+decides. Off by default (`always`): with only new rigs, every dispute would wait for a
+person, and held points stay held because there is no override yet (scoring v2).
 """
 from __future__ import annotations
 
@@ -44,6 +55,13 @@ AUDIT_POLICY_VERSION = "audit-tier-v1"
 AUDITOR_PICK_VERSION = "auditor-pick-v1"
 AUDITOR_PICK_RULES = ("uniform", "trusted-first")
 PICK_ORDER = ("established", "new", "suspect")
+
+# Who may settle a dispute without a person (`tiebreak-trust-v1`, threat model #6).
+#   always            the tie-breaker's majority always settles it (the default; today).
+#   established-only  only when the tie-breaker and the rig it sided with are both
+#                     `established`; otherwise the case is held for the review queue.
+TIEBREAK_DECIDES_VERSION = "tiebreak-trust-v1"
+TIEBREAK_DECIDES_RULES = ("always", "established-only")
 
 # Audit statuses that count for or against a worker.
 PASSED_STATUSES = ("confirmed", "passed-challenge")
@@ -86,7 +104,9 @@ def describe(settings: Any) -> dict[str, Any]:
             "new_until_checks_passed": settings.audit_new_until,
             "passed_statuses": list(PASSED_STATUSES),
             "strike_statuses": list(STRIKE_STATUSES),
-            "auditor_pick": describe_pick(getattr(settings, "auditor_pick", "uniform"))}
+            "auditor_pick": describe_pick(getattr(settings, "auditor_pick", "uniform")),
+            "tiebreak_decides": describe_tiebreak(getattr(settings, "tiebreak_decides",
+                                                          "always"))}
 
 
 def auditor_pool(candidates: Sequence[str],
@@ -106,3 +126,19 @@ def auditor_pool(candidates: Sequence[str],
 def describe_pick(rule: str) -> dict[str, Any]:
     """The auditor-pick rule in force, for the operator's views."""
     return {"version": AUDITOR_PICK_VERSION, "rule": rule, "order": list(PICK_ORDER)}
+
+
+def tiebreak_settles(rule: str, deciding_tiers: Sequence[str]) -> bool:
+    """`tiebreak-trust-v1`: may a majority settle a dispute without a person? Pure.
+    `deciding_tiers` are the tiers of the rigs on the winning side (the tie-breaker and the
+    rig it agreed with), each from its record before this vote. No tiers known means no."""
+    if rule not in TIEBREAK_DECIDES_RULES:
+        raise ValueError(f"unknown tiebreak rule {rule!r}")
+    if rule == "always":
+        return True
+    return bool(deciding_tiers) and all(t == "established" for t in deciding_tiers)
+
+
+def describe_tiebreak(rule: str) -> dict[str, Any]:
+    """The tie-breaker rule in force, for the operator's views."""
+    return {"version": TIEBREAK_DECIDES_VERSION, "rule": rule}

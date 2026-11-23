@@ -41,6 +41,10 @@ class Settings:
     # `auditor-pick-v1` (app/audit_policy.py): "uniform" = any eligible rig, same chance;
     # "trusted-first" = established rigs first, then new, a rig with a strike last.
     auditor_pick: str = "uniform"
+    # `tiebreak-trust-v1` (app/audit_policy.py): "always" = the tie-breaker's majority
+    # settles a dispute; "established-only" = only when both rigs on the winning side are
+    # established, otherwise the case is held for a person (threat model #6).
+    tiebreak_decides: str = "always"
     # How long the chosen worker has to pick up its audit before it is re-assigned.
     audit_assign_seconds: int = 120
     # Operator health warns about a worker that has dropped this many assigned audits or
@@ -134,6 +138,15 @@ def _auditor_pick_env() -> str:
     return raw
 
 
+def _tiebreak_decides_env() -> str:
+    from .audit_policy import TIEBREAK_DECIDES_RULES
+
+    raw = (os.getenv("TIEBREAK_DECIDES") or "always").strip().lower()
+    if raw not in TIEBREAK_DECIDES_RULES:
+        raise ValueError(f"TIEBREAK_DECIDES must be one of {', '.join(TIEBREAK_DECIDES_RULES)}")
+    return raw
+
+
 def get_settings() -> Settings:
     from .tasks import EXECUTORS  # the task types a points table must cover
 
@@ -164,6 +177,7 @@ def get_settings() -> Settings:
         auditor_active_seconds=_int_env("AUDITOR_ACTIVE_SECONDS", 300, 10, 86400),
         audit_assign_seconds=_int_env("AUDIT_ASSIGN_SECONDS", 120, 5, 86400),
         auditor_pick=_auditor_pick_env(),
+        tiebreak_decides=_tiebreak_decides_env(),
         audit_drop_warn=_int_env("AUDIT_DROP_WARN", 3, 1, 100000),
         submitter_token=submitter_token,
         rate_limit_per_minute=_int_env("RATE_LIMIT_PER_MINUTE", 240, 0, 100000),

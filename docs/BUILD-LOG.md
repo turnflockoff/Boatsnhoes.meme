@@ -544,3 +544,19 @@
 2. **When unsure, assume it was sent.** If the network fails mid-send, you can't know whether the test arrived. Treating it as used costs one test; treating it as unused could send the same test twice, which is exactly what makes tests recognisable.
 3. **Save before you act.** Writing "used" to disk before sending means even a power cut can't undo the cross-off.
 4. **Secrets need a home outside the repo.** The answers to hidden tests are as sensitive as a password: the tool refuses to keep them anywhere git could pick them up.
+
+## 2026-11-23 (06:15 UTC): A trust check before a tie-breaker settles an argument (0.5.34)
+
+**Shipped**
+- **The gap (threat model #6).** When a re-check disagrees with a rig's answer, a third rig (the tie-breaker) runs the same job and two-out-of-three wins. The loser gets a strike. But if the tie-breaker and the rig it sides with belong to the same person, two cheaters can outvote one honest rig, and the honest rig gets the strike.
+- **New optional setting `TIEBREAK_DECIDES=established-only`** (rule `tiebreak-trust-v1`). A two-out-of-three vote only settles the argument on its own when *both* rigs on the winning side already have a proven record (`established`: enough results that passed independent checks, no strikes). Their records are read from *before* the vote, so the vote can't vouch for itself.
+- **Otherwise the case waits for you.** All three answers stay held, nobody gets a strike, and `python -m app.review` lists it as "needs a person", showing who agreed with whom. A private note in the audit trail records which side the tie-breaker took and each rig's tier. Rigs can't see any of this: their points show as "held" either way, and shared ledger copies drop the note.
+- **Off by default (`always`, today's behaviour).** While every rig is new, every argument would wait for you, and held points stay held until scoring v2 says what your verdict does. That trade-off is your call (added to USER_TODO).
+- Tests went from 509 to 520, all passing (11 new). I switched off 10 of the new rules one at a time (ignore the winner's record, ignore the tie-breaker's record, leak the note to rigs, skip the review-queue label, and so on) and a test failed every time. Software only; nothing here touches the GPUs.
+- **Honest limits:** it doesn't help against a ring whose rigs have already earned `established` by behaving well first. It only decides *whether* a vote counts automatically, not what happens to the points afterwards.
+
+**What you learned**
+1. **A majority vote is only as good as the voters' independence.** Two-out-of-three sounds fair, but if two of the three are secretly one person, it's one-against-one with a thumb on the scale.
+2. **Don't let a decision count toward the voter's own reputation.** The tie-breaker earns a "passed check" from the very vote in question, so trust is read from before the vote.
+3. **"Hold and ask a person" is a valid answer.** When the software can't tell honest from collusion, freezing the points and flagging the case is safer than guessing, as long as someone actually looks.
+4. **Safety settings have a cost.** Stricter rules mean more manual work early on, which is why this ships switched off and you decide when to turn it on.

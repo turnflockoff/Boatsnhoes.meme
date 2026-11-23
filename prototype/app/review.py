@@ -4,6 +4,9 @@ Some held results can't be settled by the software on its own:
     - a dispute whose tie-breaker never ran (often only two rigs were online), or for which
       no tie-breaker was scheduled (`TIEBREAK=false`);
     - an `unresolved` dispute: the tie-breaker agreed with neither side;
+    - a dispute the tie-breaker answered but wasn't allowed to settle, because a rig on
+      the winning side isn't `established` yet (`TIEBREAK_DECIDES=established-only`,
+      `tiebreak-trust-v1`, threat model #6);
     - a failed hidden test job: maybe a cheat, maybe honest GPU nondeterminism (#13).
 Until now these just sat in the "held" bucket and the operator had to dig through
 `/v1/audits` and the events table to find them. This module gathers them into one list of
@@ -80,6 +83,11 @@ def _dispute_case(jobs: list[dict[str, Any]]) -> dict[str, Any]:
     if "disputed" in statuses:
         if tiebreak is not None and tiebreak["status"] in ("queued", "leased"):
             stage, why = "waiting", "the audit disagreed; a tie-breaker is queued or running"
+        elif tiebreak is not None and tiebreak["status"] == "accepted":
+            stage, why = "needs_review", ("the tie-breaker answered, but a rig on the side it "
+                                          "agreed with isn't established yet, so the vote "
+                                          "didn't settle it (TIEBREAK_DECIDES=established-"
+                                          "only). See who agrees with whom below")
         elif tiebreak is None:
             stage, why = "needs_review", ("the audit disagreed and no tie-breaker was "
                                           "scheduled (TIEBREAK may be off)")
