@@ -677,3 +677,25 @@
 2. **Tie the clock, not the caller.** The windows start at fixed times, so nobody can restart one by asking at a clever moment. If the snapshot refreshed "15 minutes after the last request", a rig could control when it happens.
 3. **When you change one thing, look for who relied on it.** The rehearsal's safety check quietly depended on live counts; batching them would have made it miss real queued work. Searching for every reader of a field before changing it found that.
 4. **Name what's left.** The fix makes the hint weaker, not impossible, on a tiny network. Writing that down keeps the docs honest and tells you what would help (more rigs, longer window).
+
+## 2026-11-23 (14:15 UTC): Who agreed with a rig that got caught? (0.5.42)
+
+**Housekeeping first:** PR #4 was merged into main at 14:07 (squashed). I merged main back into the drafts branch so the next PR starts clean; the two had identical files, so nothing changed.
+
+**Shipped**
+- **The gap (threat model #3).** Re-checks catch a rig that fakes an AI answer, unless the rig that re-checks it is a friend. Then both answers match, both are marked *confirmed*, and nothing looks wrong. Random auditor picks (0.5.8) make that rarer, but when it happens the software can't see it.
+- **What can be seen later.** Sooner or later the cheater gets caught: it fails a hidden known-answer test or is outvoted in a tie-breaker (a "strike"). From that moment, every rig whose answer *agreed* with it earlier deserves a second look.
+- **The vouch check (`vouch-check-v1`).** `GET /v1/operator/vouches` (operator token) or `python -m app.vouches` (opens the database read-only) lists:
+  - **caught rigs**, with their strikes;
+  - **leads**: every rig that agreed with a caught rig, how many times and with whom, and how many hidden tests it has passed itself. Two caught rigs that agreed with each other come first;
+  - **weak confirmations**: confirmed results whose *only* independent agreement came from a caught rig, with their simulated points.
+- **Operator health** now has a `vouches` summary and warns about leads that aren't revoked, aren't already caught, and have never passed a hidden test, with the next step: aim a hidden test at each (`target_worker`, or `challenge_pool issue ... --worker <id>`). An honest rig passes and loses nothing; a colluder has to answer honestly or earn its own strike.
+- **What it doesn't do:** change points, statuses, trust tiers or who audits. Weakly confirmed points stay paid until scoring v2 (your decision) says otherwise. The report holds no prompts or answers, but it names who checked whom, so it is operator-only.
+- **Proof.** 12 new tests (627 total, all passing), using the real API: a rig that confirmed a later-caught rig's work becomes a lead; a caught rig acting as auditor makes the result it confirmed weak; a tie-breaker that sided with a later-caught rig is a lead; rigs that outvoted the cheater are *not* leads; passing an aimed hidden test clears the warning but keeps the lead on the list; revoked leads aren't warned about; the CLI changes nothing in the database; no answers or prompts appear in the report. I then broke the code 11 ways (everyone counted as caught, "weak" meaning any caught partner, no caught-pairs-first order, revoked or caught rigs in the warning, passed tests ignored, a rig paired with itself, outvoted results counted as agreeing, no token check, only the original considered, wrong hidden-test count); two survived the first round (they only show up with three agreeing rigs or a particular ordering), so I added a focused test, and now every one is caught. Not run against a live coordinator: confirmations only happen on AI jobs, which need llama-cli and a model. Software only; nothing here touches the GPUs.
+- **Honest limits:** it only starts once one ring member is caught; on a small network almost every rig will be a lead at first (honest rigs agree with a cheater whenever the cheater happened to be honest); and sending the tests is still a manual step.
+
+**What you learned**
+1. **Agreement is only as good as who agrees.** "Two rigs got the same answer" proves something only if the two rigs are independent. When one turns out to be a cheater, every "yes" it gave or got loses its value.
+2. **Look backwards when you catch someone.** Banks do this with fraud: when one account is caught, they review every account it traded with. Catching one cheater is a lead to the next one.
+3. **A lead is not a verdict.** Most rigs on the list will be honest. The fair response is a cheap test everyone honest passes (a hidden known-answer job), not a penalty.
+4. **Test the tests.** Breaking the code on purpose showed two gaps in the first set of tests. A test suite you've never seen fail doesn't prove much.

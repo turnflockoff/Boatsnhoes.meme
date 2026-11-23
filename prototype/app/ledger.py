@@ -1110,6 +1110,45 @@ class Ledger:
                 groups.append({"root": root, "jobs": [dict(r) for r in jobs]})
         return groups
 
+    def agreement_groups(self) -> list[dict[str, Any]]:
+        """Raw rows for the vouch check (app/vouches.py, `vouch-check-v1`, threat model #3).
+        Read-only. One group per work job, listing the results in it (the original, its
+        audit, its tie-breaker) that ended up `confirmed`, i.e. agreed with each other.
+        Holds no payloads or answers, but names who audited whom: operator-only."""
+        with closing(self._connect()) as db:
+            rows = db.execute(
+                "SELECT CASE WHEN j.job_kind IN ('audit','tiebreak') THEN j.audit_of "
+                "ELSE j.job_id END AS root, j.job_id, j.job_kind, j.task_type, s.worker_id, "
+                "s.reward_points, s.accepted_at FROM submissions s JOIN jobs j USING(job_id) "
+                "WHERE s.audit_status='confirmed' AND j.job_kind IN ('work','audit','tiebreak') "
+                "ORDER BY root, s.accepted_at, j.job_id").fetchall()
+        groups: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            group = groups.setdefault(row["root"], {"root": row["root"],
+                                                    "task_type": row["task_type"],
+                                                    "agreed": []})
+            group["agreed"].append({k: row[k] for k in ("job_id", "job_kind", "worker_id",
+                                                        "reward_points", "accepted_at")})
+        return list(groups.values())
+
+    def check_record(self) -> dict[str, dict[str, Any]]:
+        """Per worker: owner label, revoked or not, strikes, when the first result that
+        became a strike was submitted, and how many hidden known-answer tests it passed."""
+        strikes = ",".join("?" * len(STRIKE_STATUSES))
+        with closing(self._connect()) as db:
+            rows = db.execute(
+                f"SELECT w.worker_id, w.owner, w.revoked_at, "
+                f"COALESCE(SUM(s.audit_status IN ({strikes})), 0) AS strikes, "
+                f"MIN(CASE WHEN s.audit_status IN ({strikes}) THEN s.accepted_at END) AS first_at, "
+                f"COALESCE(SUM(s.audit_status='passed-challenge'), 0) AS passed "
+                f"FROM workers w LEFT JOIN submissions s ON s.worker_id=w.worker_id "
+                f"GROUP BY w.worker_id ORDER BY w.worker_id",
+                (*STRIKE_STATUSES, *STRIKE_STATUSES)).fetchall()
+        return {r["worker_id"]: {"owner": r["owner"], "revoked": r["revoked_at"] is not None,
+                                 "strikes": int(r["strikes"]),
+                                 "first_struck_result_at": r["first_at"],
+                                 "hidden_tests_passed": int(r["passed"])} for r in rows}
+
     def worker_trust(self, worker_id: str) -> dict[str, Any]:
         """Operator view: how a worker's results held up under audits and challenges."""
         with closing(self._connect()) as db:

@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 
 from .config import Settings, get_settings
 from . import (audit_policy, client_address, key_rotation, observability, points,
-               public_counts, rate_limit, review, rewards, schemas, tasks, workers)
+               public_counts, rate_limit, review, rewards, schemas, tasks, vouches, workers)
 from .ledger import PAUSE_VERSION, CoordinatorPaused, HiddenTestRevealed, Ledger
 from .models import (ChallengeCreate, EnrollmentCreate, JobCreate, JobEnvelope, PauseRequest,
                      ResultSubmission, WorkerRegistration)
@@ -365,6 +365,15 @@ def create_app(settings: Settings | None = None,
             warnings.append(f"{queue['counts']['needs_review']} held case(s) need a person "
                             "(stuck dispute, three different answers, or a failed hidden "
                             "test): see /v1/operator/review")
+        # Threat model #3 (`vouch-check-v1`): rigs that agreed with a rig later caught and
+        # that nothing has checked independently yet.
+        vouch = vouches.vouch_report(ledger, t)
+        if vouch["unchecked_leads"]:
+            warnings.append(f"{len(vouch['unchecked_leads'])} rig(s) agreed with a rig that "
+                            f"was later caught and never passed a hidden test of their own: "
+                            f"{', '.join(vouch['unchecked_leads'])}. Could be honest, could "
+                            "be a friend confirming fakes; aim a hidden test at each "
+                            "(target_worker). See /v1/operator/vouches")
         # app/rate_limit.py: someone keeps sending wrong keys/tokens/codes.
         limits = limiter.snapshot() | {"proxies": resolver.snapshot()}
         warnings.extend(resolver.warnings())
@@ -408,6 +417,11 @@ def create_app(settings: Settings | None = None,
                 **snap, "audit_dropouts": {w: f["dropped"] for w, f in follow.items()
                                            if f["dropped"]},
                 "review": queue["counts"] | {"points_held": queue["points_held"]},
+                "vouches": {"rule": vouches.VOUCH_RULE,
+                            "caught_rigs": len(vouch["caught_rigs"]),
+                            "leads": len(vouch["leads"]),
+                            "unchecked_leads": vouch["unchecked_leads"],
+                            "weak_confirmations": vouch["weak_confirmations"]},
                 "rate_limits": limits, "points": points.describe(settings.points_table),
                 "auditor_pick": settings.auditor_pick,
                 "tiebreak_decides": settings.tiebreak_decides, "hidden_test_reuse": reuse,
@@ -428,6 +442,14 @@ def create_app(settings: Settings | None = None,
         if needs_person_only:
             queue["cases"] = [c for c in queue["cases"] if c["needs_person"]]
         return queue
+
+    @app.get("/v1/operator/vouches")
+    def operator_vouches(x_operator_token: str | None = Header(default=None)) -> dict[str, Any]:
+        """Operator-only vouch check (`vouch-check-v1`, threat model #3): rigs whose answer
+        agreed with a rig that was later caught, and confirmations that rest only on a
+        caught rig. Read-only; no prompts or answers, but it names who audited whom."""
+        require_operator(x_operator_token)
+        return vouches.vouch_report(ledger, now())
 
     @app.post("/v1/operator/pause")
     def operator_pause(body: PauseRequest,
