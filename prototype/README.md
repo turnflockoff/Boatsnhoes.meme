@@ -376,7 +376,7 @@ Create a demo job using the API docs at http://127.0.0.1:8000/docs:
 
 CI installs from the lock and runs both. A new package or a version bump fails `lock` until someone reads its license and updates `licenses.json`. To update the lock, see the commands at the top of `requirements.lock` (needs `uv`). Both write JSON with `--out` (never over an existing file); exit 0 ok, 1 problems, 2 usage/file error.
 
-**Limits:** hashes prove you got the same files as when the lock was made, not that those files are safe; the cooldown lowers the odds of a fresh hijack but doesn't remove them. No known-vulnerability scan runs yet. Package metadata is the publisher's own claim; "BSD License" without a clause count, or no license at all, is a note for a person to check. The CI workflow's GitHub Actions are pinned by version tag, not by commit.
+**Limits:** hashes prove you got the same files as when the lock was made, not that those files are safe; the cooldown lowers the odds of a fresh hijack but doesn't remove them. No known-vulnerability scan runs yet. Package metadata is the publisher's own claim; "BSD License" without a clause count, or no license at all, is a note for a person to check. The CI workflow's GitHub Actions are pinned by commit; see the workflow checker below.
 
 ## Website checker (`site-check-v1`, `bnh-site-check/1`)
 
@@ -393,8 +393,27 @@ none points into a folder `netlify.toml` hides, and that share cards are complet
 exactly the `_headers` values, http→https and www→bare-domain redirects, a real file in each
 hidden folder answers 404, and the homepage's share image loads. Exit 0 = all good, 1 =
 something failed, 2 = usage error. On GitHub: **Actions > site-check > Run workflow** runs the
-live check with one click. Tested against a local server and a fake site; not yet run
+live check with one click; its JSON report appears on the run's summary page. Tested against a local server and a fake site; not yet run
 against boatsnhoes.meme from here (this sandbox can't reach it).
+
+## Workflow checker (`actions-pin-v1`, `bnh-workflow-check/1`)
+
+Not part of the worker; it checks `.github/workflows/` (reads files only; CI runs it).
+
+    python -m app.workflow_check [--workflows ../.github/workflows] [--out f.json]
+
+Every `uses:` must be pinned to a full 40-character commit hash with the release it stands
+for as a comment (`actions/checkout@<hash> # v4`), the same hash everywhere, from a reviewed
+owner (`ALLOWED_OWNERS`, today only `actions`); a local `./` action or a `docker://` image
+by `@sha256:` digest is fine. Each workflow needs a top-level `permissions:` with no write
+access (unless listed in `WRITE_ALLOWED` with a reason), no `pull_request_target` or
+`workflow_run` trigger, `persist-credentials: false` on `actions/checkout`, and no `${{ }}`
+inside a `run:` script (pass values through `env:`). Exit 0 ok, 1 problems, 2 usage/no files.
+
+To update a pinned action: push a branch that uses the tag (e.g. `@v5`) once, read the
+"Download action repository 'actions/setup-python@v5' (SHA:...)" line in that CI run's log,
+and pin to that hash. **Limit:** the checker can't tell whether a hash really belongs to the
+release its comment names; that part is a person's (or Dependabot's) job.
 
 ## Tests
 
@@ -402,7 +421,7 @@ against boatsnhoes.meme from here (this sandbox can't reach it).
     . .venv/bin/activate
     pytest -q
 
-A GitHub Actions workflow runs these tests on pushes and pull requests affecting prototype files.
+A GitHub Actions workflow runs these tests on pushes and pull requests affecting prototype files, site files or workflows.
 
 ## API outline
 

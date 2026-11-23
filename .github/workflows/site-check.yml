@@ -22,18 +22,19 @@ jobs:
       run:
         working-directory: prototype
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4, as of 2026-11-23
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5, as of 2026-11-23
         with:
           python-version: "3.11"
       - name: Check the live site
         env:
           SITE_URL: ${{ inputs.url }}
         run: python -m app.site_check live --url "$SITE_URL" --out site-check.json
-      - name: Keep the report
+      - name: Show the report on the run's summary page
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: site-check
-          path: prototype/site-check.json
-          if-no-files-found: ignore
+        run: |
+          if [ -f site-check.json ]; then
+            { echo '### site-check report'; echo '```json'; cat site-check.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi

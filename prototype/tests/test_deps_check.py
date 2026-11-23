@@ -61,7 +61,7 @@ def test_repo_lock_requirements_and_licenses_agree():
     assert result["ok"], fails(result)
     assert result["schema"] == "bnh-deps-check/1"
     # Every direct requirement was checked against the lock.
-    assert len(statuses(result, "requirements")) == 8
+    assert len(statuses(result, "requirements")) == 9
 
 
 def test_repo_lock_has_no_unpinned_or_unhashed_package():

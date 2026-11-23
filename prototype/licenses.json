@@ -38,7 +38,7 @@
     "pygments": {"version": "2.21.0", "license": "BSD-2-Clause", "why": "coloured pytest output (tests only)"},
     "pytest": {"version": "8.4.2", "license": "MIT", "why": "runs the test suite (tests only)"},
     "python-dotenv": {"version": "1.2.4", "license": "BSD-3-Clause", "why": "reads prototype/.env settings"},
-    "pyyaml": {"version": "6.0.3", "license": "MIT", "why": "uvicorn's optional log-config reader"},
+    "pyyaml": {"version": "6.0.3", "license": "MIT", "why": "reads the GitHub workflow files for app.workflow_check (also uvicorn's optional log-config reader)"},
     "starlette": {"version": "1.10.0", "license": "BSD-3-Clause", "why": "the web toolkit under fastapi"},
     "typing-extensions": {"version": "4.16.0", "license": "PSF-2.0", "why": "newer type hints for pydantic, fastapi and anyio"},
     "typing-inspection": {"version": "0.4.5", "license": "MIT", "why": "used by pydantic to read type hints"},
