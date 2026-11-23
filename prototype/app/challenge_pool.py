@@ -11,6 +11,8 @@ to the coordinator in small batches, each one used once and then crossed off.
     python -m app.challenge_pool status --pool ~/bnh-private/tests.json
     OPERATOR_TOKEN=... python -m app.challenge_pool issue --pool ~/bnh-private/tests.json \\
         --url http://127.0.0.1:8000 --count 3 --tier new
+    OPERATOR_TOKEN=... python -m app.challenge_pool issue-leads --pool ~/bnh-private/tests.json \\
+        --url http://127.0.0.1:8000 [--dry-run]
 
 Rules it keeps:
 - The pool file holds the answers, so it is created owner-only (0600), never inside a git
@@ -28,6 +30,13 @@ Rules it keeps:
   retired, not retried.
 - It stops at the first sign of trouble (paused coordinator, wrong token, unknown rig,
   network error) instead of burning through the pool.
+- `issue-leads` (`lead-tests-v1`, since 0.5.44) follows up the vouch check (threat model #3):
+  it reads `GET /v1/operator/vouches` and aims one test at each rig in `leads_to_test` (it
+  agreed with a rig that was later caught, has never passed a hidden test, isn't revoked and
+  has no aimed test waiting), of a task type that rig agreed on. Because rigs that already
+  have one waiting are left out, running it again doesn't pile tests onto the same rig.
+  At most `--max` rigs per run (most agreements with caught rigs first); `--dry-run` reads
+  the list and the pool and sends nothing.
 
 What it does not do: write good tests for you. For `llm:generate` the known answer has to
 come from running the pinned model yourself (on the rig, Phase 3); nothing here has been run
@@ -60,6 +69,9 @@ TIERS = ("new", "suspect", "established")
 MAX_PAYLOAD = 4096
 MAX_EXPECTED = 8192
 MAX_ISSUE = 50
+LEADS_POLICY = "lead-tests-v1"
+MAX_LEADS = 20
+RETIRED_RETRIES = 3
 
 
 class PoolError(Exception):
@@ -359,6 +371,122 @@ def issue_text(result: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+# ---- following up the vouch check (`lead-tests-v1`) -------------------------------------
+
+def _ready_by_type(path: Path) -> Counter[str]:
+    return Counter(e["task_type"] for e in load_pool(path)["entries"])
+
+
+def issue_to_leads(path: Path, client: httpx.Client, operator_token: str, *,
+                   task_type: str | None = None, max_leads: int = 10,
+                   ttl_seconds: int = 600, dry_run: bool = False,
+                   now: Callable[[], float] = time.time,
+                   wait: Callable[[float], None] = time.sleep) -> dict[str, Any]:
+    """Aim one hidden test from the pool at each rig the vouch check lists in
+    `leads_to_test`. Each test goes through `issue_tests`, so every pool rule (crossed off
+    before sending, put back only on a clear refusal, revealed tests retired) still holds.
+    The result names rigs and job ids only."""
+    if not 1 <= max_leads <= MAX_LEADS:
+        raise PoolError(f"--max must be 1-{MAX_LEADS}")
+    if task_type is not None and task_type not in tasks.EXECUTORS:
+        raise PoolError(f"unknown task type {task_type!r}")
+    ready = _ready_by_type(path)  # checks the pool file before asking the coordinator
+    try:
+        response = client.get("/v1/operator/vouches",
+                              headers={"X-Operator-Token": operator_token})
+    except httpx.HTTPError as exc:
+        raise PoolError(f"couldn't reach the coordinator ({exc.__class__.__name__}); "
+                        "nothing was sent") from None
+    if response.status_code != 200:
+        detail = _detail(response)
+        raise PoolError(f"the coordinator wouldn't show the vouch check ({response.status_code}"
+                        f"{': ' + detail if detail else ''}); nothing was sent")
+    try:
+        report = response.json()
+        leads = {x["worker_id"]: x for x in report["leads"]}
+        to_test, unchecked = list(report["leads_to_test"]), list(report["unchecked_leads"])
+    except (ValueError, KeyError, TypeError):
+        raise PoolError("the coordinator's vouch check has no `leads_to_test` list; update "
+                        f"it to {LEADS_POLICY} or later first, otherwise a rig that already "
+                        "has a test waiting would get another one. Nothing was sent") from None
+
+    result: dict[str, Any] = {
+        "policy": LEADS_POLICY, "dry_run": dry_run, "unchecked_leads": len(unchecked),
+        "already_waiting": [w for w in unchecked if w not in to_test],
+        "aimed": [], "skipped": [], "not_reached": [], "retired": 0, "unknown": 0,
+        "stopped": None}
+    for position, worker in enumerate(to_test):
+        if position >= max_leads:
+            result["not_reached"] = to_test[position:]
+            break
+        lead = leads.get(worker)
+        if lead is None:  # listed to test but missing from leads: don't guess
+            result["skipped"].append({"worker_id": worker, "reason": "not in the leads list"})
+            continue
+        types = [task_type] if task_type else sorted(lead.get("task_types") or [])
+        aimed = None
+        for _ in range(1 + RETIRED_RETRIES):
+            pick = next((t for t in types if ready[t] > 0), None)
+            if pick is None:
+                break
+            if dry_run:
+                ready[pick] -= 1
+                aimed = {"worker_id": worker, "task_type": pick, "job_id": None}
+                break
+            one = issue_tests(path, client, operator_token, 1, task_type=pick,
+                              target_worker=worker, ttl_seconds=ttl_seconds, now=now, wait=wait)
+            ready = _ready_by_type(path)
+            result["retired"] += one["retired"]
+            result["unknown"] += one["unknown"]
+            if one["issued"]:
+                aimed = {"worker_id": worker, "task_type": pick,
+                         "job_id": one["issued"][0]["job_id"]}
+            if one["stopped"]:
+                result["stopped"] = one["stopped"]
+            if aimed or one["stopped"] or not one["retired"]:
+                break
+            # The test picked had been revealed by a ledger copy and was retired: try another.
+        if aimed:
+            result["aimed"].append(aimed)
+        elif result["stopped"] is None:
+            reason = (f"no ready {' or '.join(types)} test left in the pool" if types
+                      else "no task type to test it on")
+            result["skipped"].append({"worker_id": worker, "reason": reason})
+        if result["stopped"]:
+            result["not_reached"] = to_test[position + 1:]
+            break
+    result["ready_left"] = sum(ready.values())
+    return result
+
+
+def leads_text(result: dict[str, Any]) -> str:
+    verb = "Would aim" if result["dry_run"] else "Aimed"
+    lines = [(f"Vouch-check follow-up ({result['policy']}): {result['unchecked_leads']} "
+              f"unchecked lead(s). {verb} a hidden test at {len(result['aimed'])} rig(s).")]
+    for item in result["aimed"]:
+        job = f"  job {item['job_id']}" if item["job_id"] else ""
+        lines.append(f"  {item['worker_id']}  {item['task_type']}{job}")
+    if result["already_waiting"]:
+        lines.append(f"Already have an aimed test waiting (left alone): "
+                     f"{', '.join(result['already_waiting'])}.")
+    for item in result["skipped"]:
+        lines.append(f"Skipped {item['worker_id']}: {item['reason']}.")
+    if result["retired"]:
+        lines.append(f"Retired {result['retired']} test(s) a ledger copy had already revealed.")
+    if result["unknown"]:
+        lines.append(f"{result['unknown']} test(s) may or may not have been queued; they are "
+                     "crossed off so they can't be sent twice.")
+    if result["stopped"]:
+        lines.append(f"Stopped: {result['stopped']}")
+    if result["not_reached"]:
+        lines.append(f"Not reached this run: {', '.join(result['not_reached'])}.")
+    if not result["unchecked_leads"]:
+        lines.append("Nothing to follow up: no rig that agreed with a caught rig is unchecked.")
+    lines.append(f"{result['ready_left']} test(s) left in the pool."
+                 + (" Nothing was sent (dry run)." if result["dry_run"] else ""))
+    return "\n".join(lines)
+
+
 # ---- command line -----------------------------------------------------------------------
 
 def main(argv: list[str] | None = None) -> int:
@@ -369,7 +497,9 @@ def main(argv: list[str] | None = None) -> int:
                        ("add", "add tests from a JSON-lines file"),
                        ("make-demo", "add SHA-256 practice tests"),
                        ("status", "how many tests are ready and used (no answers shown)"),
-                       ("issue", "send tests to a coordinator as hidden tests")):
+                       ("issue", "send tests to a coordinator as hidden tests"),
+                       ("issue-leads", ("aim one test at each unchecked rig the vouch "
+                                        "check lists (lead-tests-v1)"))):
         p = sub.add_parser(name, help=text)
         p.add_argument("--pool", type=Path, required=True, help="the private pool file")
         if name == "add":
@@ -388,6 +518,14 @@ def main(argv: list[str] | None = None) -> int:
             aim.add_argument("--worker", help="only this rig can take them")
             aim.add_argument("--tier", choices=TIERS, help="a random active rig in this tier")
             p.add_argument("--ttl", type=int, default=600, help="seconds, 10-3600")
+        if name == "issue-leads":
+            p.add_argument("--url", required=True, help="coordinator, e.g. http://127.0.0.1:8000")
+            p.add_argument("--task", choices=sorted(tasks.EXECUTORS),
+                           help="test type to use (default: one the lead agreed on)")
+            p.add_argument("--max", type=int, default=10, help=f"rigs per run, 1-{MAX_LEADS}")
+            p.add_argument("--ttl", type=int, default=600, help="seconds, 10-3600")
+            p.add_argument("--dry-run", action="store_true",
+                           help="show who would get a test; send nothing")
     args = parser.parse_args(argv)
 
     try:
@@ -419,7 +557,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"The pool has its own copy now; delete {args.file} if nobody else "
                       "should see those answers.")
             return 0 if not skipped else 1
-        # issue
+        # issue / issue-leads
         if not 10 <= args.ttl <= 3600:
             raise PoolError("--ttl must be 10-3600 seconds")
         token = os.getenv("OPERATOR_TOKEN") or ""
@@ -427,6 +565,15 @@ def main(argv: list[str] | None = None) -> int:
             print("Refusing: set OPERATOR_TOKEN in the environment (not on the command line).",
                   file=sys.stderr)
             return 2
+        if args.command == "issue-leads":
+            with httpx.Client(base_url=args.url, timeout=15) as client:
+                leads = issue_to_leads(args.pool, client, token, task_type=args.task,
+                                       max_leads=args.max, ttl_seconds=args.ttl,
+                                       dry_run=args.dry_run)
+            print(leads_text(leads))
+            clean = not (leads["stopped"] or leads["unknown"] or leads["skipped"]
+                         or leads["not_reached"])
+            return 0 if clean else 1
         with httpx.Client(base_url=args.url, timeout=15) as client:
             result = issue_tests(args.pool, client, token, args.count, task_type=args.task,
                                  target_worker=args.worker, target_tier=args.tier,

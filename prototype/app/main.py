@@ -369,11 +369,14 @@ def create_app(settings: Settings | None = None,
         # that nothing has checked independently yet.
         vouch = vouches.vouch_report(ledger, t)
         if vouch["unchecked_leads"]:
+            waiting = len(vouch["unchecked_leads"]) - len(vouch["leads_to_test"])
             warnings.append(f"{len(vouch['unchecked_leads'])} rig(s) agreed with a rig that "
                             f"was later caught and never passed a hidden test of their own: "
                             f"{', '.join(vouch['unchecked_leads'])}. Could be honest, could "
                             "be a friend confirming fakes; aim a hidden test at each "
-                            "(target_worker). See /v1/operator/vouches")
+                            "(target_worker, or `python -m app.challenge_pool issue-leads`)"
+                            + (f"; {waiting} already have one waiting" if waiting else "")
+                            + ". See /v1/operator/vouches")
         # app/rate_limit.py: someone keeps sending wrong keys/tokens/codes.
         limits = limiter.snapshot() | {"proxies": resolver.snapshot()}
         warnings.extend(resolver.warnings())
@@ -421,6 +424,7 @@ def create_app(settings: Settings | None = None,
                             "caught_rigs": len(vouch["caught_rigs"]),
                             "leads": len(vouch["leads"]),
                             "unchecked_leads": vouch["unchecked_leads"],
+                            "leads_to_test": vouch["leads_to_test"],
                             "weak_confirmations": vouch["weak_confirmations"]},
                 "rate_limits": limits, "points": points.describe(settings.points_table),
                 "auditor_pick": settings.auditor_pick,

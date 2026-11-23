@@ -1131,6 +1131,21 @@ class Ledger:
                                                         "reward_points", "accepted_at")})
         return list(groups.values())
 
+    def open_aimed_tests(self, now: int) -> dict[str, int]:
+        """Per worker: hidden tests aimed at it by name (`target_worker`) that it can still
+        take (queued or leased, before their deadline). Used by the vouch check so the
+        operator doesn't aim a second test at a rig that already has one waiting.
+        Tier-aimed tests aren't counted: the rig they land on is picked at hand-out."""
+        with closing(self._connect()) as db:
+            rows = db.execute(
+                # Group by the target itself: `jobs` has its own worker_id column (who
+                # leased it), and an alias with that name would group by that instead.
+                "SELECT target, COUNT(*) AS n FROM jobs "
+                "WHERE job_kind='challenge' AND target LIKE 'worker:%' "
+                "AND status IN ('queued','leased') AND expires_at>? "
+                "GROUP BY target", (now,)).fetchall()
+        return {r["target"].removeprefix("worker:"): int(r["n"]) for r in rows}
+
     def check_record(self) -> dict[str, dict[str, Any]]:
         """Per worker: owner label, revoked or not, strikes, when the first result that
         became a strike was submitted, and how many hidden known-answer tests it passed."""

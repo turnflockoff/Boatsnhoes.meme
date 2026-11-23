@@ -21,6 +21,12 @@ rig passes and costs nothing; a colluder has to answer honestly or get a strike 
 strike warning already names those) and have never passed a hidden test, because those are
 the ones nothing has checked independently.
 
+Since 0.5.44 (`lead-tests-v1`) each lead also shows `open_aimed_tests` (hidden tests aimed at
+it by name that it can still take) and the `task_types` it agreed on, and the report lists
+`leads_to_test`: unchecked leads with no aimed test waiting. `python -m app.challenge_pool
+issue-leads` reads that list and aims one test from the private pool at each, of a task type
+the lead agreed on, so running it twice doesn't pile tests onto the same rig.
+
 What this is not:
   - Read-only. No points, statuses, tiers or auditor picks change. What should happen to
     weakly confirmed points is part of scoring v2 (owner decision).
@@ -49,13 +55,16 @@ ROLE_BY_KIND = {"work": "original", "audit": "audit", "tiebreak": "tie-breaker"}
 def _next_step(worker_id: str) -> str:
     return (f"Aim a hidden known-answer test at it: POST /v1/challenges with "
             f"target_worker={worker_id}, or `python -m app.challenge_pool issue --pool <file> "
-            f"--url <coordinator> --count 1 --worker {worker_id}`. An honest rig passes; "
-            f"if it fails it gets a strike of its own.")
+            f"--url <coordinator> --count 1 --worker {worker_id}` (or `issue-leads` for every "
+            f"unchecked lead at once). An honest rig passes; if it fails it gets a strike of "
+            f"its own.")
 
 
 def build_report(groups: list[dict[str, Any]], record: dict[str, dict[str, Any]],
-                 now: int) -> dict[str, Any]:
-    """Pure function over Ledger.agreement_groups() and Ledger.check_record()."""
+                 now: int, open_aimed: dict[str, int] | None = None) -> dict[str, Any]:
+    """Pure function over Ledger.agreement_groups(), Ledger.check_record() and
+    Ledger.open_aimed_tests()."""
+    open_aimed = open_aimed or {}
     caught = {w for w, r in record.items() if r["strikes"] > 0}
     cases: list[dict[str, Any]] = []
     leads: dict[str, dict[str, Any]] = {}
@@ -72,8 +81,10 @@ def build_report(groups: list[dict[str, Any]], record: dict[str, dict[str, Any]]
                 weak.append(a)
             for p in sorted(partners & caught):
                 lead = leads.setdefault(a["worker_id"], {"agreed_with_caught": 0,
-                                                         "caught_partners": {}})
+                                                         "caught_partners": {},
+                                                         "task_types": set()})
                 lead["agreed_with_caught"] += 1
+                lead["task_types"].add(group["task_type"])
                 lead["caught_partners"][p] = lead["caught_partners"].get(p, 0) + 1
         cases.append({
             "case_id": group["root"], "task_type": group["task_type"],
@@ -96,10 +107,14 @@ def build_report(groups: list[dict[str, Any]], record: dict[str, dict[str, Any]]
             "agreed_with_caught": lead["agreed_with_caught"],
             "caught_partners": dict(sorted(lead["caught_partners"].items())),
             "hidden_tests_passed": int(r.get("hidden_tests_passed", 0)),
+            "open_aimed_tests": int(open_aimed.get(worker_id, 0)),
+            "task_types": sorted(lead["task_types"]),
             "next_step": _next_step(worker_id),
         })
     lead_rows.sort(key=lambda x: (not x["also_caught"], -x["agreed_with_caught"],
                                   x["worker_id"]))
+    unchecked = [x for x in lead_rows
+                 if not x["revoked"] and not x["also_caught"] and x["hidden_tests_passed"] == 0]
     caught_rows = [{"worker_id": w, "owner": record[w]["owner"],
                     "strikes": record[w]["strikes"],
                     "first_struck_result_at": record[w]["first_struck_result_at"],
@@ -109,16 +124,17 @@ def build_report(groups: list[dict[str, Any]], record: dict[str, dict[str, Any]]
         "cases": cases, "leads": lead_rows,
         "weak_confirmations": {"results": sum(len(c["weak_confirmations"]) for c in cases),
                                "points": sum(c["weak_points"] for c in cases)},
-        "unchecked_leads": [x["worker_id"] for x in lead_rows
-                            if not x["revoked"] and not x["also_caught"]
-                            and x["hidden_tests_passed"] == 0],
+        "unchecked_leads": [x["worker_id"] for x in unchecked],
+        # `lead-tests-v1`: the unchecked leads that don't already have an aimed test waiting.
+        "leads_to_test": [x["worker_id"] for x in unchecked if x["open_aimed_tests"] == 0],
         "note": "Read-only. A lead agreed with a rig that was later caught; honest rigs "
                 "show up too, so it is a reason to aim a hidden test, not proof.",
     }
 
 
 def vouch_report(ledger: Ledger, now: int) -> dict[str, Any]:
-    return build_report(ledger.agreement_groups(), ledger.check_record(), now)
+    return build_report(ledger.agreement_groups(), ledger.check_record(), now,
+                        ledger.open_aimed_tests(now))
 
 
 def render_text(report: dict[str, Any]) -> str:
@@ -140,6 +156,8 @@ def render_text(report: dict[str, Any]) -> str:
                        f"{', ' + ', '.join(flags) if flags else ''})"),
                   f"  agreed with caught rig(s): {partners}",
                   f"  hidden tests passed: {lead['hidden_tests_passed']}"]
+        if lead["open_aimed_tests"]:
+            lines.append(f"  aimed hidden test(s) waiting for it: {lead['open_aimed_tests']}")
         if not lead["revoked"]:
             lines.append(f"  next: {lead['next_step']}")
     lines += ["", report["note"]]

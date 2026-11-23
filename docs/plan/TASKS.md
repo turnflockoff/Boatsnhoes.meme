@@ -1,5 +1,5 @@
 # BOATS N HOES: Project Task List (Claude + dev work)
-**Version:** 0.5.43 | **Last updated:** 2026-11-23 | Personal to-dos live in USER_TODO.md.
+**Version:** 0.5.44 | **Last updated:** 2026-11-23 | Personal to-dos live in USER_TODO.md.
 
 ## Phase 0: Foundation
 - [x] Buy boatsnhoes.meme
@@ -56,6 +56,7 @@
 - [ ] Decide what repeated audit drops should change, if anything (owner decision; today it's a warning only)
 - [x] Operator review queue (threat model #7): read-only list of held cases (stuck disputes, three-way disagreements, failed hidden tests) with answers side by side, `python -m app.review`, health warning (190 tests)
 - [x] Vouch check (threat model #3, `vouch-check-v1`): once a rig is caught, list the rigs that agreed with its answers and the confirmations that rest only on a caught rig; `GET /v1/operator/vouches`, `python -m app.vouches`; health warns about unchecked leads; read-only (638 tests)
+- [x] Follow up vouch-check leads (threat model #3, `lead-tests-v1`): report shows aimed tests already waiting per lead and `leads_to_test`; `python -m app.challenge_pool issue-leads [--dry-run]` aims one pool test at each, of a task type it agreed on, never a second one while one is waiting (656 tests)
 - [ ] Decide what a reviewer's decision should do to held points (part of scoring v2; owner decision)
 - [x] Close open job creation and limit requests (threat model #16, #17): `POST /v1/jobs` needs the operator or a job-only submitter token; per-address request limit with `429`/`Retry-After`; lock-out after repeated wrong keys, tokens or codes; addresses kept out of logs (210 tests)
 - [x] Trusted-proxy setting (threat model #17 follow-up): `TRUSTED_PROXIES` so limits and lock-outs apply to the real client behind your own reverse proxy; header ignored from anyone else; trust-everyone refused (230 tests)
