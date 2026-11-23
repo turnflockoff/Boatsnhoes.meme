@@ -34,6 +34,10 @@ Trade-off (be honest about it): for the closed period, the copy shows which jobs
 hidden re-runs and hidden tests and how they came out. Not their prompts or answers, but
 the fact that they were tests. Outsiders need that to check that no worker audited itself.
 It reveals nothing about jobs created after `until`. Share copies with a delay.
+Because each rig remembers the inputs it ran, the export is recorded in the live ledger
+(`ledger_copy_made`), and from then on the coordinator refuses to reuse the exact input of
+a hidden test from that period as a new hidden test (`test-reuse-v1`, app/ledger.py). So
+always export from the live ledger, not from a backup of it.
 """
 from __future__ import annotations
 
@@ -144,6 +148,9 @@ def export_copy(source: Path, dest: Path, until: int, now: int,
         raise CopyError("the copy must be a different file from the ledger")
     if dest.exists():
         raise CopyError(f"{dest} already exists; pick a new file name")
+    if copy_info(source) is not None:
+        # Re-exporting a copy would also write the export record into a shared file.
+        raise CopyError("that file is already a ledger copy; export from the live ledger")
     problems = Ledger(source).check_consistency()
     if problems:
         raise CopyError("ledger fails its own consistency check; fix it before sharing: "
@@ -173,12 +180,21 @@ def export_copy(source: Path, dest: Path, until: int, now: int,
         if after:
             raise CopyError("redacted copy fails the consistency check: " + "; ".join(after[:3]))
         partial.replace(dest)
+        file_sha256 = _file_sha256(dest)
+        # `test-reuse-v1`: from now on the hidden tests in this period are known to the rigs
+        # that ran them. If this can't be written down, don't leave the copy around either.
+        try:
+            Ledger(source).record_copy(now, until, file_sha256)
+        except Exception as exc:  # noqa: BLE001 - any failure means "not recorded"
+            dest.unlink(missing_ok=True)
+            raise CopyError("could not record the copy in the ledger, so it was deleted "
+                            f"({type(exc).__name__}); nothing was shared") from None
     finally:
         for leftover in (partial, Path(f"{partial}-wal"), Path(f"{partial}-shm"),
                          Path(f"{partial}-journal")):
             leftover.unlink(missing_ok=True)
     return {"format": COPY_FORMAT, "until": until, "created_at": now, **counts,
-            "file_sha256": _file_sha256(dest)}
+            "file_sha256": file_sha256}
 
 
 def copy_info(path: Path) -> dict[str, Any] | None:

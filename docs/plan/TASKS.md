@@ -37,6 +37,7 @@
 - [x] Structured logs and health reporting: one JSON line per event, no secrets or prompts in logs, request ids, public `/health` (503 when the database fails), operator `/v1/operator/health` with plain-language warnings (127 tests)
 - [x] Shareable ledger copies: redacted copy of a closed, settled period (no keys, codes, prompts, answers or real owner names) that anyone can re-run a signed report and the consistency checks against (137 tests)
 - [x] Compare ledger copies across periods (threat model #10 follow-up, `bnh-ledger-compare/1`): `python -m app.ledger_copy compare older.sqlite3 newer.sqlite3` checks nothing in the older period was edited, deleted or back-dated and its report numbers are identical; read-only (467 tests)
+- [x] Retire hidden tests a ledger copy revealed (threat model #11, #14, `test-reuse-v1`): every export is recorded in the live ledger; a new hidden test with the exact input of one from a period a copy covers is refused (`409`); operator health warns while open hidden tests share an input (479 tests)
 - [ ] Post signed reports and ledger copies in a fixed public place (owner decision: where)
 - [x] Read-only rig inventory tool for Phase 3: `python -m app.hw_inventory` (OS, kernel, PCI IDs, bound driver, Vulkan devices/Mesa version, /dev/dri access, redacted JSON; 151 tests, format samples only)
 - [x] Trust-based audit rate (threat model #1, `audit-tier-v1`): new rigs and rigs caught once (failed hidden test or outvoted) are re-checked more often; operator-only, changes checks not points (158 tests)

@@ -494,3 +494,20 @@
 2. **Compare the pattern when the values are disguised.** Owner names and input fingerprints are deliberately scrambled differently in each copy for privacy. "Who was grouped with whom" survives the scrambling, so that's what gets compared.
 3. **Back-dating is its own kind of cheating.** Adding a fake job "from last month" doesn't change any old row, so a plain "did anything change?" check would miss it. You have to also ask "is there anything new in the old period?".
 4. **This only works if someone keeps the old copy.** When you pick where reports and copies get posted, keep every old one there rather than replacing it.
+
+## 2026-11-23 (04:15 UTC): Retiring hidden tests once a ledger copy gives them away
+
+**Shipped**
+- **The gap.** A shared ledger copy shows which past jobs were hidden tests (outsiders need that to check nobody audited themselves). It hides the prompts, but each rig remembers what it ran. So after a copy, a rig knows "the job that asked X was a test". If the same X were used as a hidden test again, that rig could answer honestly on it and cut corners everywhere else.
+- **The fix (`test-reuse-v1`):**
+  - `python -m app.ledger_copy export` now writes a note into the live ledger (`ledger_copy_made`, with the copy's end date and sha256). If the note can't be written, the copy is deleted and the export fails, so nothing gets shared without a record. Exporting from a copy is now refused, so the note never changes a file you already shared.
+  - `POST /v1/challenges` refuses (`409`, "make a new hidden test") a hidden test whose exact input was a hidden test before the latest copy's end date. Aimed tests are checked too. Normal jobs with the same input are fine; they give nothing away.
+  - The operator health page adds `hidden_test_reuse` (how far copies reach, how many test inputs are retired, how many open tests share an input with another test) and warns while open tests share an input, because rigs that compare notes could spot those even without a copy. It never shows the input or the answer.
+- Tests went from 467 to 479, all passing (12 new). I switched off 13 of the new rules one at a time; the first round showed 3 with no test (only checking hidden tests, ignoring finished tests in the warning, and skipping a garbled note), so I added tests and then every one was caught. Also ran it on a real coordinator process here: the demo worker answered a hidden SHA-256 test, I exported a copy, the same input was refused with `409`, a new one was accepted, and the input never appeared in the log. Software only; nothing here touches the GPUs.
+- **Honest limits:** only the exact input is matched, so a reworded prompt or a changed setting counts as new. Export from the live ledger, not a backup, or the note lands in the backup.
+
+**What you learned**
+1. **Sharing has side effects.** Publishing a copy for transparency also teaches the rigs something. Good designs write down what was revealed and react to it.
+2. **Fail closed on the record.** If the note "this was shared" can't be saved, it's safer to throw the copy away than to share it and forget.
+3. **A test only works if it looks new.** Known-answer tests are expensive to make, so it's tempting to reuse them. Reuse is exactly what lets a cheater recognise them.
+4. **Exact matching is a floor, not a ceiling.** The software catches the identical input; writing each test fresh is still the real protection.

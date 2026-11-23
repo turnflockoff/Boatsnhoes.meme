@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from .config import Settings, get_settings
 from . import (audit_policy, client_address, key_rotation, observability, points, rate_limit, review, rewards,
                schemas, tasks, workers)
-from .ledger import PAUSE_VERSION, CoordinatorPaused, Ledger
+from .ledger import PAUSE_VERSION, CoordinatorPaused, HiddenTestRevealed, Ledger
 from .models import (ChallengeCreate, EnrollmentCreate, JobCreate, JobEnvelope, PauseRequest,
                      ResultSubmission, WorkerRegistration)
 from .security import sha256_text
@@ -369,6 +369,12 @@ def create_app(settings: Settings | None = None,
             warnings.append("SUBMITTER_TOKEN is set but POINTS_TABLE isn't, so whoever holds "
                             f"the submitter token picks each job's points (up to "
                             f"{points.MAX_POINTS}); set POINTS_TABLE to fix points per task type")
+        # `test-reuse-v1`: hidden tests that share an exact input with another hidden test.
+        reuse = ledger.test_reuse()
+        if reuse["open_sharing_input"]:
+            warnings.append(f"{reuse['open_sharing_input']} open hidden test(s) use the same "
+                            "input as another hidden test; rigs that compare notes could "
+                            "spot them. Prefer a fresh input for each test")
         if problems:
             warnings.append(f"{len(problems)} consistency problem(s): see "
                             "consistency_problems")
@@ -382,7 +388,7 @@ def create_app(settings: Settings | None = None,
                                            if f["dropped"]},
                 "review": queue["counts"] | {"points_held": queue["points_held"]},
                 "rate_limits": limits, "points": points.describe(settings.points_table),
-                "auditor_pick": settings.auditor_pick,
+                "auditor_pick": settings.auditor_pick, "hidden_test_reuse": reuse,
                 "pause": {"rule": PAUSE_VERSION, "paused": pause is not None} | (pause or {}),
                 "consistency_problems": problems, "warnings": warnings}
 
@@ -508,8 +514,15 @@ def create_app(settings: Settings | None = None,
         t = now()
         fields, signature = new_job_fields(body.task_type, body.payload, reward_points,
                                            t + body.ttl_seconds, model_sha256)
-        ledger.create_job(fields, signature, settings.max_attempts, t, job_kind="challenge",
-                          expected_result=body.expected_result, target=body.target())
+        try:
+            ledger.create_job(fields, signature, settings.max_attempts, t, job_kind="challenge",
+                              expected_result=body.expected_result, target=body.target())
+        except HiddenTestRevealed as exc:
+            # `test-reuse-v1`: the rigs that ran this input before can tell it's a test.
+            raise HTTPException(status_code=409, detail=(
+                "this exact input was already a hidden test in a period a ledger copy covers "
+                f"(up to {exc.revealed_until}), so the rigs that ran it can recognise it; "
+                "make a new hidden test")) from None
         # Same line as a normal job: logs never say which jobs are hidden tests.
         log.info("job created", extra={"job_id": fields["job_id"], "task_type": body.task_type})
         job = ledger.get_job(fields["job_id"]) or {}

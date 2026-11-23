@@ -65,6 +65,26 @@ PAUSE_EVENTS = ("coordinator_paused", "coordinator_resumed")
 MAX_PAUSE_REASON = 200
 
 
+# Retired hidden tests (`test-reuse-v1`, threat model #11/#14). A ledger copy (app/
+# ledger_copy.py) shows which jobs before its `until` were hidden tests, and every rig
+# remembers the inputs of the jobs it ran. So once a copy is made, the input of every
+# hidden test from that period is "burned": using it again as a hidden test would let the
+# rigs that ran it recognise the test. Each export is recorded as a `ledger_copy_made`
+# event, and a new hidden test with the exact input of one created before the latest
+# recorded `until` is refused. Only exact inputs are matched (same payload hash).
+TEST_REUSE_RULE = "test-reuse-v1"
+COPY_MADE_EVENT = "ledger_copy_made"
+
+
+class HiddenTestRevealed(ValueError):
+    """Refused: this hidden test's exact input was a hidden test in a period that a ledger
+    copy already covers, so the rigs that ran it can tell it is a test."""
+
+    def __init__(self, revealed_until: int):
+        super().__init__("hidden test input already revealed by a ledger copy")
+        self.revealed_until = revealed_until
+
+
 class CoordinatorPaused(Exception):
     """Refused because the operator paused the coordinator (see app/incident.py)."""
 
@@ -386,6 +406,8 @@ class Ledger:
             raise ValueError("only hidden test jobs can have a target")
         with self._tx() as db:
             self._refuse_if_paused(db)
+            if job_kind == "challenge":
+                self._refuse_if_revealed(db, fields["payload_hash"])
             self._insert_job(db, fields, signature, max_attempts, now, job_kind,
                              expected_result=expected_result, target=target)
             if target is not None:
@@ -508,6 +530,54 @@ class Ledger:
                 f"({','.join('?' * len(PAUSE_EVENTS))}) ORDER BY id", PAUSE_EVENTS).fetchall()
         return [{"event": r["event"], "at": int(r["at"])} | json.loads(r["detail"] or "{}")
                 for r in rows]
+
+    # -- retired hidden tests (`test-reuse-v1`) -------------------------------------
+    @staticmethod
+    def _revealed_until(db: sqlite3.Connection) -> int | None:
+        latest: int | None = None
+        for (detail,) in db.execute("SELECT detail FROM events WHERE event=?",
+                                    (COPY_MADE_EVENT,)).fetchall():
+            try:
+                until = int(json.loads(detail or "{}")["until"])
+            except (ValueError, KeyError, TypeError):
+                continue  # detail is NULL inside a ledger copy; never on a live ledger
+            latest = until if latest is None else max(latest, until)
+        return latest
+
+    def _refuse_if_revealed(self, db: sqlite3.Connection, payload_hash: str) -> None:
+        until = self._revealed_until(db)
+        if until is not None and db.execute(
+                "SELECT 1 FROM jobs WHERE job_kind='challenge' AND payload_hash=? "
+                "AND created_at<? LIMIT 1", (payload_hash, until)).fetchone():
+            raise HiddenTestRevealed(until)
+
+
+    def record_copy(self, now: int, until: int, file_sha256: str) -> None:
+        """Note that a ledger copy covering everything before `until` was made. Not
+        blocked by a pause: it changes no job, and forgetting it would be the unsafe side."""
+        with self._tx() as db:
+            self._event(db, now, COPY_MADE_EVENT,
+                        detail=json.dumps({"until": int(until), "sha256": file_sha256}))
+
+    def revealed_until(self) -> int | None:
+        """End of the latest period covered by a ledger copy made from this ledger."""
+        with closing(self._connect()) as db:
+            return self._revealed_until(db)
+
+    def test_reuse(self) -> dict[str, Any]:
+        """Operator-only numbers for `test-reuse-v1`."""
+        with closing(self._connect()) as db:
+            until = self._revealed_until(db)
+            open_sharing = db.execute(
+                "SELECT COUNT(*) FROM jobs j WHERE j.job_kind='challenge' "
+                "AND j.status IN ('queued','leased') AND EXISTS (SELECT 1 FROM jobs o "
+                "WHERE o.job_kind='challenge' AND o.payload_hash=j.payload_hash "
+                "AND o.job_id!=j.job_id)").fetchone()[0]
+            revealed = 0 if until is None else db.execute(
+                "SELECT COUNT(DISTINCT payload_hash) FROM jobs WHERE job_kind='challenge' "
+                "AND created_at<?", (until,)).fetchone()[0]
+        return {"rule": TEST_REUSE_RULE, "revealed_until": until,
+                "retired_inputs": revealed, "open_sharing_input": open_sharing}
 
     def note(self, now: int, event: str, job_id: str | None = None,
              worker_id: str | None = None, detail: str | None = None) -> None:

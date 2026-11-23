@@ -194,6 +194,18 @@ Each copy covers everything up to its `until`, so a later copy must contain an e
 
 **What it doesn't prove:** that the older copy was true in the first place. It only shows the operator didn't rewrite history that was already shared, and only helps if someone kept the older copy. Publishing copies somewhere others save them (owner decision) is what gives it teeth.
 
+### Retiring hidden tests a copy revealed (since 0.5.31, `test-reuse-v1`)
+
+A copy shows which jobs before its `until` were hidden tests, and every rig remembers the inputs of the jobs it ran. So once a copy exists, a rig that ran a hidden test can tell "the job with input X was a test". If the operator later used X again as a hidden test, that rig would recognise it and answer honestly only there.
+
+- **Every export is written down** in the live ledger as a `ledger_copy_made` event with the copy's `until` and sha256. If that can't be written, the copy is deleted and the export fails (nothing shared without a record). Exporting from a copy is refused, so the record never changes a file you already shared.
+- **A new hidden test whose exact input was a hidden test before the latest recorded `until` is refused** with `409` and a plain "make a new hidden test". Aimed tests (`target_worker`/`target_tier`) go through the same check. Normal jobs with that input are fine: they reveal nothing.
+- **Operator health** adds `hidden_test_reuse` (`revealed_until`, how many test inputs are retired, how many open hidden tests share an input with another hidden test) and warns while any open test shares an input, since rigs that compare notes could spot it even without a copy. Never shows the input or the expected answer.
+- Works while paused. Inside a copy the record keeps no details, so later copies still compare cleanly.
+- 12 new tests (479 in total). Thirteen rules were switched off one at a time and a test failed every time. Also run against a real coordinator process here: a hidden SHA-256 test answered by the demo worker, an export, then the same input refused with `409`, a fresh one accepted, and the input never in the log.
+
+**Limits:** only the exact input is matched. A reworded prompt or a changed setting counts as new, even if a rig could still recognise it. Export from the live ledger: a copy made from a backup isn't recorded in the live one.
+
 ## Implemented: versioned job and receipt schemas (Track E)
 
 Tested in software only (0.5.10). Code: `app/schemas.py`.
@@ -339,7 +351,7 @@ A GitHub Actions workflow runs these tests on pushes and pull requests affecting
 - `POST /v1/jobs/{job_id}/submit` — submit a versioned receipt (`bnh-receipt/1`) with the result (needs its key).
 - `GET /v1/ledger` — view simulated accepted-work entries and points by status.
 - `GET /v1/jobs/{job_id}` — job status and its public audit trail.
-- `POST /v1/challenges` — operator only: queue a hidden known-answer job; optional `target_worker` or `target_tier` aims it at one rig or a trust tier.
+- `POST /v1/challenges` — operator only: queue a hidden known-answer job; optional `target_worker` or `target_tier` aims it at one rig or a trust tier; refused (`409`) if its exact input was a hidden test in a period a ledger copy already covers (`test-reuse-v1`).
 - `GET /v1/audits` — operator only: every audit and challenge with its outcome.
 - `GET /v1/workers/{worker_id}/trust` — operator only: how a worker's results held up, plus its audit tier (`new`/`established`/`suspect`), the re-check rate that applies to it, `checks_passed` and `strikes`.
 - `GET /v1/rewards/report?since=&until=&sign=` — operator only: simulated reward report for a period; `sign=true` adds the coordinator's signature (closed periods only).
