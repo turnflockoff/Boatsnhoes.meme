@@ -81,7 +81,7 @@ This roadmap separates implemented repository assets from proposed work. A check
 - [x] Don't let the public ledger show a hidden test's outcome the moment it is submitted. *(`public-delay-v1`, 0.5.38: `GET /v1/ledger` counts every result as `pending` and hides its confidence for `PUBLIC_SETTLE_DELAY_SECONDS`, default 1 hour, whatever kind of job it was; operator token sees it live; `0` = old live view with a health warning. 11 tests, software only.)*
 - [x] Don't let the public ledger pair a re-check with the job it re-checked. *(`public-no-hashes-v1`, 0.5.40: public entries no longer show the answer's hash, which was identical for a job and an agreeing re-check; operator view keeps it. 6 tests, software only.)*
 - [x] Don't let the public job counts show that a re-check was just queued. *(`public-counts-v1`, 0.5.41: `/health` and `GET /v1/ledger` show job counts taken once per 15-minute window (`PUBLIC_COUNTS_INTERVAL_SECONDS`), for everyone; operator view stays live. 13 tests, software only.)*
-- [ ] Post signed reports and ledger copies in a fixed public place. *(Owner decision.)*
+- [x] Post signed reports and ledger copies in a fixed public place. *(`reports-v1`, 0.5.42: owner chose the site and GitHub; the repo's `reports/` folder is served at boatsnhoes.meme/reports/; `python -m app.publish_report add|check` only accepts signed reports that re-check against a redacted copy, 7 days after the period, with history unchanged; never replaces anything; CI re-checks the folder. 11 tests. Nothing published yet.)*
 
 ## Track F — Two-GPU proof of concept
 - [ ] Run two independent workers on the two RX 470 cards.

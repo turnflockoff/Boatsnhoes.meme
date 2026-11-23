@@ -228,6 +228,17 @@ v1 compared payloads byte for byte. For `llm:generate` the payload holds the see
 
 **Limits:** the fingerprint is deliberately broad, so two different questions that differ only in symbols (`7*8` and `7+8`) count as the same and the second is refused: write a different question. It does not catch rewording (`Name a ship` vs `Give me a ship's name`), translations, or look-alike letters from other alphabets (a Cyrillic `а` in place of a Latin `a`). Each new hidden test is compared against every hidden test in the copied periods, which is fine for a few thousand tests.
 
+### Publishing them in one public place (since 0.5.42, `reports-v1`)
+
+The owner chose the repo's `reports/` folder, served on the site at https://boatsnhoes.meme/reports/ (a page that lists every period from `reports/index.json`) and kept with full history by GitHub. One folder per closed period (`2026-12-01T0000Z_2026-12-08T0000Z/`) holding `report.json`, `ledger-copy.sqlite3` and `SHA256SUMS`.
+
+    python -m app.publish_report add report.json ledger-copy.sqlite3 --public-key <hex> [--dry-run]
+    python -m app.publish_report check [--public-key <hex> ...]
+
+- **`add` refuses** the live ledger (only redacted copies), an unsigned or edited report or one signed by another key, a copy that doesn't end where the period ends or doesn't re-create the identical report, a period that ended less than `--min-wait-hours` ago (default 168 = 7 days; copies reveal which past jobs were hidden tests, threat model #14), a period that overlaps or comes before one already posted, a copy that fails `ledger_copy compare` against the previous one, and anything already published. Files are copied byte for byte and the folder appears in one step; nothing is ever replaced. It doesn't touch git.
+- **`check`** re-verifies the whole folder (file hashes, `SHA256SUMS`, signatures, every report against its copy, every copy against the one before, no unlisted folders) and changes nothing. CI runs it on every change, and a test runs it on the real folder.
+- **Limits:** rig names (`worker_id`) are public in both files, so pick names that don't identify people. Without `--public-key`, `check` only shows the folder agrees with itself. After a key rotation, pass each trusted key. Software only, 11 tests; nothing is published yet.
+
 ## Implemented: versioned job and receipt schemas (Track E)
 
 Tested in software only (0.5.10). Code: `app/schemas.py`.
@@ -378,6 +389,7 @@ A GitHub Actions workflow runs these tests on pushes and pull requests affecting
 - `GET /v1/workers/{worker_id}/trust` — operator only: how a worker's results held up, plus its audit tier (`new`/`established`/`suspect`), the re-check rate that applies to it, `checks_passed` and `strikes`.
 - `GET /v1/rewards/report?since=&until=&sign=` — operator only: simulated reward report for a period; `sign=true` adds the coordinator's signature (closed periods only).
 - `python -m app.ledger_copy export|info|compare` — CLI only: redacted ledger copy for a closed, settled period, and a check that a newer copy kept an older one's history unchanged (see above).
+- `python -m app.publish_report add|check` — CLI only: put a closed period's signed report and ledger copy into `reports/` (the site's /reports/ page and GitHub), and re-check everything already there (see above).
 - `GET /health` — public health check: `200` ok or paused / `503` down, `accepting_work`, `paused_since`, uptime, job counts, and the job/receipt schema versions spoken.
 - `POST /v1/operator/pause` — operator only: emergency pause (`pause-v1`). Resume only on the server: `python -m app.incident resume --note ...`.
 - `GET /v1/operator/health` — operator only: workers, queue, waiting audits, review-queue counts, recent events, consistency problems and warnings.

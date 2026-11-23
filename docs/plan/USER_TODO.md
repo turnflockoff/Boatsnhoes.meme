@@ -1,5 +1,5 @@
 # YOUR Personal To-Do List (things only you can do)
-**Version:** 0.5.41 | **Last updated:** 2026-11-23
+**Version:** 0.5.42 | **Last updated:** 2026-11-23
 Never share passwords, API keys, or recovery phrases with anyone, including Claude.
 
 ## This week
@@ -33,7 +33,9 @@ Never share passwords, API keys, or recovery phrases with anyone, including Clau
 - [ ] When you start one worker per card for AI jobs: give each its own card number, e.g. `LLM_VK_DEVICE=0` for the first worker and `LLM_VK_DEVICE=1` for the second (in that worker's environment, not a shared `.env`). Without it both workers may land on the same card. If a worker prints `Could not run job ...`, the reason is on that line; the job goes back to the queue on its own
 - [ ] Before rigs go online: plug in a USB stick and run `python -m app.key_rotation make-handover-key --out <stick>/bnh-handover.key` from `prototype/`. Put the printed `COORDINATOR_HANDOVER_PUBLIC_KEY=...` line in `prototype/.env`, restart the coordinator, then unplug the stick and put it somewhere safe. You only need it again to change the signing key. Losing it means re-pinning every rig by hand, so a second copy on another stick (kept elsewhere) is a good idea
 - [ ] Once a model runs on the rig: keep a private stock of hidden tests. Make a private folder outside the repo (`mkdir -m 700 ~/bnh-private`), then from `prototype/` run `python -m app.challenge_pool init --pool ~/bnh-private/tests.json`, then `add --file my-tests.jsonl` with prompts you wrote and the answers the pinned model gave, then e.g. `OPERATOR_TOKEN=... python -m app.challenge_pool issue --pool ~/bnh-private/tests.json --url http://127.0.0.1:8000 --count 3 --tier new` now and then. Never put that file in the repo or on a rig. To practise before then: `make-demo --count 10` adds SHA-256 tests
-- [ ] Decide where signed reward reports and ledger copies get posted (for example a `reports/` page on boatsnhoes.meme, or GitHub releases) and how long to wait after a period closes before sharing a copy. Keep every old copy there (never replace one): `python -m app.ledger_copy compare old-copy new-copy` can only show history wasn't rewritten if the old copy is still around
+- [x] Decided 2026-11-23: signed reports and ledger copies go on a page on the site and on GitHub (both are the repo's `reports/` folder, live at boatsnhoes.meme/reports/ once merged). Wait after a period closes: **7 days by default**; tell Claude if you want another number
+- [ ] After the first real period on the rigs: from `prototype/`, make the signed report and the ledger copy (commands in `reports/README.md`), then `python -m app.publish_report add report.json ledger-copy.sqlite3 --public-key <key> --dry-run`, then without `--dry-run`. Commit, open a pull request, merge. Keep the private originals; never put the live database anywhere public
+- [ ] Optional: link the logbook (/reports/) from the homepage. I didn't touch your homepage; say the word if you want a link added
 - [ ] Find a blockchain developer or team to build the chain and miner
 - [ ] Set up a project email and a shared password manager
 - [ ] Back up recovery info offline (paper, in two places)

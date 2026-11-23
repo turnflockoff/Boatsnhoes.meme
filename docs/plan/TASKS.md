@@ -1,5 +1,5 @@
 # BOATS N HOES: Project Task List (Claude + dev work)
-**Version:** 0.5.41 | **Last updated:** 2026-11-23 | Personal to-dos live in USER_TODO.md.
+**Version:** 0.5.42 | **Last updated:** 2026-11-23 | Personal to-dos live in USER_TODO.md.
 
 ## Phase 0: Foundation
 - [x] Buy boatsnhoes.meme
@@ -43,7 +43,8 @@
 - [x] Near copies of revealed hidden tests refused too (threat model #11, `test-reuse-v2`): input fingerprint ignores case, spacing, punctuation, invisible characters and, for `llm:generate`, seed/max_tokens/timeout/model; same rule in operator health and the private pool (596 tests)
 - [x] Private stock of hidden tests (threat model #1, #8, #11, `test-pool-v1`): `python -m app.challenge_pool init|add|make-demo|status|issue`; owner-only file outside git, each test checked like the coordinator would, used once (crossed off before sending), revealed ones retired, aimed at a rig or tier; prints no inputs or answers (509 tests)
 - [ ] Fill the hidden-test pool with real `llm:generate` answers from the pinned model (needs the rig, Phase 3)
-- [ ] Post signed reports and ledger copies in a fixed public place (owner decision: where)
+- [x] Post signed reports and ledger copies in a fixed public place (owner chose 2026-11-23: a page on the site and on GitHub). `reports/` folder served at boatsnhoes.meme/reports/; `python -m app.publish_report add|check` (`reports-v1`): only signed reports that re-check against a redacted copy, 7-day wait, no overlaps, history unchanged, never replaced; CI re-checks the folder (626 tests). Nothing published yet
+- [ ] Publish the first period once rigs run real jobs (owner step; see USER_TODO.md)
 - [x] Read-only rig inventory tool for Phase 3: `python -m app.hw_inventory` (OS, kernel, PCI IDs, bound driver, Vulkan devices/Mesa version, /dev/dri access, redacted JSON; 151 tests, format samples only)
 - [x] Trust-based audit rate (threat model #1, `audit-tier-v1`): new rigs and rigs caught once (failed hidden test or outvoted) are re-checked more often; operator-only, changes checks not points (158 tests)
 - [x] Planned coordinator key rotation (threat model #9 follow-up): `python -m app.key_rotation rotate`, handover signed by old and new key, pinned workers follow a valid chain, queued jobs re-signed on claim, crash-safe (168 tests)
@@ -107,6 +108,7 @@
 - [x] Contribute a GPU page (browser check, Linux check, tester form)
 - [x] Desktop/mobile testing (390, 768, 1440 px)
 - [x] Subpages restyled to match the orange/black homepage
+- [x] Public logbook page (`/reports/`): lists published periods from `reports/index.json`, how to check them, FAQ; linked from /contribute (homepage unchanged)
 - [ ] Rebuild or upload Mine, Tokenomics, Stay Safe pages
 - [ ] Litepaper, Casino coming-soon, Meme Lab
 - [x] Waitlist backend: Netlify Forms (`gpu-testers`)
