@@ -476,11 +476,47 @@
 3. **Store the switch where the history is.** The pause is a line in the same audit trail as everything else, so it survives restarts and you can later see exactly when it started and ended.
 4. **A pause shouldn't punish bystanders.** Any rule with a timer (here, "pick up your audit within 2 minutes") needs to know the clock stopped, or the pause shows up as someone else's fault.
 
-## 2026-11-23 (03:10 UTC): Bug check before deploy
+## 2026-11-23 (03:15 UTC): Catching a rewritten history between two ledger copies
+
+**Shipped**
+- **`python -m app.ledger_copy compare older-copy newer-copy`.** Ledger copies let anyone re-run a signed report, but you make every copy. So one gap was left: share an honest copy for November, then later quietly change November (move points, turn a held result into a confirmed one, delete a failed hidden test) and share a December copy that includes the changed November. Each copy passes its own checks. This tool compares the two and catches it.
+- **What it checks**, using the fact that each copy contains everything up to its end date:
+  - **Nothing edited or deleted:** every job, result, "this rig may not re-check this job" rule, rig and event in the older copy is still in the newer copy, with the same values.
+  - **Nothing back-dated:** the newer copy has no job, rig, result or event dated inside the older period that the older copy didn't have.
+  - **Same numbers:** a reward report for everything up to the older end date comes out with the identical fingerprint (`report_sha256`) from both copies.
+  - Both copies must also pass their own consistency check.
+- **Two things are compared by pattern, not value.** Every copy renames owners (`owner-1`, ...) and scrambles input fingerprints with a fresh random key, so the raw values always differ. The tool checks the *grouping* instead: rigs that shared an owner still do (and no new pairs appear), and jobs that had the same input still do. One honest change is allowed: a rig revoked *after* the older copy's end date shows as active in the older copy.
+- **Safe to run by anyone.** It only reads both files (their sha256 stay valid), refuses a full ledger, a junk file or the copies in the wrong order with a plain message, lists the differences if it finds any, and `--out` writes the result as JSON without ever overwriting.
+- Tests went from 454 to 467, all passing (13 new). They build two real copies a period apart (with a dispute, a tie-breaker, a failed hidden test and a later revocation), then tamper with the newer one in nine different ways. I switched off 20 of the tool's rules one at a time and a test failed every time (the first run found one rule with no test, "an extra exclusion added later", so I added one). Software only; nothing here touches the GPUs.
+
+**What you learned**
+1. **One honest snapshot isn't enough; a chain of them is.** A single copy can't show it wasn't edited before you shared it. Two copies can show the older part wasn't edited *between* them. That's the same idea as an append-only log: new pages are fine, changing old pages isn't.
+2. **Compare the pattern when the values are disguised.** Owner names and input fingerprints are deliberately scrambled differently in each copy for privacy. "Who was grouped with whom" survives the scrambling, so that's what gets compared.
+3. **Back-dating is its own kind of cheating.** Adding a fake job "from last month" doesn't change any old row, so a plain "did anything change?" check would miss it. You have to also ask "is there anything new in the old period?".
+4. **This only works if someone keeps the old copy.** When you pick where reports and copies get posted, keep every old one there rather than replacing it.
+
+## 2026-11-23 (04:15 UTC): Retiring hidden tests once a ledger copy gives them away
+
+**Shipped**
+- **The gap.** A shared ledger copy shows which past jobs were hidden tests (outsiders need that to check nobody audited themselves). It hides the prompts, but each rig remembers what it ran. So after a copy, a rig knows "the job that asked X was a test". If the same X were used as a hidden test again, that rig could answer honestly on it and cut corners everywhere else.
+- **The fix (`test-reuse-v1`):**
+  - `python -m app.ledger_copy export` now writes a note into the live ledger (`ledger_copy_made`, with the copy's end date and sha256). If the note can't be written, the copy is deleted and the export fails, so nothing gets shared without a record. Exporting from a copy is now refused, so the note never changes a file you already shared.
+  - `POST /v1/challenges` refuses (`409`, "make a new hidden test") a hidden test whose exact input was a hidden test before the latest copy's end date. Aimed tests are checked too. Normal jobs with the same input are fine; they give nothing away.
+  - The operator health page adds `hidden_test_reuse` (how far copies reach, how many test inputs are retired, how many open tests share an input with another test) and warns while open tests share an input, because rigs that compare notes could spot those even without a copy. It never shows the input or the answer.
+- Tests went from 467 to 479, all passing (12 new). I switched off 13 of the new rules one at a time; the first round showed 3 with no test (only checking hidden tests, ignoring finished tests in the warning, and skipping a garbled note), so I added tests and then every one was caught. Also ran it on a real coordinator process here: the demo worker answered a hidden SHA-256 test, I exported a copy, the same input was refused with `409`, a new one was accepted, and the input never appeared in the log. Software only; nothing here touches the GPUs.
+- **Honest limits:** only the exact input is matched, so a reworded prompt or a changed setting counts as new. Export from the live ledger, not a backup, or the note lands in the backup.
+
+**What you learned**
+1. **Sharing has side effects.** Publishing a copy for transparency also teaches the rigs something. Good designs write down what was revealed and react to it.
+2. **Fail closed on the record.** If the note "this was shared" can't be saved, it's safer to throw the copy away than to share it and forget.
+3. **A test only works if it looks new.** Known-answer tests are expensive to make, so it's tempting to reuse them. Reuse is exactly what lets a cheater recognise them.
+4. **Exact matching is a floor, not a ceiling.** The software catches the identical input; writing each test fresh is still the real protection.
+
+## 2026-11-23 (05:05 UTC): Bug check before deploy (0.5.32)
 
 **Checked**
 - **Website** (all 4 pages: home, contribute, thanks, 404) at phone (390 px), tablet (768 px) and desktop (1440 px) widths, with the live site's security rules switched on: no sideways scrolling, no JavaScript errors, no broken links or images, no duplicate ids, every image has a text description, every page parses as clean HTML. No website files changed in this session.
-- **Worker prototype:** all tests pass, now 455.
+- **Worker prototype:** all tests pass: 480 after merging the two commits the other hourly session pushed meanwhile (ledger-copy comparison and retiring revealed hidden tests).
 
 **Fixed**
 - The public `/health` page read the new pause setting outside its "is the database OK?" safety net. If that record were ever damaged, the page would crash instead of saying "down". Moved it inside, with a test that damages the record on purpose. (The test fails on the old code and passes on the new.)
