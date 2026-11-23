@@ -1,5 +1,5 @@
 # BOATS N HOES: Project Task List (Claude + dev work)
-**Version:** 0.5.38 | **Last updated:** 2026-11-23 | Personal to-dos live in USER_TODO.md.
+**Version:** 0.5.39 | **Last updated:** 2026-11-23 | Personal to-dos live in USER_TODO.md.
 
 ## Phase 0: Foundation
 - [x] Buy boatsnhoes.meme
@@ -40,6 +40,7 @@
 - [x] Shareable ledger copies: redacted copy of a closed, settled period (no keys, codes, prompts, answers or real owner names) that anyone can re-run a signed report and the consistency checks against (137 tests)
 - [x] Compare ledger copies across periods (threat model #10 follow-up, `bnh-ledger-compare/1`): `python -m app.ledger_copy compare older.sqlite3 newer.sqlite3` checks nothing in the older period was edited, deleted or back-dated and its report numbers are identical; read-only (467 tests)
 - [x] Retire hidden tests a ledger copy revealed (threat model #11, #14, `test-reuse-v1`): every export is recorded in the live ledger; a new hidden test with the exact input of one from a period a copy covers is refused (`409`); operator health warns while open hidden tests share an input (479 tests)
+- [x] Near copies of revealed hidden tests refused too (threat model #11, `test-reuse-v2`): input fingerprint ignores case, spacing, punctuation, invisible characters and, for `llm:generate`, seed/max_tokens/timeout/model; same rule in operator health and the private pool (596 tests)
 - [x] Private stock of hidden tests (threat model #1, #8, #11, `test-pool-v1`): `python -m app.challenge_pool init|add|make-demo|status|issue`; owner-only file outside git, each test checked like the coordinator would, used once (crossed off before sending), revealed ones retired, aimed at a rig or tier; prints no inputs or answers (509 tests)
 - [ ] Fill the hidden-test pool with real `llm:generate` answers from the pinned model (needs the rig, Phase 3)
 - [ ] Post signed reports and ledger copies in a fixed public place (owner decision: where)

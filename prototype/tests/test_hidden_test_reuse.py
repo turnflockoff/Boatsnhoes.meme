@@ -4,7 +4,8 @@ A ledger copy shows which jobs before its `until` were hidden tests, and each ri
 the inputs of the jobs it ran. So after a copy is made, reusing one of those inputs as a new
 hidden test would let the rig recognise the test and answer honestly only on it. Every
 export is recorded in the live ledger, and a hidden test with the exact input of one from a
-period a copy covers is refused.
+period a copy covers is refused. Near copies (`test-reuse-v2`) are tested in
+tests/test_hidden_test_near_copies.py.
 """
 from __future__ import annotations
 
@@ -90,8 +91,10 @@ def test_tests_made_after_the_copy_period_can_still_repeat(tmp_path: Path) -> No
 def test_reuse_is_allowed_before_any_copy_but_shows_a_warning(tmp_path: Path) -> None:
     client, _clock, _ledger = make(tmp_path)
     health = operator_health(client)
-    assert health["hidden_test_reuse"] == {"rule": "test-reuse-v1", "revealed_until": None,
-                                           "retired_inputs": 0, "open_sharing_input": 0}
+    assert health["hidden_test_reuse"] == {"rule": "test-reuse-v2",
+                                           "fingerprint": "input-fingerprint-v1",
+                                           "revealed_until": None, "retired_inputs": 0,
+                                           "open_sharing_input": 0}
     assert hidden_test(client).status_code == 200
     assert not any("same input" in w for w in operator_health(client)["warnings"])
     assert hidden_test(client).status_code == 200

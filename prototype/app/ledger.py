@@ -54,10 +54,12 @@ from __future__ import annotations
 import json
 import random
 import sqlite3
+from collections import Counter
 from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
+from . import tasks
 from .audit_policy import (
     AUDITOR_PICK_RULES,
     PASSED_STATUSES,
@@ -81,8 +83,13 @@ MAX_PAUSE_REASON = 200
 # hidden test from that period is "burned": using it again as a hidden test would let the
 # rigs that ran it recognise the test. Each export is recorded as a `ledger_copy_made`
 # event, and a new hidden test with the exact input of one created before the latest
-# recorded `until` is refused. Only exact inputs are matched (same payload hash).
-TEST_REUSE_RULE = "test-reuse-v1"
+# recorded `until` is refused.
+# `test-reuse-v2` (0.5.39): also refused when it is a *near copy* of one: same task type and
+# the same recognisable text once case, spacing, punctuation and invisible characters are
+# ignored, and for `llm:generate` whatever the seed, max_tokens, timeout or model (see
+# `tasks.input_fingerprint`). A rig that remembers "Name a ship." as a test recognises
+# "name a ship" with seed 8 just as well. Rewording is still not caught.
+TEST_REUSE_RULE = "test-reuse-v2"
 COPY_MADE_EVENT = "ledger_copy_made"
 
 
@@ -90,9 +97,10 @@ class HiddenTestRevealed(ValueError):
     """Refused: this hidden test's exact input was a hidden test in a period that a ledger
     copy already covers, so the rigs that ran it can tell it is a test."""
 
-    def __init__(self, revealed_until: int):
+    def __init__(self, revealed_until: int, match: str = "exact"):
         super().__init__("hidden test input already revealed by a ledger copy")
         self.revealed_until = revealed_until
+        self.match = match  # "exact" or "near-copy" (test-reuse-v2)
 
 
 class CoordinatorPaused(Exception):
@@ -436,7 +444,8 @@ class Ledger:
         with self._tx() as db:
             self._refuse_if_paused(db)
             if job_kind == "challenge":
-                self._refuse_if_revealed(db, fields["payload_hash"])
+                self._refuse_if_revealed(db, fields["task_type"], fields["payload"],
+                                         fields["payload_hash"])
             self._insert_job(db, fields, signature, max_attempts, now, job_kind,
                              expected_result=expected_result, target=target)
             if target is not None:
@@ -573,12 +582,23 @@ class Ledger:
             latest = until if latest is None else max(latest, until)
         return latest
 
-    def _refuse_if_revealed(self, db: sqlite3.Connection, payload_hash: str) -> None:
+    def _refuse_if_revealed(self, db: sqlite3.Connection, task_type: str, payload: str,
+                            payload_hash: str) -> None:
         until = self._revealed_until(db)
-        if until is not None and db.execute(
-                "SELECT 1 FROM jobs WHERE job_kind='challenge' AND payload_hash=? "
-                "AND created_at<? LIMIT 1", (payload_hash, until)).fetchone():
-            raise HiddenTestRevealed(until)
+        if until is None:
+            return
+        if db.execute("SELECT 1 FROM jobs WHERE job_kind='challenge' AND payload_hash=? "
+                      "AND created_at<? LIMIT 1", (payload_hash, until)).fetchone():
+            raise HiddenTestRevealed(until, "exact")
+        # `test-reuse-v2`: near copies. Hidden tests are few, so a scan is fine here; the
+        # fingerprint (which includes the task type) is worked out from the stored payload,
+        # so tests created before this rule are covered too.
+        mine = tasks.input_fingerprint(task_type, payload)
+        for (old_type, old_payload) in db.execute(
+                "SELECT task_type, payload FROM jobs WHERE job_kind='challenge' "
+                "AND created_at<?", (until,)):
+            if tasks.input_fingerprint(old_type, old_payload) == mine:
+                raise HiddenTestRevealed(until, "near-copy")
 
 
     def record_copy(self, now: int, until: int, file_sha256: str) -> None:
@@ -594,19 +614,21 @@ class Ledger:
             return self._revealed_until(db)
 
     def test_reuse(self) -> dict[str, Any]:
-        """Operator-only numbers for `test-reuse-v1`."""
+        """Operator-only numbers for `test-reuse-v2`. Inputs are compared by fingerprint
+        (`tasks.input_fingerprint`), so near copies count as the same input."""
         with closing(self._connect()) as db:
             until = self._revealed_until(db)
-            open_sharing = db.execute(
-                "SELECT COUNT(*) FROM jobs j WHERE j.job_kind='challenge' "
-                "AND j.status IN ('queued','leased') AND EXISTS (SELECT 1 FROM jobs o "
-                "WHERE o.job_kind='challenge' AND o.payload_hash=j.payload_hash "
-                "AND o.job_id!=j.job_id)").fetchone()[0]
-            revealed = 0 if until is None else db.execute(
-                "SELECT COUNT(DISTINCT payload_hash) FROM jobs WHERE job_kind='challenge' "
-                "AND created_at<?", (until,)).fetchone()[0]
-        return {"rule": TEST_REUSE_RULE, "revealed_until": until,
-                "retired_inputs": revealed, "open_sharing_input": open_sharing}
+            rows = db.execute("SELECT task_type, payload, status, created_at FROM jobs "
+                              "WHERE job_kind='challenge'").fetchall()
+        prints = [(tasks.input_fingerprint(r["task_type"], r["payload"]), r) for r in rows]
+        uses = Counter(fp for fp, _ in prints)
+        open_sharing = sum(1 for fp, r in prints
+                           if r["status"] in ("queued", "leased") and uses[fp] > 1)
+        revealed = 0 if until is None else len(
+            {fp for fp, r in prints if int(r["created_at"]) < until})
+        return {"rule": TEST_REUSE_RULE, "fingerprint": tasks.FINGERPRINT_RULE,
+                "revealed_until": until, "retired_inputs": revealed,
+                "open_sharing_input": open_sharing}
 
     def note(self, now: int, event: str, job_id: str | None = None,
              worker_id: str | None = None, detail: str | None = None) -> None:

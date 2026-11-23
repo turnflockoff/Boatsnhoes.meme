@@ -8,6 +8,8 @@ Every job type plugs in by implementing `TaskExecutor`:
   - results_agree(a, b) -> bool                             (coordinator, Phase 4 audits)
   - model_sha256(payload) -> pinned model hash or None      (both: goes into the signed job
                                                              and is echoed in the receipt)
+  - recognisable_text(payload) -> the part a rig would remember (coordinator, hidden-test
+                                  reuse check; see `input_fingerprint`)
 
 `Verdict.confidence` is explicit about how much a check proves:
   "exact"          the coordinator recomputed / fully checked the answer
@@ -20,6 +22,7 @@ import hashlib
 import json
 import os
 import shutil
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -66,6 +69,11 @@ class TaskExecutor:
         """sha256 of the pinned model file this payload needs, or None for tasks that use
         no model. Read from *this machine's* registry, so coordinator and worker can compare."""
         return None
+
+    def recognisable_text(self, payload: str) -> str:
+        """The part of the input a rig would recognise if it saw it again. Default: all of
+        it. Never raises: it is also used on old rows whose payload may not validate today."""
+        return payload
 
 
 def _sha(value: str) -> str:
@@ -144,6 +152,17 @@ class LlmGenerateTask(TaskExecutor):
         spec = self.validate(payload)  # raises TaskError if the model isn't pinned here
         return self.registry[spec.model_id].sha256
 
+    def recognisable_text(self, payload: str) -> str:
+        """Only the prompt: the same question with another seed, max_tokens, timeout or
+        model is still the same question to a rig that has answered it before. Parsed
+        without the model registry, so it works on any stored payload."""
+        try:
+            data = json.loads(payload)
+        except (json.JSONDecodeError, TypeError):
+            return payload
+        prompt = data.get("prompt") if isinstance(data, dict) else None
+        return prompt if isinstance(prompt, str) else payload
+
     def _binary(self) -> str | None:
         configured = os.getenv("LLAMA_CLI")
         return configured if configured and Path(configured).is_file() else shutil.which("llama-cli")
@@ -203,6 +222,36 @@ class LlmGenerateTask(TaskExecutor):
 
 
 EXECUTORS: dict[str, TaskExecutor] = {t.task_type: t for t in (Sha256Task(), LlmGenerateTask())}
+
+
+# Input fingerprint (`input-fingerprint-v1`, threat model #11). Used to tell whether a new
+# hidden test is a near copy of one the rigs have already seen as a test. Two inputs get the
+# same fingerprint when their recognisable text differs only in letter case, spacing,
+# punctuation or symbols, invisible characters, or Unicode look-alike forms that NFKC folds
+# (full-width letters, ligatures). It is deliberately broad: refusing a test that merely
+# looks like an old one costs the operator a rewrite, while letting a recognisable one
+# through tells a cheating rig which job to answer honestly. It does not catch rewording
+# ("Name a ship" vs "Give a ship's name") or look-alike letters from other alphabets.
+FINGERPRINT_RULE = "input-fingerprint-v1"
+
+
+def normalise_text(text: str) -> str:
+    """Letters and digits only, after NFKC and case folding. Spaces go too, so "2+2",
+    "2 + 2" and "don't"/"dont" fold together; zero-width and other invisible characters
+    are not letters, so they can't split a word into a "new" input."""
+    folded = unicodedata.normalize("NFKC", text).casefold()
+    return "".join(ch for ch in folded if ch.isalnum())
+
+
+def input_fingerprint(task_type: str, payload: str) -> str:
+    """sha256 of the task type plus the normalised recognisable text. Unknown task types
+    and text with no letters or digits fall back to the raw text, so they only ever match
+    themselves exactly."""
+    executor = EXECUTORS.get(task_type)
+    text = executor.recognisable_text(payload) if executor is not None else payload
+    normal = normalise_text(text)
+    key = f"n:{normal}" if normal else f"r:{text}"
+    return _sha(f"{FINGERPRINT_RULE}\n{task_type}\n{key}")
 
 
 def get(task_type: str) -> TaskExecutor:

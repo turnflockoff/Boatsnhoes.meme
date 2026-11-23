@@ -375,12 +375,14 @@ def create_app(settings: Settings | None = None,
             warnings.append("SUBMITTER_TOKEN is set but POINTS_TABLE isn't, so whoever holds "
                             f"the submitter token picks each job's points (up to "
                             f"{points.MAX_POINTS}); set POINTS_TABLE to fix points per task type")
-        # `test-reuse-v1`: hidden tests that share an exact input with another hidden test.
+        # `test-reuse-v2`: hidden tests that share an input (or a near copy of one) with
+        # another hidden test.
         reuse = ledger.test_reuse()
         if reuse["open_sharing_input"]:
             warnings.append(f"{reuse['open_sharing_input']} open hidden test(s) use the same "
-                            "input as another hidden test; rigs that compare notes could "
-                            "spot them. Prefer a fresh input for each test")
+                            "input as another hidden test (ignoring case, spacing, "
+                            "punctuation and settings like the seed); rigs that compare "
+                            "notes could spot them. Prefer a fresh input for each test")
         if settings.public_settle_delay_seconds == 0:
             warnings.append("PUBLIC_SETTLE_DELAY_SECONDS is 0, so the public ledger shows "
                             "each result's bucket the moment it is accepted: a rig can tell "
@@ -532,11 +534,15 @@ def create_app(settings: Settings | None = None,
             ledger.create_job(fields, signature, settings.max_attempts, t, job_kind="challenge",
                               expected_result=body.expected_result, target=body.target())
         except HiddenTestRevealed as exc:
-            # `test-reuse-v1`: the rigs that ran this input before can tell it's a test.
+            # `test-reuse-v2`: the rigs that ran this input (or a near copy) before can tell
+            # it's a test. Says how it matched, never which old test or what it contained.
+            what = ("this exact input" if exc.match == "exact" else
+                    "this input differs only in case, spacing, punctuation or settings "
+                    "(seed, max_tokens, timeout, model) from one that")
             raise HTTPException(status_code=409, detail=(
-                "this exact input was already a hidden test in a period a ledger copy covers "
+                f"{what} was already a hidden test in a period a ledger copy covers "
                 f"(up to {exc.revealed_until}), so the rigs that ran it can recognise it; "
-                "make a new hidden test")) from None
+                "make a new hidden test with a different question")) from None
         # Same line as a normal job: logs never say which jobs are hidden tests.
         log.info("job created", extra={"job_id": fields["job_id"], "task_type": body.task_type})
         job = ledger.get_job(fields["job_id"]) or {}

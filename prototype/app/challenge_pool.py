@@ -18,11 +18,14 @@ Rules it keeps:
   an answer.
 - `add` checks every test the way the coordinator will: known task type, same size limits,
   the task's own payload check, and the answer passes the task's own verifier. An input
-  that is already in the pool, or was used before, is skipped.
+  that is already in the pool, or was used before, is skipped, and so is a near copy of
+  one (same words once case, spacing, punctuation and settings like the seed are ignored;
+  `tasks.input_fingerprint`, since 0.5.39).
 - `issue` uses each test at most once. A test is crossed off *before* it is sent, so a crash
   or a lost connection can never send it twice; it is put back only when the coordinator
   clearly refused it without creating anything. A test the coordinator refuses because a
-  ledger copy already revealed that input (`409`, `test-reuse-v1`) is retired, not retried.
+  ledger copy already revealed that input or a near copy of it (`409`, `test-reuse-v2`) is
+  retired, not retried.
 - It stops at the first sign of trouble (paused coordinator, wrong token, unknown rig,
   network error) instead of burning through the pool.
 
@@ -145,8 +148,17 @@ def check_test(task_type: Any, payload: Any, expected: Any) -> str | None:
 
 
 def known_inputs(pool: dict[str, Any]) -> set[str]:
-    hashes = {input_hash(e["task_type"], e["payload"]) for e in pool["entries"]}
-    return hashes | {u["input_sha256"] for u in pool["used"]}
+    """Exact input hashes and near-copy fingerprints (`tasks.input_fingerprint`) of every
+    test in the pool or used before. Used tests recorded before 0.5.39 have no fingerprint,
+    so only their exact input is known."""
+    known = set()
+    for e in pool["entries"]:
+        known |= {input_hash(e["task_type"], e["payload"]),
+                  tasks.input_fingerprint(e["task_type"], e["payload"])}
+    for u in pool["used"]:
+        known |= {u["input_sha256"]} | ({u["input_fingerprint"]}
+                                        if isinstance(u.get("input_fingerprint"), str) else set())
+    return known
 
 
 def add_tests(pool: dict[str, Any], items: Iterable[tuple[str, Any]], source: str,
@@ -164,10 +176,14 @@ def add_tests(pool: dict[str, Any], items: Iterable[tuple[str, Any]], source: st
         reason = check_test(task_type, payload, expected)
         if reason is None and input_hash(task_type, payload) in seen:
             reason = "this input is already in the pool or was used before"
+        if reason is None and tasks.input_fingerprint(task_type, payload) in seen:
+            reason = ("a near copy of this input (same words, ignoring case, spacing, "
+                      "punctuation and settings like the seed) is already in the pool or "
+                      "was used before")
         if reason is not None:
             skipped.append(f"{label}: {reason}")
             continue
-        seen.add(input_hash(task_type, payload))
+        seen |= {input_hash(task_type, payload), tasks.input_fingerprint(task_type, payload)}
         pool["entries"].append({"id": secrets.token_hex(6), "task_type": task_type,
                                 "payload": payload, "expected_result": expected,
                                 "added_at": _now_iso(now), "source": source})
@@ -264,6 +280,8 @@ def issue_tests(path: Path, client: httpx.Client, operator_token: str, count: in
         pool["entries"] = [e for e in pool["entries"] if e["id"] != entry["id"]]
         record = {"id": entry["id"], "task_type": entry["task_type"],
                   "input_sha256": input_hash(entry["task_type"], entry["payload"]),
+                  "input_fingerprint": tasks.input_fingerprint(entry["task_type"],
+                                                               entry["payload"]),
                   "outcome": "sending", "job_id": None, "target": target_label,
                   "at": _now_iso(now())}
         pool["used"].append(record)
@@ -298,7 +316,7 @@ def issue_tests(path: Path, client: httpx.Client, operator_token: str, count: in
             record["outcome"], record["job_id"] = "issued", job_id
             result["issued"].append({"job_id": record["job_id"], "task_type": entry["task_type"]})
         elif status == 409 and "already a hidden test" in detail:
-            record["outcome"] = "retired"  # revealed by a ledger copy (test-reuse-v1)
+            record["outcome"] = "retired"  # revealed by a ledger copy (test-reuse-v2)
             result["retired"] += 1
         elif status is not None and (status in (401, 403, 404, 409, 422, 429, 503)):
             # Clearly refused and nothing was created: put the test back for later.
