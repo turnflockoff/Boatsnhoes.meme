@@ -45,7 +45,8 @@ def pinned_model(registry: Path, tmp_path: Path) -> Path:
 @pytest.fixture
 def client(tmp_path: Path) -> TestClient:
     settings = Settings(database_path=tmp_path / "db.sqlite3",
-                        lease_seconds=30, max_attempts=2, operator_token=OPERATOR)
+                        lease_seconds=30, max_attempts=2, operator_token=OPERATOR,
+                        public_settle_delay_seconds=0)  # see test_public_delay.py
     return WorkerClient(create_app(settings, clock=lambda: T0))
 
 

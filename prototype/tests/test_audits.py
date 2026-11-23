@@ -49,7 +49,10 @@ def make(tmp_path: Path, audit_rate: float = 1.0, operator_token: str | None = O
     clock = Clock()
     settings = Settings(database_path=tmp_path / "db.sqlite3", lease_seconds=30,
                         max_attempts=2, audit_rate=audit_rate,
-                        **flat_audit_rate(audit_rate), operator_token=operator_token)
+                        **flat_audit_rate(audit_rate), operator_token=operator_token,
+                        # These tests read settlement buckets right away; the public
+                        # delay (`public-delay-v1`) is tested in test_public_delay.py.
+                        public_settle_delay_seconds=0)
     app = create_app(settings, clock=clock, rng=FirstPickRng(1))
     client = WorkerClient(app)
     for w in ("wk-a", "wk-b", "wk-c"):

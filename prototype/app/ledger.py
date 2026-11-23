@@ -1004,26 +1004,44 @@ class Ledger:
             self._event(db, now, event, job_id, detail=f"{status} (tie-breaker {tb['job_id']})")
 
     # -- reporting --------------------------------------------------------------------
-    def entries(self) -> list[dict[str, Any]]:
+    def entries(self, shown_up_to: int | None = None) -> list[dict[str, Any]]:
+        """Accepted results. With `shown_up_to` (`public-delay-v1`, threat model #14),
+        results accepted after it have their `confidence` withheld (None): a
+        confirmed re-run flips it to "replicated", which would tell an auditor what its
+        job was. `settlement_visible` says which rows are shown in full."""
         with closing(self._connect()) as db:
             rows = db.execute(
                 "SELECT job_id, worker_id, result_hash, reward_points, accepted_at, "
                 "verifier_method, confidence FROM submissions ORDER BY accepted_at, job_id"
             ).fetchall()
-            return [dict(row) for row in rows]
+        out = []
+        for row in rows:
+            entry = dict(row)
+            visible = shown_up_to is None or entry["accepted_at"] <= shown_up_to
+            if not visible:
+                entry["confidence"] = None
+            out.append(entry | {"settlement_visible": visible})
+        return out
 
     def submission(self, job_id: str) -> dict[str, Any] | None:
         with closing(self._connect()) as db:
             row = db.execute("SELECT * FROM submissions WHERE job_id=?", (job_id,)).fetchone()
             return dict(row) if row else None
 
-    def points_by_status(self) -> dict[str, int]:
-        """Simulated points per public settlement bucket (see SETTLEMENT)."""
+    def points_by_status(self, shown_up_to: int | None = None) -> dict[str, int]:
+        """Simulated points per public settlement bucket (see SETTLEMENT). With
+        `shown_up_to` (`public-delay-v1`), results accepted after it count as
+        "pending" whatever their real status, so a hidden test that lands straight in
+        confirmed or held can't be told from normal work right after it is submitted."""
         totals = dict.fromkeys(("confirmed", "pending", "unverified", "held"), 0)
         with closing(self._connect()) as db:
-            for row in db.execute("SELECT audit_status, SUM(reward_points) AS n "
-                                  "FROM submissions GROUP BY audit_status").fetchall():
-                totals[SETTLEMENT.get(row["audit_status"], "held")] += int(row["n"] or 0)
+            for row in db.execute(
+                    "SELECT audit_status, (? IS NOT NULL AND accepted_at > ?) AS recent, "
+                    "SUM(reward_points) AS n FROM submissions GROUP BY audit_status, recent",
+                    (shown_up_to, shown_up_to)).fetchall():
+                bucket = "pending" if row["recent"] else SETTLEMENT.get(row["audit_status"],
+                                                                        "held")
+                totals[bucket] += int(row["n"] or 0)
         return totals
 
     def audits(self) -> list[dict[str, Any]]:

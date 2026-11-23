@@ -80,7 +80,8 @@ def make(tmp_path: Path, rule: str, established: tuple[str, ...]):
     settings = Settings(database_path=tmp_path / "db.sqlite3", lease_seconds=30,
                         max_attempts=2, operator_token=OP["X-Operator-Token"],
                         audit_rate=1.0, audit_rate_new=1.0, audit_rate_suspect=1.0,
-                        audit_new_until=1, rate_limit_per_minute=0, tiebreak_decides=rule)
+                        audit_new_until=1, rate_limit_per_minute=0, tiebreak_decides=rule,
+                        public_settle_delay_seconds=0)  # see test_public_delay.py
     app = create_app(settings, clock=clock, rng=FirstPickRng(1))
     client = WorkerClient(app)
     for w in ("wk-a", "wk-b", "wk-c"):

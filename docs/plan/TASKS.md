@@ -1,5 +1,5 @@
 # BOATS N HOES: Project Task List (Claude + dev work)
-**Version:** 0.5.37 | **Last updated:** 2026-11-23 | Personal to-dos live in USER_TODO.md.
+**Version:** 0.5.38 | **Last updated:** 2026-11-23 | Personal to-dos live in USER_TODO.md.
 
 ## Phase 0: Foundation
 - [x] Buy boatsnhoes.meme
@@ -48,6 +48,7 @@
 - [x] Planned coordinator key rotation (threat model #9 follow-up): `python -m app.key_rotation rotate`, handover signed by old and new key, pinned workers follow a valid chain, queued jobs re-signed on claim, crash-safe (168 tests)
 - [x] Audit follow-through (threat model #4 follow-up): per-rig count of assigned audits/tie-breakers it never picked up, let time out, or had refused; operator health warns at `AUDIT_DROP_WARN`; operator-only, changes nothing about points (177 tests)
 - [x] Busy rigs aren't counted as dropping audits (`follow-through-v2`): a pick that took other, older jobs during its window counts as `not_reached`, not a drop, so the health warning only flags rigs that went silent or let a taken audit go (562 tests)
+- [x] Public ledger delay (threat model #14, `public-delay-v1`): `GET /v1/ledger` counts every result as `pending` and withholds its confidence for `PUBLIC_SETTLE_DELAY_SECONDS` (default 3600) after it is accepted, so a rig can't spot a hidden test (or a re-check) by watching the public totals right after it submits; operator token sees it live (573 tests)
 - [ ] Decide what repeated audit drops should change, if anything (owner decision; today it's a warning only)
 - [x] Operator review queue (threat model #7): read-only list of held cases (stuck disputes, three-way disagreements, failed hidden tests) with answers side by side, `python -m app.review`, health warning (190 tests)
 - [ ] Decide what a reviewer's decision should do to held points (part of scoring v2; owner decision)

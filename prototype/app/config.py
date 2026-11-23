@@ -72,6 +72,12 @@ class Settings:
     # unverified work; "sim-points-v2-forfeit" (opt-in, threat model #15) forfeits a rig's
     # unverified points for a period in which it got a strike. Owner decision.
     reward_scoring: str = "sim-points-v1"
+    # `public-delay-v1` (threat model #14): for this many seconds after a result is
+    # accepted, the public GET /v1/ledger counts it as "pending" and withholds its
+    # confidence, whatever kind of job it was. Shown live, a hidden test lands straight in
+    # confirmed/held while normal AI work lands in pending/unverified, so a rig could spot
+    # its hidden tests. 0 = live (old behaviour). The operator token always sees it live.
+    public_settle_delay_seconds: int = 3600
 
     def resolved_signing_key_path(self) -> Path:
         return self.signing_key_path or self.database_path.parent / "coordinator-signing.key"
@@ -201,4 +207,6 @@ def get_settings() -> Settings:
         points_table=parse_points_table(os.getenv("POINTS_TABLE"), EXECUTORS),
         handover_public_key=handover_public_key_env(),
         reward_scoring=reward_scoring_env(),
+        public_settle_delay_seconds=_int_env("PUBLIC_SETTLE_DELAY_SECONDS", 3600, 0,
+                                             30 * 86400),
     )

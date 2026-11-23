@@ -381,6 +381,11 @@ def create_app(settings: Settings | None = None,
             warnings.append(f"{reuse['open_sharing_input']} open hidden test(s) use the same "
                             "input as another hidden test; rigs that compare notes could "
                             "spot them. Prefer a fresh input for each test")
+        if settings.public_settle_delay_seconds == 0:
+            warnings.append("PUBLIC_SETTLE_DELAY_SECONDS is 0, so the public ledger shows "
+                            "each result's bucket the moment it is accepted: a rig can tell "
+                            "its hidden tests from normal work (threat model #14). Set it "
+                            "longer than an audit and tie-breaker take, e.g. 3600.")
         if problems:
             warnings.append(f"{len(problems)} consistency problem(s): see "
                             "consistency_problems")
@@ -397,6 +402,7 @@ def create_app(settings: Settings | None = None,
                 "auditor_pick": settings.auditor_pick,
                 "tiebreak_decides": settings.tiebreak_decides, "hidden_test_reuse": reuse,
                 "reward_scoring": settings.reward_scoring,
+                "public_settle_delay_seconds": settings.public_settle_delay_seconds,
                 "pause": {"rule": PAUSE_VERSION, "paused": pause is not None} | (pause or {}),
                 "consistency_problems": problems, "warnings": warnings}
 
@@ -665,9 +671,19 @@ def create_app(settings: Settings | None = None,
         raise HTTPException(status_code=code, detail=detail)
 
     @app.get("/v1/ledger")
-    def read_ledger() -> dict[str, Any]:
-        return {"entries": ledger.entries(), "total_simulated_points": ledger.total_points(),
-                "points_by_status": ledger.points_by_status(),
+    def read_ledger(x_operator_token: str | None = Header(default=None)) -> dict[str, Any]:
+        """Public ledger. `public-delay-v1` (threat model #14): a result's settlement bucket
+        and confidence show only PUBLIC_SETTLE_DELAY_SECONDS after it was accepted; until
+        then it counts as "pending". With the operator token the view is live."""
+        if x_operator_token is not None:
+            require_operator(x_operator_token)
+            delay, view = 0, "operator-live"
+        else:
+            delay, view = settings.public_settle_delay_seconds, "public-delayed"
+        cutoff = now() - delay if delay else None
+        return {"entries": ledger.entries(cutoff), "total_simulated_points": ledger.total_points(),
+                "points_by_status": ledger.points_by_status(cutoff),
+                "view": view, "public_settle_delay_seconds": delay,
                 "jobs": ledger.status_counts(), "consistency_problems": ledger.check_consistency(),
                 "notice": "Simulated points only; not tokens or money."}
 

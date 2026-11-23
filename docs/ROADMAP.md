@@ -77,6 +77,7 @@ This roadmap separates implemented repository assets from proposed work. A check
 - [x] Check that a later ledger copy didn't rewrite an earlier one. *(`python -m app.ledger_copy compare older newer`: nothing edited, deleted or back-dated before the older copy's end, same report numbers; owner labels and masked inputs compared by shape. 13 tests, software only.)*
 - [x] Don't reuse a hidden test that a shared ledger copy revealed. *(`test-reuse-v1`: each export is recorded; a hidden test with the exact input of one from a copied period gets `409`; operator health warns while open tests share an input. 12 tests, software only.)*
 - [x] Keep a private stock of hidden tests and hand them out a few at a time, each used once. *(`test-pool-v1`, `python -m app.challenge_pool`: owner-only file outside git; every test checked like the coordinator would; crossed off before sending so a crash can't send it twice; tests a ledger copy revealed are retired. 29 tests, software only; no real model answers in a pool yet.)*
+- [x] Don't let the public ledger show a hidden test's outcome the moment it is submitted. *(`public-delay-v1`, 0.5.38: `GET /v1/ledger` counts every result as `pending` and hides its confidence for `PUBLIC_SETTLE_DELAY_SECONDS`, default 1 hour, whatever kind of job it was; operator token sees it live; `0` = old live view with a health warning. 11 tests, software only.)*
 - [ ] Post signed reports and ledger copies in a fixed public place. *(Owner decision.)*
 
 ## Track F — Two-GPU proof of concept
