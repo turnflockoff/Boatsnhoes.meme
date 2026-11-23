@@ -583,3 +583,20 @@
 2. **Give a program only what it needs (least privilege).** Copying your whole environment into a helper program hands it every token you loaded, whether it needs them or not. An allow-list ("only these") is safer than a block-list ("everything except these").
 3. **A worker should survive one bad job.** Crashing on one timeout takes the whole rig offline; skipping the job and letting the lease run out keeps it earning and lets someone else try.
 4. **Kill the whole family.** A program can start helpers. Starting it in its own process group means a timeout stops all of them, not just the parent.
+
+## 2026-11-23 (08:15 UTC): An optional penalty for caught cheaters (0.5.36)
+
+**Shipped**
+- **The gap (threat model #15).** Only some results get re-checked. Under the current scoring (`sim-points-v1`) a rig that fakes answers loses points only on the fakes that happened to be checked, and keeps them for every fake nobody looked at. So as long as the check rate is below 100%, faking still pays on average.
+- **New optional scoring rule `sim-points-v2-forfeit`.** If a rig gets a strike in a period (it failed a hidden test, or a tie-breaker outvoted it), it loses its *unchecked* (`unverified`) points for that whole period. Points for work that passed an independent check (`confirmed`) are kept. Cases where the software couldn't tell who was right (`disputed`, `unresolved`, or a tie-breaker held for you) cost nothing, because nobody was proven wrong.
+- **How to switch it on:** `REWARD_SCORING=sim-points-v2-forfeit` in `prototype/.env`, or try it on one report with `python -m app.rewards report --scoring sim-points-v2-forfeit`. **It's off by default**; picking a penalty is your decision (already on your to-do list, now with the trade-off spelled out).
+- **What the report shows:** each rig gets `struck` (yes/no) and `forfeited_points`; totals get `forfeited_points`. It never says *which* result caused the strike or whether it was a hidden test. The rule's name is inside the signed part and the hash, so `verify` rebuilds the report with the same rule, including from a shared ledger copy. Old v1 reports are byte-for-byte unchanged, so every report already signed still verifies.
+- **Safety nets:** a typo in `REWARD_SCORING` stops the coordinator at start instead of mid-report; operator health shows which rule is active.
+- Tests went from 546 to 559, all passing (13 new). I broke the new code on purpose 12 ways (no forfeit, ignoring failed hidden tests, treating every held case as a strike, forfeiting confirmed points too, totals not reduced, CLI ignoring the setting, API ignoring it, no start-up check, and more) and a test failed every time. Software only; nothing here touches the GPUs, and points are simulated.
+- **Honest limits:** the penalty only reaches the period of the strike, so a cheater caught early in the next period keeps the previous period's unchecked points. A rig can tell that one of its held results counted as a strike. And until the RX 470s show how often honest cards disagree (Phase 3), an honest rig could be struck over a GPU quirk, which is the main reason it ships switched off.
+
+**What you learned**
+1. **Spot checks need a cost for getting caught.** If a check only takes away the one fake it found, cheating is a bet with no downside. Making one caught fake cost all the unchecked work in that period turns it into a bad bet.
+2. **Punish what was proven, not what's merely in doubt.** A dispute with no clear winner isn't proof anyone cheated, so it costs nothing; only a failed known-answer test or losing a 2-against-1 vote counts.
+3. **Version your rules so old results stay checkable.** Because each report names its scoring rule inside the signature, last month's v1 reports still verify after v2 exists.
+4. **Fail loudly at start-up.** A misspelled setting that silently falls back to the old rule is worse than a coordinator that refuses to start and tells you why.

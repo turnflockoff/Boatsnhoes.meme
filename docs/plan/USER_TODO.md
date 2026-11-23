@@ -1,5 +1,5 @@
 # YOUR Personal To-Do List (things only you can do)
-**Version:** 0.5.35 | **Last updated:** 2026-11-23
+**Version:** 0.5.36 | **Last updated:** 2026-11-23
 Never share passwords, API keys, or recovery phrases with anyone, including Claude.
 
 ## This week
@@ -23,7 +23,7 @@ Never share passwords, API keys, or recovery phrases with anyone, including Clau
 - [ ] Later, for the first real test on a card: run it through the recorder, e.g. `python -m app.gpu_run --card card1 --out gpu1-run1.json -- <your test command>` from `prototype/` (no sudo). The report says whether card1 really did the work, or card0, or the CPU. Repeat with `--card card0` for the other card
 - [ ] After both cards have a run report: `python -m app.phase3_check --inventory inventory.json gpu0-run1.json gpu1-run1.json` (from `prototype/`, reads files only). It prints the hardware checklist with [x] done, [~] partly, [ ] not yet, [!] something wrong, and why. Give both runs the same test and the same `--expect-file` so "repeat on GPU 1" can count
 - [ ] Decide: chain path, final supply, fair launch (no premine)
-- [ ] Decide: should a rig caught cheating lose its other unchecked points for that period? (simulated scoring v2; see TASKS.md)
+- [ ] Decide: should a rig caught cheating lose its other unchecked points for that period? (simulated scoring v2; see TASKS.md). It's built and switched off: putting `REWARD_SCORING=sim-points-v2-forfeit` in `prototype/.env` turns it on. Upside: one caught fake costs all of that period's unchecked work, so faking stops paying. Downside: until the RX 470s show how much honest cards disagree, an honest rig could lose points over a GPU quirk. Simulated points only
 - [ ] When the RX 470 rig is ready: set your own `OPERATOR_TOKEN` in `prototype/.env` (never share it; you now also need it, or a `SUBMITTER_TOKEN`, to queue jobs), then make one enrollment code per card with `python -m app.workers enroll --owner owner-gpu0` (and `owner-gpu1`). Keep the codes and the saved `.key` files private
 - [ ] Decide: if a rig keeps dropping audits it was picked for (the operator health page warns after 3), should anything happen automatically, like checking its own work more often? Today it's only a warning, because a rig that went offline looks the same as one dodging checks
 - [ ] Optional, when rigs are running: `python -m app.review` lists held results that need a person (side by side). It changes nothing. Decide, together with the scoring v2 question above, what your verdict on a case should do to its points

@@ -1,5 +1,5 @@
 # BOATS N HOES: Project Task List (Claude + dev work)
-**Version:** 0.5.35 | **Last updated:** 2026-11-23 | Personal to-dos live in USER_TODO.md.
+**Version:** 0.5.36 | **Last updated:** 2026-11-23 | Personal to-dos live in USER_TODO.md.
 
 ## Phase 0: Foundation
 - [x] Buy boatsnhoes.meme
@@ -30,7 +30,8 @@
 - [x] GPU worker Phase 4 (rest): tie-breaker re-run for disputes, written fraud/collusion threat model (`docs/VERIFICATION-THREAT-MODEL.md`, 51 tests)
 - [x] Random (not first-come) auditor assignment (threat model #4): one random active, eligible worker per audit/tie-breaker, re-assigned if silent (82 tests)
 - [x] GPU worker Phase 5: simulated reward reports (off-chain points, versioned scoring `sim-points-v1`, reproducible sha256, `verify` tool; 61 tests)
-- [ ] Decide a penalty rule for caught cheaters (scoring v2; owner decision)
+- [x] Candidate penalty rule built, off by default: `sim-points-v2-forfeit` (a rig with a strike in a period loses that period's unverified points; confirmed points kept). `REWARD_SCORING` or `report --scoring`; v1 reports unchanged (559 tests)
+- [ ] Decide a penalty rule for caught cheaters (scoring v2; owner decision: switch on `sim-points-v2-forfeit`, keep v1, or ask for a different rule)
 - [x] Authenticated worker registration / per-worker keys: one-time operator codes, per-worker keys stored as hashes, same-owner workers never audit each other, revocation (73 tests)
 - [x] Asymmetric job signatures (threat model #9): coordinator signs with an Ed25519 private key, workers verify with a pinned public key, no shared secret (89 tests)
 - [x] Versioned job/receipt schemas: signed job version and pinned model hash, receipts must match version, input hash and model hash (97 tests)

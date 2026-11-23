@@ -70,6 +70,8 @@ def create_app(settings: Settings | None = None,
     if handover_key and handover_key in retired | {signer.public_key_hex}:
         raise SigningKeyError("COORDINATOR_HANDOVER_PUBLIC_KEY must be a separate offline key, "
                               "not a coordinator signing key")
+    if settings.reward_scoring not in rewards.SCORING_RULES:  # fail at start, not mid-report
+        raise ValueError(f"unknown reward scoring rule {settings.reward_scoring!r}")
     handover_announcement = (key_rotation.announcement(signer, handover_key)
                              if handover_key else None)
     log.info("manifest signing key loaded", extra={"fingerprint": signer.fingerprint,
@@ -393,6 +395,7 @@ def create_app(settings: Settings | None = None,
                 "rate_limits": limits, "points": points.describe(settings.points_table),
                 "auditor_pick": settings.auditor_pick,
                 "tiebreak_decides": settings.tiebreak_decides, "hidden_test_reuse": reuse,
+                "reward_scoring": settings.reward_scoring,
                 "pause": {"rule": PAUSE_VERSION, "paused": pause is not None} | (pause or {}),
                 "consistency_problems": problems, "warnings": warnings}
 
@@ -562,7 +565,8 @@ def create_app(settings: Settings | None = None,
         require_operator(x_operator_token)
         try:
             t = now()
-            report = rewards.build_report(ledger, since, until if until is not None else t + 1)
+            report = rewards.build_report(ledger, since, until if until is not None else t + 1,
+                                          settings.reward_scoring)
             return rewards.sign_report(report, signer, t) if sign else report
         except rewards.ReportError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc

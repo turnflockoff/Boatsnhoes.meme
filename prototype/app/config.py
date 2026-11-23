@@ -68,6 +68,10 @@ class Settings:
     # app/key_rotation.py (`handover-key-v1`): PUBLIC half of the offline key that must also
     # sign every key handover. None = handovers only need the old and new coordinator key.
     handover_public_key: str | None = None
+    # app/rewards.py: scoring rule for reward reports. "sim-points-v1" (default) pays all
+    # unverified work; "sim-points-v2-forfeit" (opt-in, threat model #15) forfeits a rig's
+    # unverified points for a period in which it got a strike. Owner decision.
+    reward_scoring: str = "sim-points-v1"
 
     def resolved_signing_key_path(self) -> Path:
         return self.signing_key_path or self.database_path.parent / "coordinator-signing.key"
@@ -147,6 +151,15 @@ def _tiebreak_decides_env() -> str:
     return raw
 
 
+def reward_scoring_env() -> str:
+    from .rewards import CURRENT_SCORING, SCORING_RULES
+
+    raw = (os.getenv("REWARD_SCORING") or CURRENT_SCORING).strip().lower()
+    if raw not in SCORING_RULES:
+        raise ValueError(f"REWARD_SCORING must be one of {', '.join(sorted(SCORING_RULES))}")
+    return raw
+
+
 def get_settings() -> Settings:
     from .tasks import EXECUTORS  # the task types a points table must cover
 
@@ -187,4 +200,5 @@ def get_settings() -> Settings:
                               parse_trusted_proxies(os.getenv("TRUSTED_PROXIES"))),
         points_table=parse_points_table(os.getenv("POINTS_TABLE"), EXECUTORS),
         handover_public_key=handover_public_key_env(),
+        reward_scoring=reward_scoring_env(),
     )

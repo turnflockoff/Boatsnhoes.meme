@@ -88,6 +88,7 @@ This roadmap separates implemented repository assets from proposed work. A check
 - [ ] Publish reproducible setup and benchmark results.
 
 ## Track G — Optional settlement research (blocked until A–F)
+- [x] Build a candidate penalty rule for caught cheaters, switched off. *(`sim-points-v2-forfeit`, 0.5.36: a rig with a strike in a period forfeits that period's unverified points; confirmed points kept. 13 tests. Whether to use it is an owner decision.)*
 - [ ] Publish reward allocation, emission, scoring, dispute, and cutoff policy.
 - [ ] Review legal, tax, security, and operational implications.
 - [ ] Specify capped test token and claim/distributor design.

@@ -18,7 +18,8 @@ prompts other rigs see).
 
 What this is not:
   - Not a penalty. Strikes change how often a worker is checked, never its points. A points
-    penalty is scoring v2, which is still an owner decision (threat model #15).
+    penalty is scoring v2, still an owner decision (threat model #15); a candidate,
+    `sim-points-v2-forfeit` in app/rewards.py, is built but off by default.
   - Not proof of honesty. Two members of a ring that audit each other can "confirm" fake
     answers and so graduate out of `new` (threat model #3). Passed hidden test jobs can't be
     faked that way, but they only exist if the operator creates them.

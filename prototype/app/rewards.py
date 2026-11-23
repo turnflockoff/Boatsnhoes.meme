@@ -18,6 +18,21 @@ Scoring rule `sim-points-v1` (integer arithmetic only):
     is paid; the deterrent is that sampled fakes end up held. v1 has no extra penalty
     for a worker caught cheating (open decision, see the threat model).
 
+Scoring rule `sim-points-v2-forfeit` (opt-in, threat model #15; `REWARD_SCORING` or
+`report --scoring`). Same buckets, plus one penalty:
+    A worker is `struck` for the period if any of its results accepted in the period is a
+    strike (audit_policy.STRIKE_STATUSES: failed a hidden test, or outvoted by a
+    tie-breaker). A struck worker's `unverified` points for that period are forfeited:
+      payable_points = confirmed            (struck)
+      payable_points = confirmed + unverified (not struck)
+    Why: under v1 a cheater keeps the points for every fake nobody re-ran, so faking pays
+    as long as the audit rate is below 100%. Forfeiting the unchecked rest of the period
+    makes one caught fake cost all of that period's unchecked work. Work that passed an
+    independent check (`confirmed`) is never forfeited. Held cases with no strike
+    (`disputed`, `unresolved`, a tie-breaker held for a person) forfeit nothing.
+    The report shows only `struck` and `forfeited_points` per worker, never which result
+    caused the strike or whether it was a hidden test.
+
 Statuses are read as they are when the report is built. A pending re-run that settles
 later changes the report for the same period, and `verify` will say so.
 
@@ -39,6 +54,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .audit_policy import STRIKE_STATUSES
 from .ledger import SETTLEMENT, Ledger
 from .security import canonical_json, sha256_text
 from .signing import ManifestSigner, SigningKeyError, fingerprint, parse_public_key, verify_manifest
@@ -57,8 +73,19 @@ SCORING_RULES: dict[str, dict[str, Any]] = {
         "rule": "payable_points = sum(reward_points) of results in payable buckets",
         "penalties": "none",
     },
+    "sim-points-v2-forfeit": {
+        "version": "sim-points-v2-forfeit",
+        "payable_buckets": ["confirmed", "unverified"],
+        "not_payable_buckets": ["pending", "held"],
+        "rule": ("payable_points = sum(reward_points) of results in payable buckets, "
+                 "minus forfeited_points"),
+        "penalties": ("a worker with a strike (failed hidden test or outvoted) among its "
+                      "results accepted in the period forfeits its unverified points for "
+                      "that period; confirmed points are kept"),
+        "forfeit_on_strike": ["unverified"],
+    },
 }
-CURRENT_SCORING = "sim-points-v1"
+CURRENT_SCORING = "sim-points-v1"  # the default until the owner picks a v2 rule
 SIGNATURE_PURPOSE = "bnh-reward-report-signature/1"
 UNHASHED = ("report_sha256", "signature")  # fields not covered by report_sha256
 
@@ -88,6 +115,7 @@ def build_report(ledger: Ledger, since: int, until: int,
 
     entries = []
     workers: dict[str, dict[str, Any]] = {}
+    struck: set[str] = set()
 
     def worker(worker_id: str) -> dict[str, Any]:
         return workers.setdefault(worker_id, {
@@ -109,19 +137,34 @@ def build_report(ledger: Ledger, since: int, until: int,
         if bucket in payable:
             w["payable_points"] += row["reward_points"]
 
+        if row["audit_status"] in STRIKE_STATUSES:
+            struck.add(row["worker_id"])
+
     for worker_id, counts in ledger.activity_counts(since, until).items():
         w = worker(worker_id)
         for key, n in counts.items():
             w["activity"][key] += n
+
+    forfeit = rule.get("forfeit_on_strike")
+    if forfeit is not None:  # v1 reports keep their exact shape (and hashes)
+        for worker_id, w in workers.items():
+            lost = sum(w["points"][b] for b in forfeit) if worker_id in struck else 0
+            w["struck"] = worker_id in struck
+            w["forfeited_points"] = lost
+            w["payable_points"] -= lost
 
     rows = [workers[k] for k in sorted(workers)]
     totals = {"accepted_results": len(entries),
               "points": {b: sum(e["reward_points"] for e in entries if e["settlement"] == b)
                          for b in BUCKETS}}
     totals["payable_points"] = sum(totals["points"][b] for b in rule["payable_buckets"])
+    if forfeit is not None:
+        totals["forfeited_points"] = sum(w["forfeited_points"] for w in rows)
+        totals["payable_points"] -= totals["forfeited_points"]
     balanced = (sum(w["payable_points"] for w in rows) == totals["payable_points"]
                 and all(sum(w["points"][b] for w in rows) == totals["points"][b]
-                        for b in BUCKETS))
+                        for b in BUCKETS)
+                and all(w["payable_points"] >= 0 for w in rows))
     problems = ledger.check_consistency()
     report = {
         "report_type": REPORT_TYPE,
@@ -244,6 +287,8 @@ def main(argv: list[str] | None = None) -> int:
     rep.add_argument("--until", type=int, default=None,
                      help="unix seconds, exclusive (default: now; must be past to --sign)")
     rep.add_argument("--out", type=Path, default=None, help="write JSON here (else stdout)")
+    rep.add_argument("--scoring", default=None, choices=sorted(SCORING_RULES),
+                     help=f"scoring rule (default: REWARD_SCORING, else {CURRENT_SCORING})")
     rep.add_argument("--sign", action="store_true",
                      help="sign with the coordinator's key (closed periods only)")
     rep.add_argument("--key-file", type=Path, default=None,
@@ -287,7 +332,9 @@ def main(argv: list[str] | None = None) -> int:
         else:
             until = now if args.sign else now + 1
         try:
-            report = build_report(ledger, args.since, until)
+            from .config import reward_scoring_env
+            scoring = args.scoring or reward_scoring_env()
+            report = build_report(ledger, args.since, until, scoring)
             if args.sign:
                 from .config import default_signing_key_path
                 key_path = args.key_file or default_signing_key_path()
@@ -295,7 +342,7 @@ def main(argv: list[str] | None = None) -> int:
                     raise SigningKeyError(f"coordinator key file not found: {key_path}")
                 signer = ManifestSigner.load_or_create(key_path)
                 report = sign_report(report, signer, now)
-        except (ReportError, SigningKeyError) as exc:
+        except (ReportError, SigningKeyError, ValueError) as exc:
             print(str(exc), file=sys.stderr)
             return 2
         text = json.dumps(report, indent=2, sort_keys=True) + "\n"
