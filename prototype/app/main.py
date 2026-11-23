@@ -680,16 +680,23 @@ def create_app(settings: Settings | None = None,
     def read_ledger(x_operator_token: str | None = Header(default=None)) -> dict[str, Any]:
         """Public ledger. `public-delay-v1` (threat model #14): a result's settlement bucket
         and confidence show only PUBLIC_SETTLE_DELAY_SECONDS after it was accepted; until
-        then it counts as "pending". With the operator token the view is live."""
-        if x_operator_token is not None:
+        then it counts as "pending". `public-no-hashes-v1` (threat model #14 follow-up):
+        public entries never show `result_hash`, because a re-check that agrees has the
+        same hash as the job it re-checked. With the operator token the view is live and
+        complete."""
+        operator = x_operator_token is not None
+        if operator:
             require_operator(x_operator_token)
             delay, view = 0, "operator-live"
         else:
             delay, view = settings.public_settle_delay_seconds, "public-delayed"
         cutoff = now() - delay if delay else None
-        return {"entries": ledger.entries(cutoff), "total_simulated_points": ledger.total_points(),
+        rules = [] if operator else (["public-delay-v1"] if delay else []) + ["public-no-hashes-v1"]
+        return {"entries": ledger.entries(cutoff, with_hashes=operator),
+                "total_simulated_points": ledger.total_points(),
                 "points_by_status": ledger.points_by_status(cutoff),
                 "view": view, "public_settle_delay_seconds": delay,
+                "public_rules": rules, "hidden_fields": [] if operator else ["result_hash"],
                 "jobs": ledger.status_counts(), "consistency_problems": ledger.check_consistency(),
                 "notice": "Simulated points only; not tokens or money."}
 

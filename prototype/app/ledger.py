@@ -1026,11 +1026,16 @@ class Ledger:
             self._event(db, now, event, job_id, detail=f"{status} (tie-breaker {tb['job_id']})")
 
     # -- reporting --------------------------------------------------------------------
-    def entries(self, shown_up_to: int | None = None) -> list[dict[str, Any]]:
+    def entries(self, shown_up_to: int | None = None,
+                with_hashes: bool = True) -> list[dict[str, Any]]:
         """Accepted results. With `shown_up_to` (`public-delay-v1`, threat model #14),
         results accepted after it have their `confidence` withheld (None): a
         confirmed re-run flips it to "replicated", which would tell an auditor what its
-        job was. `settlement_visible` says which rows are shown in full."""
+        job was. `settlement_visible` says which rows are shown in full.
+
+        `with_hashes=False` (`public-no-hashes-v1`) leaves out `result_hash`, the sha256
+        of the answer: a re-check that agrees has the same hash as the job it re-checked,
+        so showing it pairs the two for anyone, at any time."""
         with closing(self._connect()) as db:
             rows = db.execute(
                 "SELECT job_id, worker_id, result_hash, reward_points, accepted_at, "
@@ -1042,6 +1047,8 @@ class Ledger:
             visible = shown_up_to is None or entry["accepted_at"] <= shown_up_to
             if not visible:
                 entry["confidence"] = None
+            if not with_hashes:
+                del entry["result_hash"]
             out.append(entry | {"settlement_visible": visible})
         return out
 

@@ -79,6 +79,7 @@ This roadmap separates implemented repository assets from proposed work. A check
 - [x] Treat near copies of a revealed hidden test as revealed too. *(`test-reuse-v2`, 0.5.39: inputs compared by a fingerprint that ignores case, spacing, punctuation, invisible characters and, for AI jobs, the seed and other settings; the private pool skips near copies. Rewording isn't caught. 23 tests, software only.)*
 - [x] Keep a private stock of hidden tests and hand them out a few at a time, each used once. *(`test-pool-v1`, `python -m app.challenge_pool`: owner-only file outside git; every test checked like the coordinator would; crossed off before sending so a crash can't send it twice; tests a ledger copy revealed are retired. 29 tests, software only; no real model answers in a pool yet.)*
 - [x] Don't let the public ledger show a hidden test's outcome the moment it is submitted. *(`public-delay-v1`, 0.5.38: `GET /v1/ledger` counts every result as `pending` and hides its confidence for `PUBLIC_SETTLE_DELAY_SECONDS`, default 1 hour, whatever kind of job it was; operator token sees it live; `0` = old live view with a health warning. 11 tests, software only.)*
+- [x] Don't let the public ledger pair a re-check with the job it re-checked. *(`public-no-hashes-v1`, 0.5.40: public entries no longer show the answer's hash, which was identical for a job and an agreeing re-check; operator view keeps it. 6 tests, software only.)*
 - [ ] Post signed reports and ledger copies in a fixed public place. *(Owner decision.)*
 
 ## Track F — Two-GPU proof of concept
