@@ -475,3 +475,16 @@
 2. **Pausing beats unplugging.** Killing the server also kills the tools you need during an incident (health page, revoking a rig) and loses honest work in progress. A pause keeps those.
 3. **Store the switch where the history is.** The pause is a line in the same audit trail as everything else, so it survives restarts and you can later see exactly when it started and ended.
 4. **A pause shouldn't punish bystanders.** Any rule with a timer (here, "pick up your audit within 2 minutes") needs to know the clock stopped, or the pause shows up as someone else's fault.
+
+## 2026-11-23 (03:10 UTC): Bug check before deploy
+
+**Checked**
+- **Website** (all 4 pages: home, contribute, thanks, 404) at phone (390 px), tablet (768 px) and desktop (1440 px) widths, with the live site's security rules switched on: no sideways scrolling, no JavaScript errors, no broken links or images, no duplicate ids, every image has a text description, every page parses as clean HTML. No website files changed in this session.
+- **Worker prototype:** all tests pass, now 455.
+
+**Fixed**
+- The public `/health` page read the new pause setting outside its "is the database OK?" safety net. If that record were ever damaged, the page would crash instead of saying "down". Moved it inside, with a test that damages the record on purpose. (The test fails on the old code and passes on the new.)
+
+**What you learned**
+1. **A health check must never crash.** Its whole job is to report trouble, so everything it reads goes inside the same error guard.
+2. **Prove the test catches the bug.** Running the new test against the old code first (it failed) shows the test actually checks the fix.

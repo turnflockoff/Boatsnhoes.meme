@@ -291,3 +291,13 @@ def test_rehearsal_refuses_a_paused_coordinator() -> None:
         client.app.state.ledger.pause(int(clock()), "upkeep", by="test")
         report = Rehearsal(client, token, now=clock, wait=clock.advance).run()
     assert "paused" in report["aborted"] and report["all_passed"] is False
+
+
+def test_a_broken_pause_record_reports_down_not_a_crash(tmp_path: Path) -> None:
+    client, clock, ledger = make(tmp_path)
+    with closing(sqlite3.connect(ledger.path)) as db:  # a hand-edited, unreadable record
+        db.execute("INSERT INTO events(event, detail, at) VALUES('coordinator_paused', "
+                   "'not json', ?)", (int(clock.t),))
+        db.commit()
+    r = client.get("/health")
+    assert r.status_code == 503 and r.json()["status"] == "down"

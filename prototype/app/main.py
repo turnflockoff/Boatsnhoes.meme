@@ -285,6 +285,7 @@ def create_app(settings: Settings | None = None,
         try:
             ledger.ping()
             jobs = ledger.status_counts()
+            pause = ledger.pause_state()
         except Exception as exc:  # noqa: BLE001 - any database failure means "down"
             # The error text can contain file paths: log its type, don't return it.
             log.error("health check failed", extra={"check": "database",
@@ -293,7 +294,6 @@ def create_app(settings: Settings | None = None,
                 "status": "down", "checks": {"database": "error", "signing_key": "loaded"}})
         # `pause-v1`: public, so rigs and a status page can tell "paused" from "down".
         # Still 200: results for jobs leased before the pause are accepted. No reason here.
-        pause = ledger.pause_state()
         return body | {"status": "paused" if pause else "ok", "accepting_work": pause is None,
                        "paused_since": pause["since"] if pause else None, "jobs": jobs,
                        "checks": {"database": "ok", "signing_key": "loaded"}}
