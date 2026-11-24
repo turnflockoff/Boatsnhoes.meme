@@ -1,5 +1,5 @@
 # BOATS N HOES: Project Task List (Claude + dev work)
-**Version:** 0.5.49 | **Last updated:** 2026-11-24 | Personal to-dos live in USER_TODO.md.
+**Version:** 0.5.50 | **Last updated:** 2026-11-24 | Personal to-dos live in USER_TODO.md.
 
 ## Phase 0: Foundation
 - [x] Buy boatsnhoes.meme
@@ -126,6 +126,8 @@
 - [x] Point boatsnhoes.meme DNS at Netlify (Cloudflare CNAMEs, DNS only)
 - [x] Check every page's links, files, share cards and CSP fit offline, in CI *(`python -m app.site_check static`, 0.5.45: passes on all 5 pages; homepage has no canonical URL, noted only)*
 - [ ] Verify HTTPS, security headers and share card on the live URL (same site-check workflow as above)
+- [x] Accessibility check for every page, in CI *(`a11y-check-v1`, 0.5.50: `python -m app.a11y_check`; names for links, buttons, images and fields, headings, landmarks, skip link, zoom, focus rings, reduced motion, text contrast against the real background. All 4 subpages pass with nothing to fix; axe-core agrees (0 violations at 1440 and 390 px). Homepage findings are notes only; 70 tests, 994 total)*
+- [ ] Homepage accessibility notes (owner decision; your design, so not changed): white button text on the light end of the orange gradient (1.8:1), dim `↓` arrows (3.9:1), the CTA box's small text (4.1:1 and 2.5:1), no skip link, an h1→h3 jump, no reduced-motion rule, an `<aside>` inside `<main>`. See USER_TODO
 
 ## Phase 7: Launch
 - [ ] Mainnet plan, miner onboarding, listings outreach

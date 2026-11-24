@@ -1,5 +1,5 @@
 # YOUR Personal To-Do List (things only you can do)
-**Version:** 0.5.49 | **Last updated:** 2026-11-24
+**Version:** 0.5.50 | **Last updated:** 2026-11-24
 Never share passwords, API keys, or recovery phrases with anyone, including Claude.
 
 ## This week
@@ -11,6 +11,7 @@ Never share passwords, API keys, or recovery phrases with anyone, including Clau
 - [ ] Optional: block email spoofing with Cloudflare TXT records `@` = `v=spf1 -all` and `_dmarc` = `v=DMARC1; p=reject;`
 - [ ] Netlify: Forms > `gpu-testers` > add an email notification to your Netlify account email
 - [ ] After merging the drafts PR: on GitHub, open **Actions > site-check > Run workflow** (keep the address `https://boatsnhoes.meme`). It checks the live site's security headers, the http→https and www redirects, that /docs/ etc. stay hidden, and the share image. Green = done; red = open the run and read the FAIL lines on its summary page (or tell Claude). Nothing is changed by running it
+- [ ] Optional, your call (homepage design): the new accessibility check (0.5.50) lists a few things on the homepage that make it harder to read or use for some visitors. Nothing was changed. The biggest: **white text on the "Get Started" button sits on light orange (contrast 1.8:1; the usual minimum is 4.5:1)**; dark text like the subpages use (`#160d08`) would fix it without changing the look much. Smaller: the dim `↓` arrows in "How it works" (3.9:1), the small text in the bottom orange box (4.1:1, and its green label 2.5:1), no "Skip to content" link for keyboard users, a heading jump (h1 straight to h3), no reduced-motion setting for people who turn animations off, and an `<aside>` inside `<main>`. Run `python -m app.a11y_check` from `prototype/` to see the list. Say the word and Claude can fix any of them while keeping the design
 - [ ] Optional: add a canonical link (`<link rel="canonical" href="https://boatsnhoes.meme/">`) to the homepage's `<head>` so shares always show the main address. It's invisible on the page, but it's your homepage, so I didn't touch it; say the word if you want it added
 - [ ] Upload mine.html, tokenomics.html, stay-safe.html (not on GitHub yet)
 - [ ] Optional: on GitHub, **Settings > Code security > Dependabot alerts > Enable**. GitHub then emails you if a package in `prototype/requirements.lock` gets a known security hole. (Since 0.5.48 the `vuln-check` workflow already checks every Monday after merging, and GitHub emails you if that run fails; Dependabot is a second opinion.) Alerts only; it changes nothing by itself (leave "Dependabot security updates" off unless you want it opening pull requests)

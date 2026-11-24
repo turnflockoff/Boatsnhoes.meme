@@ -845,3 +845,31 @@
 2. **"2 of 3" beats "1 of 1".** If one signer's laptop is stolen, the thief still can't publish a release alone. That's the same idea banks use for vaults with two keys.
 3. **The rig must already know who the signers are.** If a download could bring its own signer list, a fake download would bring a fake list. That's why the list is pinned on the rig ahead of time.
 4. **Old but genuine can still hurt.** A properly signed old version may contain a bug we fixed later; refusing anything older than a set version stops that "rollback" trick.
+
+## 2026-11-24 (10:20 UTC): An accessibility check for every page, and what it found (0.5.50)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions, and the website rules allow accessibility work that needs no owner call. Nothing checked whether the site works for people using a screen reader, a keyboard instead of a mouse, zoom, or "reduce motion", or whether text is readable against its background.
+
+**Shipped**
+- **`python -m app.a11y_check`** (reads files only; CI now runs it on every site change). For each page it reads the HTML and the CSS the page loads and checks:
+  - the page says its language, has a title, and lets phones zoom in;
+  - every image has a description (`alt`, empty for decoration), and drawings are either hidden from screen readers or labelled;
+  - every link and button has words a screen reader can say, and every form field has a label (a grey hint inside the box doesn't count);
+  - one main heading, no skipped heading levels, one main area, and a "Skip to content" link first on pages with a menu that really lands in the main area;
+  - no duplicate ids, no labels pointing at nothing, no forced keyboard order, nothing reachable by keyboard but hidden from screen readers;
+  - **text contrast** of at least 4.5:1 (the common WCAG AA bar) against the background the text really sits on: its own, or a parent's (a card, a button, an inline style), every stop of a colour gradient, see-through colours blended; the keyboard focus ring at least 3:1; a "reduce motion" rule whenever something moves.
+  - Colours it can't read are listed as notes, never quietly passed.
+- **Your homepage is checked but never failed.** It's your approved design, so its findings are notes; CI stays green.
+- **Result: all 4 subpages (/contribute, /reports/, /thanks, 404) pass with nothing to fix.** The homepage has 7 notes, the biggest being white text on the light-orange "Get Started" button (1.8:1). I didn't touch it; the list is in USER_TODO.
+- **Second opinion.** I ran axe-core 4.10.2 (the most widely used open-source accessibility engine) in a real Chromium browser at desktop (1440 px) and phone (390 px) widths. Subpages: **0 problems**, including /contribute after pressing "Check this device" (content a script adds, which my file-reading check can't see), and no sideways scrolling. Homepage: it agreed on the heading jump and found one thing mine doesn't check (an `<aside>` inside `<main>`). It also showed why mine is useful: axe doesn't judge text on gradients at all ("needs review"), which is exactly where the homepage button problem is.
+- **Proof.**
+  - 70 new tests, **994 total, all passing** (Python 3.13, installed from the hash-checked lock). Workflow, site, dependency and license checks all still pass.
+  - The first version wrongly flagged three homepage things (text in the orange box judged against the black page; an empty decorative dot; a green label whose inline style was ignored) and missed that the logo link isn't a skip link. I wrote a failing test for each, then fixed the checker.
+  - I broke the checker 20 ways on purpose (lower the 4.5 bar, ignore see-through colours, check only the first gradient colour, count hidden text, accept a placeholder as a label, ignore which CSS rule wins, ignore inline styles, treat `>` like any descendant, skip `:hover` colours, fail your homepage, ...). 15 were caught at once; the other 5 slipped past tests that weren't sharp enough, so I added those tests. Now all 20 are caught.
+- **Honest limits:** it's a file reader, not a screen reader. It can't judge wording, it compares text a script adds later with the page background, and unusual CSS selectors fall back to that too. A pass means "none of these known problems", not "fully accessible". Nothing on the live site changed.
+
+**What you learned**
+1. **Contrast is a number.** It's the brightness of the lighter colour divided by the darker one (with a small offset), from 1:1 (invisible) to 21:1 (black on white). 4.5:1 is the usual minimum for normal text; your white-on-light-orange button is 1.8:1, which is hard to read in sunlight or with weaker eyesight.
+2. **A screen reader reads names, not pictures.** A logo link with no text is announced as just "link". An `aria-label="Boats n Hoes home"` gives it words; `alt=""` tells it an image is only decoration.
+3. **Keyboard users need a shortcut past the menu.** A hidden "Skip to content" link that appears when you press Tab saves pressing Tab through every menu item on every page.
+4. **Two tools beat one.** Each checker had a blind spot the other covered (gradients for axe, script-made content for mine), so running both found more than either alone.
