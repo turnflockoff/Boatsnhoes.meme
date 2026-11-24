@@ -1078,3 +1078,32 @@ In all three, `verify` printed **OK** and then starting the worker printed `EVIL
 2. **"Trust on first use" is only as good as the first use.** Pinning records a fingerprint so later copies can be checked, but if the very first copy was bad, the pin protects the bad file. Checking against a fingerprint published somewhere else (the model page) closes that gap.
 3. **A redirect can downgrade you.** https is encrypted; plain http is not. If the code follows a "moved to http://..." redirect, the encryption you started with is gone. Each hop has to be checked, not just the first address.
 4. **Write to a new file, then swap it in.** Writing straight into the final name (or a predictable temp name) lets a crash leave half a file, or a planted link redirect the write. A fresh random temp file, moved into place only when finished, avoids both.
+
+## 2026-11-24 (19:30 UTC): Other people on the same computer could read the hidden-test answers (0.5.59)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions, so this session did the eighth "code audit" pass. Earlier passes looked at what comes in from outside (the network, files from strangers, downloads). This one looked at the files our own programs leave on the computer they run on, and asked: **who else on that computer can read or change them?**
+
+**Found, shown really happening** (this sandbox has a second, ordinary account called `nobody`; I ran commands as that account)
+1. **The ledger was readable by everyone.** The coordinator's database (`data/prototype.sqlite3`) holds the **expected answer of every hidden test**, who each test is aimed at, job inputs and key fingerprints. It was created with the computer's usual setting, "everyone may read". As `nobody`, I copied it and printed a hidden test's answer. Anyone else with an account on the coordinator's computer could have done the same, then passed every hidden test.
+2. **The worker didn't check its own key file.** If `worker-<id>.key` was readable by others (easy to do by copying it from another computer), the worker used it anyway. The coordinator's signing key already had this check; the worker's key didn't.
+3. **The pinned coordinator key could be swapped.** The worker trusts the key in `data/coordinator.pub`. If that sat in a folder anyone can write to, another user could delete it and put their own coordinator's key there, and the worker would trust their coordinator. (Replayed in the tests.)
+4. **A "pipe" instead of a key file froze things forever.** A named pipe is a special file that waits for someone to write into it. Put one where the worker key, a pinned key or the signing key should be, and the worker or coordinator hung. Also, the signing key's "only you can read it" check looked at the file, then opened it again by name, leaving a moment where it could be swapped.
+
+**Shipped (`secret-file-v1`)**
+- **One place for the rules:** new `app/secret_file.py`.
+- **The ledger is now private:** the coordinator makes the `data/` folder owner-only and creates an empty owner-only ledger before the database engine touches it, so the database's helper files come out private too. The same `nobody` test now gets **Permission denied**. An older ledger that others can read makes the coordinator stop and print the exact fix (`chmod 600 ...`).
+- **The worker checks its files** before sending its key anywhere: the key must not be readable by others, pinned keys must not be changeable by others (file or folder), and each must actually hold a key. Each problem is one plain line with the fix.
+- **Every key and pin file** is opened once without waiting, then checked on that same open file: a normal file, yours, small. New ones are created private and never written over an existing file or through a planted shortcut (link).
+- **Nothing changes for an ordinary setup:** an existing `data/` folder that only you can change keeps working and is never modified.
+- **Proof.**
+  - 41 new tests, **2,124 total: 2,123 passing, 1 skipped** (the one test that can't work as the all-powerful root user, as designed). Run on Python 3.13 and 3.11 (what CI uses). The real second-account test runs here (as root) and is skipped in CI, which doesn't run as root.
+  - **18 of the new tests fail on the old code**, including the real `nobody` one, which printed the hidden answer.
+  - I broke the new checks 20 ways on purpose; **19 were caught.** The one not caught: writing a pin straight into the file instead of writing a new one and swapping it in. That only differs if the computer crashes halfway through writing, which a test can't easily do; noted honestly.
+  - Five older tests made their test files with "everyone may read" and now fail the new checks (correctly), so they now make them private.
+- **Honest limits:** this protects against *other accounts* on the same computer and against mistakes. The administrator (root), or anything running as your own account, can still read everything. On Windows only the "normal file, not too big" checks apply. The offline handover key's folder isn't checked, because it may sit on a USB stick. No coordinator is running anywhere yet, so nothing needs fixing on your side.
+
+**What you learned**
+1. **Every file has three sets of permissions:** for you (the owner), for your group, and for everyone else. `chmod 600 file` means "only I can read and write it". `chmod 700 folder` means "only I can enter or change this folder". Numbers like `644` mean "I can write, everyone can read".
+2. **Programs inherit a default.** Unless a program asks for something else, new files usually come out as `644`, readable by everyone. A database full of secrets needs the program to ask for `600` explicitly, before the file is first made.
+3. **The folder matters as much as the file.** If others can change a folder, they can't edit your file, but they can delete it and put their own file with the same name in its place. That's why the checks look at the folder too.
+4. **Check the thing you actually opened.** "Look at the file, then open it" leaves a gap where the file can be swapped. Opening it first and then checking that open file closes the gap. (Same idea as the model download fix earlier today: check what you really got.)

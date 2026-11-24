@@ -127,6 +127,12 @@ This assumes the auditor is honest. The rest of this document is about when that
   was followed and wrote 3.2 GB in 6 seconds. The registry's file names can no longer
   point outside the model folder. A published hash proves the file wasn't changed on the
   way, not that the publisher's model is honest.
+- **Other accounts on the same machine.** Since 0.5.59 (`secret-file-v1`) the ledger
+  (which holds every hidden test's expected answer), the signing keys and a worker's key
+  are created owner-only, and the coordinator and worker refuse to use them, or a pinned
+  coordinator key, when other users can read or change the file or its folder. Before,
+  the ledger was readable by every account (one copied it and read a hidden test's
+  answer). This does not protect against root or anyone running as the same user.
 - **The tolerance rule is a guess** until Phase 3 produces real output from two cards.
 
 ## Order of the next fixes
