@@ -1164,3 +1164,29 @@ In all three, `verify` printed **OK** and then starting the worker printed `EVIL
 2. **Ask "who wrote this?" for every line you print.** The review queue felt like a private, operator-only page, but most of what it shows (the answers) was written by rigs. "Only I can see it" isn't the same as "only I wrote it".
 3. **Show it, don't hide it.** We replace the dangerous characters with `?` instead of deleting them, so a tampered answer still *looks* tampered. Quietly cleaning it up would hide the evidence.
 4. **One choke point beats many patches.** Instead of cleaning each field, each view passes its finished lines through one function. A field someone adds next month is covered automatically, and one test can check the whole view at once.
+
+## 2026-11-24 (22:30 UTC): 230 password guesses at once, all checked (0.5.62)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions, so this session did the eleventh "code audit" pass. Earlier passes asked "what if someone sends something nasty?". This one asked a different question: **what if someone sends many things at the same moment?**
+
+**Found, shown really happening** (a real coordinator server on this sandbox, old code)
+1. **The lock-out only counted a guess once it had been checked.** The coordinator locks an address out after 10 wrong operator or submitter tokens. But the "is this address locked out?" question is asked when a request *arrives*, and the wrong guess is only counted *after* the token has been compared. If all the guesses arrive at once, every one of them gets past the question before the first one is counted.
+2. **Real numbers:** I sent 230 wrong operator tokens over 230 connections at the same moment. **All 230 were checked** (each got "wrong token"), against a limit of 10. The only thing left holding an attacker back was the general "240 requests a minute" speed limit, so roughly 24 times more guesses than intended.
+
+**Shipped (`guess-slot-v1`)**
+- **Guess slots.** A request that carries an operator or submitter token now has to take a "slot" before its token is looked at, and gives it back when it's done (after its failure, if any, has been counted). Wrong guesses in the last 10 minutes plus slots in use can never go above 10. A request that can't get a slot is turned away with "too many login attempts at once; try again in a moment", and its token is never compared.
+- **Same test afterwards:** 230 wrong tokens at once, **exactly 10 checked**, 220 turned away.
+- **Rigs are not affected.** Their keys are long random values nobody can guess, so they don't need slots. 40 rig requests at the same moment all go through. `/health` is still never limited. You using the right token one request at a time is never slowed down (50 in a row tested).
+- **Operator health** now counts how many were turned away (`guesses_refused_at_once`).
+- **Proof.**
+  - 16 new tests, **2,227 total: 2,226 passing, 1 skipped** on the committed tree (the one test that can't work as the all-powerful root user, as designed). Run on Python 3.13 and 3.11 (what CI uses).
+  - The main tests start a real server and fire real requests at it all at once, because this kind of bug only shows up with real timing. **11 of the new tests fail on the old code**, including both bursts.
+  - I broke the new check 15 ways on purpose (forgot to count slots, off by one, never gave a slot back, removed the lock, made rigs take slots, ...); **all 15 were caught.**
+  - One older test needed one line changed: the operator health counters gained the new number.
+- **Honest limits:** like the rest of the speed limits, this lives in memory (a restart clears it). If one of your tools ever sent more than 10 operator requests at the very same moment, the extra ones would get "try again in a moment"; none of ours do (they send one at a time). No coordinator is running anywhere yet, so nothing needs doing on your side.
+
+**What you learned**
+1. **A "race condition"** is a bug that only happens when two or more things happen at the same time. Each request on its own was handled correctly; the bug was in the gap between "check" and "count".
+2. **Check-then-act needs a reservation.** Like a restaurant with 10 seats: if you only count people once they've finished eating, 230 can walk in at once. Handing out a seat at the door (the "slot") and taking it back when they leave keeps it at 10.
+3. **Some bugs only show up for real.** Ordinary tests send one request after another, so they could never see this. The new tests run a real server and fire everything at once.
+4. **Guard what's guessable.** Your operator token is something a person typed, so it's worth guessing; a rig's key is a long random number nobody can guess. Putting the strict rule only where it matters keeps it from slowing down the rigs.
