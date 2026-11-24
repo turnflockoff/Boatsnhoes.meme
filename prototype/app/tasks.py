@@ -123,7 +123,13 @@ class LlmGenerateTask(TaskExecutor):
 
     @property
     def registry(self) -> dict[str, model_registry.ModelEntry]:
-        return self._registry if self._registry is not None else model_registry.load()
+        if self._registry is not None:
+            return self._registry
+        try:
+            return model_registry.load()
+        except model_registry.RegistryError as exc:
+            # A damaged registry refuses jobs with a reason instead of crashing (model-fetch-v1).
+            raise TaskError(f"model registry refused: {exc}") from None
 
     def validate(self, payload: str) -> InferenceSpec:
         try:
@@ -177,7 +183,10 @@ class LlmGenerateTask(TaskExecutor):
             llm_runner.config_from_env()
         except llm_runner.RunError as exc:
             return False, str(exc)
-        pinned = [m for m in self.registry.values() if m.pinned]
+        try:
+            pinned = [m for m in self.registry.values() if m.pinned]
+        except TaskError as exc:
+            return False, str(exc)
         if not pinned:
             return False, "no pinned models in the registry"
         present = [m for m in pinned if self._model_path(m).is_file()]

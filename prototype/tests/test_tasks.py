@@ -162,7 +162,8 @@ def test_cli_pin_and_list(registry: Path, tmp_path: Path,
                           capsys: pytest.CaptureFixture[str]) -> None:
     f = tmp_path / "tiny.gguf"
     f.write_bytes(b"abc")
-    assert model_registry.main(["pin", MODEL_ID, str(f)]) == 0
+    # Since model-fetch-v1 the CLI pin needs the published hash (or an explicit opt-out).
+    assert model_registry.main(["pin", MODEL_ID, str(f), "--expect-sha256", sha("abc")]) == 0
     assert model_registry.main(["verify", MODEL_ID, str(f)]) == 0
     model_registry.main(["list"])
     assert "PINNED" in capsys.readouterr().out

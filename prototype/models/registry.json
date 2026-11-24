@@ -1,5 +1,5 @@
 {
-  "_notice": "Pinned model registry. A model can be used for jobs only after its sha256 and size are pinned from a file you downloaded yourself: python -m app.model_registry pin <model_id> <path-to-file>. Nothing is downloaded automatically.",
+  "_notice": "Pinned model registry. A model can be used for jobs only after its sha256 and size are pinned from a file you downloaded yourself: python -m app.model_registry pin <model_id> <path-to-file> --expect-sha256 <the SHA256 shown on the model page>. Nothing is downloaded automatically.",
   "models": [
     {
       "model_id": "qwen2.5-0.5b-instruct-q4_k_m",

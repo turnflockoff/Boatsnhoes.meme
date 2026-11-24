@@ -124,7 +124,7 @@ def test_model_job_pins_the_model_hash_and_worker_checks_its_own_pin(
     # The worker's registry was pinned to a different file: refuse before running anything.
     other = tmp_path / "other.gguf"
     other.write_bytes(b"different weights")
-    model_registry.pin(MODEL_ID, other)
+    model_registry.pin(MODEL_ID, other, replace=True)
     with pytest.raises(ManifestError, match="model pin mismatch"):
         check_manifest(job, pub, now=T0)
     # The worker never pinned the model at all.
@@ -144,7 +144,7 @@ def test_audit_reruns_keep_the_original_model_hash_after_a_repin(
     # The operator re-pins the registry before the audit runs.
     other = tmp_path / "newer.gguf"
     other.write_bytes(b"newer weights")
-    model_registry.pin(MODEL_ID, other)
+    model_registry.pin(MODEL_ID, other, replace=True)
     assert submit(client, original, "The Salty Hoe").status_code == 200
     audit = client.post("/v1/jobs/next", params={"worker_id": "wk-b"}).json()
     assert audit["payload"] == original["payload"]
