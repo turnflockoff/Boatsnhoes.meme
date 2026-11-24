@@ -1,0 +1,50 @@
+name: vuln-check
+
+# Asks PyPI whether any exact package version in prototype/requirements.lock has a known
+# security problem (python -m app.vuln_check, OSV data). Runs when the lock or the
+# exceptions file changes, every Monday (new problems get published about old versions),
+# and by hand: Actions > vuln-check > Run workflow. A failed scheduled run emails the
+# repository owner. Reads public data only; changes nothing; no secrets needed.
+on:
+  push:
+    paths:
+      - "prototype/requirements.lock"
+      - "prototype/vuln-exceptions.json"
+      - "prototype/app/vuln_check.py"
+      - ".github/workflows/vuln-check.yml"
+  pull_request:
+    paths:
+      - "prototype/requirements.lock"
+      - "prototype/vuln-exceptions.json"
+      - "prototype/app/vuln_check.py"
+      - ".github/workflows/vuln-check.yml"
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  vulns:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: prototype
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4, as of 2026-11-23
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5, as of 2026-11-23
+        with:
+          python-version: "3.11"
+      - name: Install dependencies (exact versions, sha256-checked)
+        run: pip install --require-hashes -r requirements.lock
+      - name: Check locked packages for known security problems
+        run: python -m app.vuln_check --out vuln-check.json
+      - name: Show the report on the run's summary page
+        if: always()
+        run: |
+          if [ -f vuln-check.json ]; then
+            { echo '### vuln-check report'; echo '```json'; cat vuln-check.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi

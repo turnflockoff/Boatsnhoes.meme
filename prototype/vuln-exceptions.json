@@ -1,0 +1,5 @@
+{
+  "schema": "bnh-vuln-exceptions/1",
+  "note": "Known security problems in locked packages that a person looked at and accepted for now. `python -m app.vuln_check` fails on any problem not listed here. Each entry: {\"package\": \"name\", \"id\": \"GHSA-... or PYSEC-... or CVE-...\", \"reason\": \"why it can't hurt us here, in a sentence\", \"reviewed\": \"YYYY-MM-DD\", \"expires\": \"YYYY-MM-DD, at most 90 days after reviewed\"}. Prefer upgrading over adding an entry.",
+  "exceptions": []
+}

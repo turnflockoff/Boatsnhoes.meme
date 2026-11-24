@@ -36,7 +36,7 @@
     "pydantic": {"version": "2.14.3", "license": "MIT", "why": "checks every job, receipt and request shape"},
     "pydantic-core": {"version": "2.50.4", "license": "MIT", "why": "pydantic's compiled core"},
     "pygments": {"version": "2.21.0", "license": "BSD-2-Clause", "why": "coloured pytest output (tests only)"},
-    "pytest": {"version": "8.4.2", "license": "MIT", "why": "runs the test suite (tests only)"},
+    "pytest": {"version": "9.2.0", "license": "MIT", "why": "runs the test suite (tests only)"},
     "python-dotenv": {"version": "1.2.4", "license": "BSD-3-Clause", "why": "reads prototype/.env settings"},
     "pyyaml": {"version": "6.0.3", "license": "MIT", "why": "reads the GitHub workflow files for app.workflow_check (also uvicorn's optional log-config reader)"},
     "starlette": {"version": "1.10.0", "license": "BSD-3-Clause", "why": "the web toolkit under fastapi"},

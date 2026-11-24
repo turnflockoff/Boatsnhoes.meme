@@ -376,7 +376,22 @@ Create a demo job using the API docs at http://127.0.0.1:8000/docs:
 
 CI installs from the lock and runs both. A new package or a version bump fails `lock` until someone reads its license and updates `licenses.json`. To update the lock, see the commands at the top of `requirements.lock` (needs `uv`). Both write JSON with `--out` (never over an existing file); exit 0 ok, 1 problems, 2 usage/file error.
 
-**Limits:** hashes prove you got the same files as when the lock was made, not that those files are safe; the cooldown lowers the odds of a fresh hijack but doesn't remove them. No known-vulnerability scan runs yet. Package metadata is the publisher's own claim; "BSD License" without a clause count, or no license at all, is a note for a person to check. The CI workflow's GitHub Actions are pinned by commit; see the workflow checker below.
+**Limits:** hashes prove you got the same files as when the lock was made, not that those files are safe; the cooldown lowers the odds of a fresh hijack but doesn't remove them. Known security problems are checked separately (next section). Package metadata is the publisher's own claim; "BSD License" without a clause count, or no license at all, is a note for a person to check. The CI workflow's GitHub Actions are pinned by commit; see the workflow checker below.
+
+## Known security problems in locked packages (`vuln-check-v1`, `bnh-vuln-check/1`)
+
+A version that was fine when it was locked can later turn out to have a security hole. This asks PyPI about each exact locked version (all 32, Windows-only ones too); PyPI's answer carries the known problems for that version from the OSV database, the same source `pip-audit` uses by default.
+
+    python -m app.vuln_check [--out vuln-check.json]
+
+- **pass**: nothing known for that version. **fail**: a known problem, shown once even when it has several ids (GHSA, PYSEC, CVE), with the version that fixes it. Fix by raising the version in `requirements.txt` and re-making the lock with `--upgrade-package <name>` (see the lock's header), then update `licenses.json`.
+- `vuln-exceptions.json` (`bnh-vuln-exceptions/1`, empty today) lists problems a person read and accepted for now: package, problem id (any of its ids), a one-sentence reason, review date and an end date at most 90 days later. Accepted ones show as notes; on the end date they fail again. Malformed or expired entries fail; unused ones are notes.
+- If PyPI can't be reached (after one retry), doesn't know the version, or answers about something else, that package **fails**: "couldn't check" never counts as clean.
+- Sends only package names and versions; installs and changes nothing. Exit 0 ok, 1 problems, 2 usage/file error; `--out` never overwrites.
+
+On GitHub, the `vuln-check` workflow runs it when the lock or exceptions change, every Monday, and by hand (**Actions > vuln-check > Run workflow**); a failed scheduled run emails the repository owner. It is a separate workflow so a newly published problem doesn't block unrelated pull requests.
+
+First run (2026-11-24) found one: `pytest` 8.4.2, CVE-2025-71176 (a local user on a shared Linux machine could interfere with pytest's temporary folders; fixed in 9.0.3). `pytest` is test-only, but it was raised to 9.2.0 anyway (`requirements.txt` now `pytest>=9.0.3,<10`); all tests pass on it. **Limits:** it only knows problems that have been found and published, so a pass means "nothing known today", not "safe". It checks the Python packages only, not llama.cpp, the GPU driver or the OS.
 
 ## Website checker (`site-check-v1`, `bnh-site-check/1`)
 
