@@ -995,3 +995,28 @@
 2. **Check what people see, not just the files.** Hashes proved the downloads were intact, but the page displayed numbers from a different file that nobody compared. Every value on a page needs a check behind it.
 3. **Duplicate keys are a trick.** `{"points": 1, "points": 9999}` is "valid-ish" JSON. Python reads the last one; some programs read the first. Refusing duplicates means everyone reads the same thing.
 4. **`$` isn't quite "the end".** In Python regular expressions, `$` also allows one line break at the end. `\Z` means the real end. Small, but line breaks are exactly what attackers use to fake extra log lines or names.
+
+## 2026-11-24 (16:15 UTC): The hardware check trusted the files a rig sends in (0.5.56)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions. The last four sessions hardened everything strangers touch: the coordinator, the worker, ledger copies and the JSON reports. One reader was left: `phase3_check`, the tool that turns a rig's inventory and test-run files into the hardware checklist. Today those files come from your rig; later, from volunteers ("evidence gets strong when someone else repeats the run"). So they are files from strangers too.
+
+**Shipped (`rig-report-v1`)**
+- **A real hole, found and fixed: the text "false" counted as true.** The checker asked "did the run exit cleanly?" with `if not exit_ok`. In Python any non-empty text counts as *true*, including the word `"false"`. I took an honest run, set the exit code to 1 and wrote `"exit_ok": "false"` (in quotes, as text, which is an easy slip when editing by hand): the old checker counted it as a **passing** smoke test. Same with `"target_card_busy": "false"`: a card that never did the work counted as busy. Now every yes/no field must be a real `true` or `false`.
+- **Crashes fixed:** a temperature written as a 400-digit number crashed the printout; `"readings": null` crashed it; an AMD card listed without a slot, or a render node without a name, crashed it. Now they're refused with one line, or shown as `?`.
+- **Terminal tricks:** the OS, kernel, card and driver names were printed exactly as written, so hidden codes in them could clear your screen or fake a prompt (same trick as session 0.5.53). Names must now be plain printable text, at most 200 characters, and every printed line and file name is cleaned as a second layer.
+- **Reading:** the files go through the same safe reader as reports (`app/json_file.py`): normal files only (a named pipe made it hang), at most 4 MiB (honest ones are 5-100 KB), no nesting tricks, no `NaN`, no key written twice.
+- **How it works:** two lists in `app/phase3_check.py` (`INVENTORY_SPEC`, `RUN_SPEC`) name every field the checker reads and its type. A missing field is fine (the checklist just finds less evidence, as before); a wrong type is refused with one line naming the file and the field (exit code 2).
+- **A second find, elsewhere:** the safe reader from last session (and the worker's) refused `NaN` and `Infinity`, but `1e400` (a 1 followed by 400 zeros, written short) quietly became *infinity*. Both now refuse any number too big for the computer to hold.
+- **Proof.**
+  - 675 new tests, **1,928 total: 1,927 passing, 1 skipped** (the release test that only runs on a committed tree, as designed). Run on Python 3.13 and on 3.11 (what CI uses).
+  - The tests take honest files made by the real recording tools, then replace **every field the checker reads with every wrong kind of value** (about 600 cases: text for numbers, `"false"` for false, lists for objects, 400-digit numbers, hidden terminal codes, invisible characters...). Each must be refused with one clean line. Then every field is deleted or set to `null` one at a time: no crash allowed.
+  - A "tracing" test watches which fields the checker actually reads and fails if it ever reads one the lists don't type-check. So if someone teaches the checker something new later, they can't forget the safety check.
+  - Shown against the old code: the edited crashed run passed, the 400-digit temperature crashed it.
+  - I broke the new checks 23 ways on purpose. **23 were caught** (one only after I added a test for the saved `--out` file; one break changed nothing because that check was redundant, so I removed it).
+- **Honest limits:** the rig files are still unsigned. This catches mistakes, sloppy edits and hostile files, not a careful forger who writes the right types; a repeat on someone else's rig is what makes them evidence. Still never run on real rig output.
+
+**What you learned**
+1. **"false" in quotes is not false.** `false` (no quotes) is a yes/no value; `"false"` (in quotes) is five letters of text. Many languages, Python included, treat any non-empty text as "yes". Checking the *type*, not just the value, closes that.
+2. **Allow-list the fields you read.** Instead of guessing what a bad file might contain, write down exactly which fields the tool uses and what each must be. Everything the tool touches is checked; everything else is ignored.
+3. **A test can watch the code read.** Wrapping the data so it records every field looked up lets a test prove "nothing is read without being checked first", even after future changes.
+4. **Computers have a biggest number.** A normal decimal number tops out near 1.8 × 10^308. Write `1e400` and many readers silently turn it into "infinity", which then breaks maths and comparisons in odd ways. Refuse it at the door.

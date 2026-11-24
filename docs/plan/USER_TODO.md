@@ -1,5 +1,5 @@
 # YOUR Personal To-Do List (things only you can do)
-**Version:** 0.5.55 | **Last updated:** 2026-11-24
+**Version:** 0.5.56 | **Last updated:** 2026-11-24
 Never share passwords, API keys, or recovery phrases with anyone, including Claude.
 
 ## This week
@@ -27,7 +27,7 @@ Never share passwords, API keys, or recovery phrases with anyone, including Clau
 - [ ] On the RX 470 rig (Ubuntu): from `prototype/`, run `python -m app.hw_inventory --out inventory.json`. No sudo needed; it only reads. Look over the file (hostname and username are already blanked) and share it or commit it so the next step (a Vulkan smoke test on each card) can be planned. If it says a tool is missing, installing `pciutils` or `vulkan-tools` is up to you
 - [ ] Also on the rig, any time: `python -m app.gpu_sensors` from `prototype/` prints each card's temperature, power, VRAM and clocks (read-only, no sudo). Later, when a test runs on one card, run `python -m app.gpu_sensors --card card1 --samples 120 --interval 1 --out gpu1-sensors.json` in a second terminal to record how hot and full it got
 - [ ] Later, for the first real test on a card: run it through the recorder, e.g. `python -m app.gpu_run --card card1 --out gpu1-run1.json -- <your test command>` from `prototype/` (no sudo). The report says whether card1 really did the work, or card0, or the CPU. Repeat with `--card card0` for the other card
-- [ ] After both cards have a run report: `python -m app.phase3_check --inventory inventory.json gpu0-run1.json gpu1-run1.json` (from `prototype/`, reads files only). It prints the hardware checklist with [x] done, [~] partly, [ ] not yet, [!] something wrong, and why. Give both runs the same test and the same `--expect-file` so "repeat on GPU 1" can count
+- [ ] After both cards have a run report: `python -m app.phase3_check --inventory inventory.json gpu0-run1.json gpu1-run1.json` (from `prototype/`, reads files only). It prints the hardware checklist with [x] done, [~] partly, [ ] not yet, [!] something wrong, and why. Give both runs the same test and the same `--expect-file` so "repeat on GPU 1" can count. Since 0.5.56 the check also works on files other people send you: a broken or hand-edited file is refused with one line saying which field is wrong (exit code 2), nothing else happens
 - [ ] Decide: chain path, final supply, fair launch (no premine)
 - [ ] Decide: should a rig caught cheating lose its other unchecked points for that period? (simulated scoring v2; see TASKS.md). It's built and switched off: putting `REWARD_SCORING=sim-points-v2-forfeit` in `prototype/.env` turns it on. Upside: one caught fake costs all of that period's unchecked work, so faking stops paying. Downside: until the RX 470s show how much honest cards disagree, an honest rig could lose points over a GPU quirk. Simulated points only
 - [ ] When the RX 470 rig is ready: set your own `OPERATOR_TOKEN` in `prototype/.env` (never share it; you now also need it, or a `SUBMITTER_TOKEN`, to queue jobs), then make one enrollment code per card with `python -m app.workers enroll --owner owner-gpu0` (and `owner-gpu1`). Keep the codes and the saved `.key` files private

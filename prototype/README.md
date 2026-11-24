@@ -393,6 +393,21 @@ Tested in software only. Fourth pass of the "code audit" item. Three tools read 
 
 **Limits:** it makes reading these files safe and the page's numbers match the signed files. It doesn't make a report true (the signature, consistency checks and `compare` do that), and a person still has to get the coordinator's key from somewhere they trust.
 
+## Implemented: reading rig reports safely (0.5.56, `rig-report-v1`)
+
+Tested in software only. Fifth pass of the "code audit" item. `python -m app.phase3_check` reads an inventory (`hw_inventory`) and run reports (`gpu_run`) that will come from volunteers' rigs, by chat or email, so they are files from strangers too. What was wrong and what changed:
+
+- **The text "false" counted as true.** The checker asked `if not ev.get("exit_ok")`. In Python any non-empty text is true, so `"exit_ok": "false"` (a typo, or an edit) on a run that exited with code 1 made it a clean, passing smoke test (shown against the old code). Same for `target_card_busy`: a card that never got busy counted. (`matched` was already compared with `is True`, so it was safe.) Now every yes/no field must be a real `true`/`false`.
+- **Crashes:** a 400-digit temperature or wattage (`OverflowError` while printing), `"readings": null` (`None > 0`), an AMD card without a `slot` or a render node without a `name` (`KeyError`, or `join` on `None`; now shown as `?`), and lists or numbers where objects belong.
+- **Terminal codes:** OS, kernel, card, driver and file names were printed as written. Names the checklist prints must now be printable text of at most 200 characters; every printed line and the `--out` file names also go through `say()`.
+- **Reading:** through `app/json_file.py` (new `read_bytes`, so the sha256 is of exactly the bytes parsed): regular files only (a named pipe hung it), at most 4 MiB (honest reports are 5-100 KB), strict UTF-8, depth 32, no `NaN`, no key written twice.
+- **How:** `INVENTORY_SPEC` and `RUN_SPEC` in `app/phase3_check.py` list every field the checker reads and its type. Missing or `null` fields are fine (less evidence, as before); a wrong type is refused with one line naming the file and field, exit code 2. Fields the checker never reads aren't checked.
+- **Also fixed elsewhere:** `json_file` and the worker's reply reader refused `NaN` and `Infinity` but let `1e400` through as infinity. Both now refuse any number that doesn't fit a float.
+- **Tests** (`tests/test_rig_reports.py`): reports recorded by the real tools (format samples, fake sysfs), then every spec field replaced with every wrong type for its kind (about 600 cases; each must exit 2 with one line and no control characters), every field deleted or nulled (never a crash), the holes above one by one, unsafe JSON, a 4 MiB+ file, a named pipe, odd file names, list and object caps. A tracing test runs the checker on wrapped reports and fails if it reads any field the specs don't list, so a new field can't skip the type check.
+- 23 deliberate breakages, 23 caught (one only after adding an `--out` file-name test; one turned out to be a redundant check, now removed).
+
+**Limits:** the reports are still unsigned. This catches mistakes, sloppy edits and hostile files, not a careful forger who writes correct types; a repeat on someone else's rig is what makes them evidence. Never run on real rig output yet.
+
 ## Safety and correctness boundaries
 
 The Ed25519 signature shows a manifest came from the holder of the coordinator's private key, but only to a worker that checks it against the right public key. The demo worker verifies it before executing. Result hashes are integrity identifiers, not proofs of execution. The coordinator is trusted in this MVP. Rewards are simulated ledger points only; no token minting, private-key handling, wallet signing, or on-chain transfer is implemented.
@@ -646,7 +661,7 @@ Once the inventory and one `gpu_run` report per card exist, `python -m app.phase
 
 Each item gets `evidenced`, `partial`, `missing` or `problem` with a one-line reason (wrong driver, CPU-only Vulkan, a render node your user can't open, counts that disagree between lspci, Vulkan and `/dev/dri`, cards that aren't PCI device `1002:67df`). A run only counts as a smoke test if it exited cleanly, matched a known-good answer (`--expect-file`/`--expect-sha256`), kept the card it was aimed at busy and no other card, the card is on `amdgpu`, and its PCI slot is one the inventory saw. Cards are matched by PCI slot, not by `cardN`, because names can change after a reboot. "Repeat on GPU 1" needs the same test (same program hash, same argument-file hashes, same expected answer) passing in a second slot; the command line itself may differ, since device flags do. Sensors and versions are never more than `partial`: stability and the runtime's own version (for llama.cpp, the commit) are yours to judge and write down.
 
-The result lists each input by file name and sha256 (never full paths). A run file saying `proves_inference: true` is treated as edited. Exit code 0 = the eight required items are evidenced, 1 = not yet, 2 = a file is missing, not JSON, the wrong kind of report, or `--out` exists. The files are unsigned, so this catches mistakes and mismatches, not a forger; `proves_inference` stays false. Tested with inventories built from format samples and runs recorded against fake sysfs trees (`tests/test_phase3_check.py`); never run on rig output yet.
+The result lists each input by file name and sha256 (never full paths). A run file saying `proves_inference: true` is treated as edited. Exit code 0 = the eight required items are evidenced, 1 = not yet, 2 = a file is missing, not plain JSON, the wrong kind of report, has a field of the wrong type (`rig-report-v1`, see above), or `--out` exists. The files are unsigned, so this catches mistakes and mismatches, not a forger; `proves_inference` stays false. Tested with inventories built from format samples and runs recorded against fake sysfs trees (`tests/test_phase3_check.py`); never run on rig output yet.
 
 ## Two-worker rehearsal (Track F prep, `bnh-rehearsal/1`)
 

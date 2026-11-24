@@ -1,5 +1,5 @@
 # BOATS N HOES: Project Task List (Claude + dev work)
-**Version:** 0.5.55 | **Last updated:** 2026-11-24 | Personal to-dos live in USER_TODO.md.
+**Version:** 0.5.56 | **Last updated:** 2026-11-24 | Personal to-dos live in USER_TODO.md.
 
 ## Phase 0: Foundation
 - [x] Buy boatsnhoes.meme
@@ -80,7 +80,7 @@
 - [ ] Testnet, then public testnet
 - [ ] Checkpoint/finality design against 51% attacks
 - [ ] Hashrate monitoring dashboard
-- [ ] Code audit and bug bounty *(first pass done in Phase 4: hostile-input fuzz of the coordinator API, 0.5.52; second pass: the worker against a hostile coordinator, 0.5.53; third pass: the checking tools against a hostile ledger copy, 0.5.54; fourth pass: JSON files from strangers, 0.5.55; an outside audit and a bounty still to come)*
+- [ ] Code audit and bug bounty *(first pass done in Phase 4: hostile-input fuzz of the coordinator API, 0.5.52; second pass: the worker against a hostile coordinator, 0.5.53; third pass: the checking tools against a hostile ledger copy, 0.5.54; fourth pass: JSON files from strangers, 0.5.55; fifth pass: rig reports for the Phase 3 check, 0.5.56; an outside audit and a bounty still to come)*
 
 ## Phase 4: Security (see README SECURITY)
 - [x] Stay Safe page built
@@ -99,6 +99,7 @@
 - [x] Code audit, second pass: the worker against a hostile coordinator or network *(`worker-input-v1`, 0.5.53: reply size limit (8 MiB, refused before reading when declared), no compressed replies, 60 s whole-reply deadline, broken/deep/`NaN` JSON refused, coordinator text printed without terminal control codes, worker key and job id shape checks, no worker key over plain http to another machine without `--allow-plain-http`, growing wait after refused jobs; any malformed job is refused, never a crash. 103 tests, 1,166 total)*
 - [x] Code audit, third pass: the checking tools against a hostile ledger copy *(`copy-open-v1`, 0.5.54: published copies are files from strangers. New `app/copy_guard.py`: exact plain-table schema (a test showed a "time-bomb" view verifying cleanly today and showing other numbers after a date), no views/triggers/virtual or extra tables, `integrity_check`, every row read once, 512 MiB file and 1 MiB value caps, read-only + immutable open (a hot journal beside a copy no longer gets replayed into it), `trusted_schema=OFF`, no ATTACH, 300 s per connection; used by `copy_info`, `rewards verify --db`, `compare`, `publish_report`; export vets its own output; one-line refusals instead of tracebacks. 28 tests, 1,194 total)*
 - [x] Code audit, fourth pass: JSON files from strangers *(`json-file-v1`, 0.5.55: new `app/json_file.py` for signed reports, release manifests/signatures/signer lists and `reports/index.json`: regular files only (a named pipe hung the tools), size cap before and while reading, strict UTF-8, depth 32 (100,000 brackets crashed them), no `NaN`, no key written twice. Found and fixed: `rewards verify --no-db` printed a report's unsigned fingerprint *label*, so a report signed by anyone could show the coordinator's fingerprint (label must now match the key; computed fingerprint printed); `publish_report check` never compared the numbers `/reports/` shows with the signed report (an edited point total passed CI) and let index paths point anywhere; tracebacks on lists, `null` and wrong shapes; `^...$` regexes accepting a trailing newline (now `\Z`, guarded by a test). 59 tests, 1,253 total)*
+- [x] Code audit, fifth pass: rig reports for the Phase 3 check *(`rig-report-v1`, 0.5.56: `phase3_check` reads inventories and run reports that will come from volunteers' rigs. Now read through `app/json_file.py` (4 MiB, depth, no `NaN`, no duplicate keys, regular files only: a named pipe hung it) and then every field it reads is type-checked. Found and fixed: the text "false" counted as *true* for "exited cleanly" and "card was busy", so a crashed run could pass; a 400-digit temperature, a `null` reading count and a card without a slot crashed it; names were printed with terminal codes intact. Also found: `1e400` slipped past the `NaN`/`Infinity` refusal as infinity in `json_file` and the worker; refused now. A test fails if the checker starts reading a field nobody type-checks. 675 tests, 1,928 total)*
 - [ ] Many seed nodes in different regions
 - [ ] Node peer limits and rate limits
 - [ ] Public status page

@@ -105,6 +105,12 @@ This assumes the auditor is honest. The rest of this document is about when that
   compute: before, a report signed by anyone could show the coordinator's fingerprint to
   someone checking without `--public-key`. `publish_report check` also checks that every
   number the /reports/ page shows matches the signed report.
+- **Rig reports for the hardware check are files from strangers as well.** Since 0.5.56
+  (`rig-report-v1`) `phase3_check` reads them through `json_file` and type-checks every
+  field it uses: before, the text "false" counted as true, so a crashed run sent in as
+  `"exit_ok": "false"` passed as a clean smoke test. They are still unsigned: this
+  catches mistakes and sloppy edits, not a careful forger; a repeat by someone else is
+  what makes them evidence.
 - **The tolerance rule is a guess** until Phase 3 produces real output from two cards.
 
 ## Order of the next fixes
