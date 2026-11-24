@@ -1125,7 +1125,7 @@ In all three, `verify` printed **OK** and then starting the worker printed `EVIL
 - **`rehearsal --url`**: same address check and limits; a strange reply stops it with one plain sentence instead of a crash; job numbers that would be pasted into web addresses are checked first.
 - **Everything the coordinator says is printed safely** (hidden codes become `?`, long text is cut).
 - **Proof.**
-  - 72 new tests, **2,196 total: 2,194 passing, 2 skipped** (the one that can't work as the all-powerful root user, and the release test that only runs on a committed tree). Run on Python 3.13; the touched test files also on 3.11 (what CI uses).
+  - 72 new tests, **2,196 total: 2,195 passing, 1 skipped** on the committed tree (the one that can't work as the all-powerful root user, as designed). Full suite run on Python 3.13 and 3.11 (what CI uses).
   - **34 of the new tests fail on the old code.** The honest path is tested end to end: tests sent from the pool and the whole two-worker rehearsal, through the new client, against a real in-process coordinator, all passing.
   - The same fake coordinator against the new code: plain http refused before a single byte left (the fake saw nothing); zip bomb and endless reply refused (memory stayed under 60 MB); hidden codes shown as `?`; the deep reply a one-line refusal.
   - I broke the new checks 26 ways on purpose; **24 were caught.** The 2 not caught are backup layers in the rehearsal (its summary already cleans what it prints, and its report file is JSON, which can't carry raw terminal codes). One check turned out to be doing nothing (a setting made twice), so I removed it.
