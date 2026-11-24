@@ -1066,7 +1066,7 @@ In all three, `verify` printed **OK** and then starting the worker printed `EVIL
 - **Files on disk:** downloads go into a fresh, randomly named temporary file and are only moved into place if every check passed and nothing of that name exists already. If the model is already there and matches the pin, nothing is downloaded.
 - **The registry:** every field is checked; a broken registry gives one plain line, and the worker simply stops offering AI jobs instead of crashing. Pins are written all-or-nothing (a crash leaves the old file).
 - **Proof.**
-  - 100 new tests, **2,083 total: 2,081 passing, 2 skipped** (the release test that needs a committed tree, and one that can't work as the all-powerful root user, both as designed). Run on Python 3.13 and 3.11 (what CI uses).
+  - 100 new tests, **2,083 total: 2,082 passing, 1 skipped** (one that can't work as the all-powerful root user, as designed). Run on Python 3.13 and 3.11 (what CI uses).
   - The tests play back every bad-server trick above through a fake network (no real downloads).
   - I broke the new checks 25 ways on purpose; **all 25 were caught.**
   - The same local HTTPS server against the new code: the http redirect was refused before a single byte, the endless reply stopped at 64 MB, nothing was left on disk. A real 5 MB test file: downloaded and checked, a wrong fingerprint refused and deleted, pinned, a second download skipped ("already here"), `verify` OK.
