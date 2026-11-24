@@ -411,6 +411,33 @@ something failed, 2 = usage error. On GitHub: **Actions > site-check > Run workf
 live check with one click; its JSON report appears on the run's summary page. Tested against a local server and a fake site; not yet run
 against boatsnhoes.meme from here (this sandbox can't reach it).
 
+## Accessibility checker (`a11y-check-v1`, `bnh-a11y-check/1`)
+
+Not part of the worker; it checks the static site's pages for common accessibility problems.
+
+    python -m app.a11y_check                       # reads files only; CI runs it
+    python -m app.a11y_check --out a11y.json --owner-page index.html
+
+For each page (folders `netlify.toml` hides are skipped) it reads the HTML and the CSS the
+page loads and checks: `<html lang>`, a title, zoom not blocked; `alt` on every image and
+inline SVGs hidden or labelled; a readable name on every link and button (text inside
+`aria-hidden` doesn't count); a label on every form field (a placeholder isn't one); one
+`<h1>`, no skipped heading levels, one `<main>`, and a skip link into `<main>` (not a header
+link) on pages with a menu; unique ids and `for`/`aria-*` references that exist; no
+`tabindex` above 0; nothing focusable inside `aria-hidden`. CSS: text contrast at least
+4.5:1 against the element's real background (its own, an ancestor's via a small selector
+matcher with specificity and inline styles, every gradient stop; rules that match nothing
+on the page, such as script-made content, are compared with the page background), focus
+outline at least 3:1, no `outline: none` without a replacement, and a
+`prefers-reduced-motion` rule whenever anything animates. Colours it can't read are notes.
+
+The homepage is the owner's approved design, so its findings are **notes**, not failures
+(`--owner-page`, default `index.html`). Exit 0 = no failures, 1 = something failed, 2 =
+usage error. Limits: no real screen reader, no wording checks, and selectors beyond simple
+classes/tags/ids/attributes and `>` fall back to the page background. A pass means "none of
+these known problems", not "fully accessible". Cross-checked once with axe-core 4.10.2 in
+Chromium (see BUILD-LOG 0.5.50).
+
 ## Workflow checker (`actions-pin-v1`, `bnh-workflow-check/1`)
 
 Not part of the worker; it checks `.github/workflows/` (reads files only; CI runs it).
