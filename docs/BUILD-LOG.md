@@ -823,3 +823,25 @@
 2. **A CVE is a public ID for one security problem** (like a case number). The same problem often also gets a GitHub id and a Python id, which is why the tool merges them.
 3. **"Couldn't check" must never look like "all clear".** A scanner that quietly passes when the network is down gives you false comfort exactly when you can't see anything.
 4. **Exceptions should expire.** "We'll accept this for now" turns into "forever" unless something forces a second look; the 90-day end date is that something.
+
+## 2026-11-24 (UTC): Signed worker releases, so no single person (or stolen key) can push a bad download (0.5.49)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). The GPU items need the rig or your decisions. The highest unfinished item that needed neither was in Phase 4 Security: "Signed miner releases with checksums (multi-signer)". It answers SECURITY threat #2 (fake miners: "download the new version here") and #8 (one person's key being enough).
+
+**Shipped**
+- **`python -m app.release`** with four commands:
+  - `keygen`: each signer makes their own private key once. It's saved readable by them only, never overwrites an old key, and is refused inside any git folder so it can't be committed by accident. It prints one line (the public half) to send you.
+  - `make`: takes a clean checkout and writes `release.json`: every file git tracks, with its sha256 fingerprint and size, plus the commit it came from. It also writes a plain `SHA256SUMS` file, so anyone can check the files with the standard `sha256sum -c` command, no special tools. Files git doesn't track (`.env`, keys, databases) are never included.
+  - `sign`: each signer adds their signature on their own computer. One signature per person and per key; it won't sign a broken or mixed-up release.
+  - `verify`: what a rig runs before starting new worker code. It passes only when **at least 2 different people from your pinned signer list** signed exactly this release, every signature from a listed person is valid, and (with `--root`) every file on disk matches, nothing is a shortcut (symlink), and no extra Python file has been slipped in. `--not-older-than` refuses an old signed version (so nobody can hand a rig an old release with a bug we already fixed).
+- **Proof.**
+  - 54 new tests, **924 total, all passing** (Python 3.13 here; CI runs 3.11).
+  - I broke the tool 20 ways on purpose (allow 1 signer, count one person twice, accept a listed name with someone else's key, drop the signature's purpose label, skip the "signed this exact release" check, compare only file sizes, treat an extra `.py` file as harmless, ignore symlinks, ignore paths outside the folder, ignore the version floor, overwrite releases, allow uncommitted changes, allow keys in git folders, ...). 19 were caught at once. "Ignore symlinks" survived because my only symlink test pointed outside the folder (caught by a different check), so I added a test with a shortcut *inside* the folder. Now all 20 are caught.
+  - **Real run on this repo:** I made a release of `prototype/` (93 files), signed it with two throwaway test keys, and `sha256sum -c` agreed with every file. `verify` then said **NOT OK** because the two new files from this session weren't committed yet, which is exactly what it should say about Python files outside the release.
+- **Honest limits:** a valid release means enough named people agreed to ship exactly these files. It doesn't prove the code is safe or that a signer's computer was clean. It covers the worker's Python files, not llama.cpp, model files (those already have their own pins) or the operating system. **No real signers exist and nothing has been signed yet:** picking at least 2 people is your call (USER_TODO, "Set up multiple release signers").
+
+**What you learned**
+1. **A checksum says "same file"; a signature says "who vouches for it".** A sha256 list alone can be swapped along with the files. A signature over that list ties it to a person's key.
+2. **"2 of 3" beats "1 of 1".** If one signer's laptop is stolen, the thief still can't publish a release alone. That's the same idea banks use for vaults with two keys.
+3. **The rig must already know who the signers are.** If a download could bring its own signer list, a fake download would bring a fake list. That's why the list is pinned on the rig ahead of time.
+4. **Old but genuine can still hurt.** A properly signed old version may contain a bug we fixed later; refusing anything older than a set version stops that "rollback" trick.

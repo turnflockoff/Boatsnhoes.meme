@@ -1,5 +1,5 @@
 # BOATS N HOES: Project Task List (Claude + dev work)
-**Version:** 0.5.48 | **Last updated:** 2026-11-24 | Personal to-dos live in USER_TODO.md.
+**Version:** 0.5.49 | **Last updated:** 2026-11-24 | Personal to-dos live in USER_TODO.md.
 
 ## Phase 0: Foundation
 - [x] Buy boatsnhoes.meme
@@ -93,7 +93,8 @@
 - [ ] Optional extra: Dependabot alerts (repo setting, owner click; see USER_TODO.md)
 - [x] Pin the CI workflow's GitHub Actions to commit hashes instead of version tags *(`actions-pin-v1`, 0.5.47: both workflows pinned, hashes taken from this repo's own CI log; `persist-credentials: false`; upload-artifact dropped; `python -m app.workflow_check` in CI also requires read-only tokens, no risky triggers and no `${{ }}` in scripts; 61 tests)*
 - [ ] Keep the pinned actions up to date (optional `.github/dependabot.yml` for GitHub Actions; opens pull requests, so owner decision)
-- [ ] Signed miner releases with checksums (multi-signer)
+- [x] Signed miner releases with checksums (multi-signer) *(`release-sign-v1`, 0.5.49: `python -m app.release keygen|make|sign|verify`; release = every git-tracked file's sha256 plus a `SHA256SUMS`; counts only with at least 2 different signers from a pinned list, every signature valid, files on disk matching and no extra Python files; `--not-older-than` against rollbacks. 54 tests (924 total); 20 deliberate breakages all caught. Software only; no real signer keys or signed release yet)*
+- [ ] Pick the release signers (at least 2 people, each with their own key) and publish the signer list (owner decision; see USER_TODO.md)
 - [ ] Many seed nodes in different regions
 - [ ] Node peer limits and rate limits
 - [ ] Public status page

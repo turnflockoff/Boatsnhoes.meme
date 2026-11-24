@@ -1,5 +1,5 @@
 # YOUR Personal To-Do List (things only you can do)
-**Version:** 0.5.48 | **Last updated:** 2026-11-24
+**Version:** 0.5.49 | **Last updated:** 2026-11-24
 Never share passwords, API keys, or recovery phrases with anyone, including Claude.
 
 ## This week
@@ -44,7 +44,7 @@ Never share passwords, API keys, or recovery phrases with anyone, including Clau
 - [ ] Find a blockchain developer or team to build the chain and miner
 - [ ] Set up a project email and a shared password manager
 - [ ] Back up recovery info offline (paper, in two places)
-- [ ] Set up multiple release signers (never one person)
+- [ ] Set up multiple release signers (never one person). The tool is ready (0.5.49). Pick at least 2 people you trust (you plus one more is the minimum). Each of them, on their own computer, runs `python -m app.release keygen --out ~/bnh-private/release-signer.key --name <their-name>` from `prototype/` and sends you only the one line it prints (their public key; the key file never leaves their computer). Put those lines in a `release-signers.json` with `"threshold": 2`, and tell Claude, who can add it to the repo. Then a rig only runs a worker that at least 2 of you signed (`python -m app.release verify`). Commands and details: `prototype/README.md`, section "Signed worker releases"
 - [ ] Budget for an independent code audit and a bug bounty
 
 ## Before launch
