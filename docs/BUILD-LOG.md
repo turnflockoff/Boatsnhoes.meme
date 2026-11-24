@@ -1049,3 +1049,32 @@ In all three, `verify` printed **OK** and then starting the worker printed `EVIL
 2. **Caches are trusted by their label.** A cache file says "I was made from a file of this size, saved at this time". Python believes the label. Labels can lie, so the check now rebuilds the cache itself and compares every byte.
 3. **"Where does Python look first?"** `python -m` searches the current folder before its own built-in modules, so a file named like a built-in (`json`, `hashlib`) in that folder wins. This is called *shadowing*.
 4. **A silent skip is a hole.** If a checker can't read a folder and just moves on, that folder is the perfect hiding place. Now "can't read it" means "can't vouch for it", and the check fails.
+
+## 2026-11-24 (18:30 UTC): The model download trusted whatever the internet sent (0.5.58)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions. The next thing you'll actually do on the rig, once llama.cpp builds, is download the first AI model (~400 MB) and "pin" it. That download is the one place where our code takes a big file straight from the internet, so this session's "code audit" pass looked at it.
+
+**Found, shown really happening** (with a small HTTPS server on this machine pretending to be a bad mirror)
+1. **No size limit and no time limit.** A server that never stops sending: the old download wrote **2.5 GB in 6 seconds** and would have kept going until the disk was full.
+2. **Redirects anywhere, even to plain http.** The server said "the file moved to `http://...`" (no encryption, so anyone on the network could swap it). The old code followed it and wrote **3.2 GB in 6 seconds**.
+3. **The first download was checked against nothing,** and `pin` then recorded whatever had arrived as the trusted fingerprint. Whoever controlled the download on day one would have controlled the pin.
+4. **Smaller ones:** a planted shortcut (link) named `<model>.gguf.part` made the download write into another file; a finished download silently replaced a file already there; the registry's file name was used unchecked (`../../.bashrc` would have pointed outside the models folder); a missing field crashed it with a traceback; a typo like `sha265` silently left a model unpinned; `pin` quietly changed an existing pin; a named pipe given as "the model" hung it.
+
+**Shipped (`model-fetch-v1`)**
+- **Limits on the download:** https only (redirects too, at most 5), no compressed replies, a size cap (the pinned size, or twice the registry's estimate: 800 MB for the Qwen model), a 60-minute overall limit, a free-disk-space check first, and a reply that ends early is refused.
+- **Checked against the model page:** `--expect-sha256` takes the fingerprint Hugging Face shows for the file. The download checks it while writing and deletes a file that doesn't match. Without it, the download prints **NOT CHECKED** in capitals. `pin` from the command line now needs that fingerprint (or you must say `--no-expected-hash` on purpose), and won't change an existing pin unless you add `--replace`.
+- **Files on disk:** downloads go into a fresh, randomly named temporary file and are only moved into place if every check passed and nothing of that name exists already. If the model is already there and matches the pin, nothing is downloaded.
+- **The registry:** every field is checked; a broken registry gives one plain line, and the worker simply stops offering AI jobs instead of crashing. Pins are written all-or-nothing (a crash leaves the old file).
+- **Proof.**
+  - 100 new tests, **2,083 total: 2,081 passing, 2 skipped** (the release test that needs a committed tree, and one that can't work as the all-powerful root user, both as designed). Run on Python 3.13 and 3.11 (what CI uses).
+  - The tests play back every bad-server trick above through a fake network (no real downloads).
+  - I broke the new checks 25 ways on purpose; **all 25 were caught.**
+  - The same local HTTPS server against the new code: the http redirect was refused before a single byte, the endless reply stopped at 64 MB, nothing was left on disk. A real 5 MB test file: downloaded and checked, a wrong fingerprint refused and deleted, pinned, a second download skipped ("already here"), `verify` OK.
+- **Honest limits:** a fingerprint from the model page proves the file wasn't changed *on the way*, not that the publisher's model is honest. No real model was downloaded (this sandbox can't reach Hugging Face). Someone who can already write to your models folder could still swap the file between the worker's check and llama.cpp opening it.
+- **New step for you** is in USER_TODO ("download and pin the first model"): copy the SHA256 from the file's page on Hugging Face and pass it to both commands.
+
+**What you learned**
+1. **A download is a conversation with a stranger.** The server decides how big the file is, how long it takes and where to send you next. Good download code sets its own limits instead of trusting the server's.
+2. **"Trust on first use" is only as good as the first use.** Pinning records a fingerprint so later copies can be checked, but if the very first copy was bad, the pin protects the bad file. Checking against a fingerprint published somewhere else (the model page) closes that gap.
+3. **A redirect can downgrade you.** https is encrypted; plain http is not. If the code follows a "moved to http://..." redirect, the encryption you started with is gone. Each hop has to be checked, not just the first address.
+4. **Write to a new file, then swap it in.** Writing straight into the final name (or a predictable temp name) lets a crash leave half a file, or a planted link redirect the write. A fresh random temp file, moved into place only when finished, avoids both.

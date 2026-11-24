@@ -118,6 +118,15 @@ This assumes the auditor is honest. The rest of this document is about when that
   checked source. Before, a sourceless `json.pyc`, a cache file with the source's time and
   size in its header, or a linked folder named `json` passed the check and ran when the
   worker started. It checks the folder when you run it, not afterwards.
+- **The model file comes from the internet too.** Since 0.5.58 (`model-fetch-v1`)
+  `model_registry download` follows only https redirects (at most 5), refuses compressed
+  replies, caps the size (the pin, or twice the registry's estimate) and the total time,
+  checks against `--expect-sha256` (the hash on the model page) while it writes, and never
+  writes through a link or over an existing file; `pin` needs that hash (or an explicit
+  opt-out) and won't silently change an existing pin. Before, a redirect to plain http
+  was followed and wrote 3.2 GB in 6 seconds. The registry's file names can no longer
+  point outside the model folder. A published hash proves the file wasn't changed on the
+  way, not that the publisher's model is honest.
 - **The tolerance rule is a guess** until Phase 3 produces real output from two cards.
 
 ## Order of the next fixes
