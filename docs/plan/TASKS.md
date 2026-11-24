@@ -1,5 +1,5 @@
 # BOATS N HOES: Project Task List (Claude + dev work)
-**Version:** 0.5.46 | **Last updated:** 2026-11-23 | Personal to-dos live in USER_TODO.md.
+**Version:** 0.5.48 | **Last updated:** 2026-11-24 | Personal to-dos live in USER_TODO.md.
 
 ## Phase 0: Foundation
 - [x] Buy boatsnhoes.meme
@@ -89,7 +89,8 @@
 - [x] Build a checker for the live headers, HTTPS and www redirects, hidden folders and share image *(`site-check-v1`, 0.5.45: `python -m app.site_check live`, or one click in GitHub: Actions > site-check > Run workflow. 37 tests against a local server and a fake site; not yet run against boatsnhoes.meme, which this sandbox can't reach)*
 - [ ] Verify `_headers` on the live Netlify URL (run the site-check workflow once after merging; owner click)
 - [x] Pin every prototype dependency to exact, sha256-checked files and review each license *(`deps-check-v1`, 0.5.46: `requirements.lock` with a 7-day cooldown, `licenses.json`, `python -m app.deps_check lock|installed`; CI installs with `--require-hashes` and fails on a new package or version until its license is re-read; 764 tests)*
-- [ ] Scan locked packages for known vulnerabilities (e.g. pip-audit or GitHub Dependabot alerts; Dependabot is a repo setting, owner click)
+- [x] Scan locked packages for known vulnerabilities *(`vuln-check-v1`, 0.5.48: `python -m app.vuln_check` asks PyPI's OSV data about every exact locked version; `vuln-exceptions.json` for reviewed, expiring exceptions; "couldn't check" fails; separate `vuln-check` workflow on lock changes, weekly (Mondays) and by hand. First run caught pytest 8.4.2 / CVE-2025-71176, raised to 9.2.0. 45 tests, 870 total)*
+- [ ] Optional extra: Dependabot alerts (repo setting, owner click; see USER_TODO.md)
 - [x] Pin the CI workflow's GitHub Actions to commit hashes instead of version tags *(`actions-pin-v1`, 0.5.47: both workflows pinned, hashes taken from this repo's own CI log; `persist-credentials: false`; upload-artifact dropped; `python -m app.workflow_check` in CI also requires read-only tokens, no risky triggers and no `${{ }}` in scripts; 61 tests)*
 - [ ] Keep the pinned actions up to date (optional `.github/dependabot.yml` for GitHub Actions; opens pull requests, so owner decision)
 - [ ] Signed miner releases with checksums (multi-signer)

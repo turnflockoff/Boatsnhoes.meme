@@ -1,5 +1,5 @@
 # YOUR Personal To-Do List (things only you can do)
-**Version:** 0.5.47 | **Last updated:** 2026-11-23
+**Version:** 0.5.48 | **Last updated:** 2026-11-24
 Never share passwords, API keys, or recovery phrases with anyone, including Claude.
 
 ## This week
@@ -13,7 +13,7 @@ Never share passwords, API keys, or recovery phrases with anyone, including Clau
 - [ ] After merging the drafts PR: on GitHub, open **Actions > site-check > Run workflow** (keep the address `https://boatsnhoes.meme`). It checks the live site's security headers, the http→https and www redirects, that /docs/ etc. stay hidden, and the share image. Green = done; red = open the run and read the FAIL lines on its summary page (or tell Claude). Nothing is changed by running it
 - [ ] Optional: add a canonical link (`<link rel="canonical" href="https://boatsnhoes.meme/">`) to the homepage's `<head>` so shares always show the main address. It's invisible on the page, but it's your homepage, so I didn't touch it; say the word if you want it added
 - [ ] Upload mine.html, tokenomics.html, stay-safe.html (not on GitHub yet)
-- [ ] Optional: on GitHub, **Settings > Code security > Dependabot alerts > Enable**. GitHub then emails you if a package in `prototype/requirements.lock` gets a known security hole. Alerts only; it changes nothing by itself (leave "Dependabot security updates" off unless you want it opening pull requests)
+- [ ] Optional: on GitHub, **Settings > Code security > Dependabot alerts > Enable**. GitHub then emails you if a package in `prototype/requirements.lock` gets a known security hole. (Since 0.5.48 the `vuln-check` workflow already checks every Monday after merging, and GitHub emails you if that run fails; Dependabot is a second opinion.) Alerts only; it changes nothing by itself (leave "Dependabot security updates" off unless you want it opening pull requests)
 - [ ] Optional: the two GitHub Actions our CI uses are now pinned to exact commits, so they won't pick up fixes on their own. If you'd like a monthly pull request offering updates (you review and merge, or ignore it), tell Claude to add a `.github/dependabot.yml` for GitHub Actions. Otherwise Claude can refresh them by hand now and then
 - [ ] Turn on hardware-key or authenticator 2FA for Netlify, GitHub, your registrar, email, and every social account
 - [ ] Lock the domain at the registrar and enable auto-renew
