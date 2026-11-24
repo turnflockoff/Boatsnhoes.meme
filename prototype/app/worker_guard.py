@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import math
 import re
 import time
 from dataclasses import dataclass
@@ -132,6 +133,14 @@ def check_url(url: str, allow_plain_http: bool = False) -> str:
     return url
 
 
+def finite_float(text: str) -> float:
+    """`parse_float` hook: `1e400` would otherwise quietly become infinity."""
+    value = float(text)
+    if not math.isfinite(value):
+        raise ValueError("number too big")
+    return value
+
+
 def parse_json(raw: bytes) -> Any:
     """Parse a reply body, refusing what could crash or mislead the worker.
     Returns None for an empty body; raises CoordinatorError for anything else that isn't
@@ -145,9 +154,11 @@ def parse_json(raw: bytes) -> Any:
         raise ValueError(f"{name} is not allowed")
 
     try:
-        return json.loads(raw.decode("utf-8"), parse_constant=no_constants)
+        return json.loads(raw.decode("utf-8"), parse_constant=no_constants,
+                          parse_float=finite_float)
     except (UnicodeDecodeError, ValueError, RecursionError) as exc:
-        # ValueError covers bad JSON, NaN/Infinity and Python's limit on 4,300+ digit numbers.
+        # ValueError covers bad JSON, NaN/Infinity, numbers like 1e400 that would become
+        # infinity (`rig-report-v1`), and Python's limit on 4,300+ digit numbers.
         raise CoordinatorError(f"reply is not valid JSON ({say(type(exc).__name__)})") from exc
 
 

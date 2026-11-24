@@ -272,7 +272,7 @@ def test_cli_rejects_bad_files(inventory, rig, tmp_path, capsys):
     assert p3.main(["--inventory", inv, inv]) == 2  # an inventory given as a run
     assert p3.main(["--inventory", str(tmp_path / "nope.json")]) == 2
     err = capsys.readouterr().err
-    assert "not valid JSON" in err and "not a bnh-hw-inventory/1 report" in err
+    assert "not plain JSON" in err and "not a bnh-hw-inventory/1 report" in err
 
 
 def test_one_card_is_missing_not_a_problem(tmp_path):

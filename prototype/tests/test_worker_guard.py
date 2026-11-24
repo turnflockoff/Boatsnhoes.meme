@@ -167,6 +167,7 @@ def test_a_reply_dripping_in_too_slowly_is_given_up() -> None:
     b"<html>502 Bad Gateway</html>", b'{"job_id":', b"\xff\xfe{}", b"[" * 100_000,
     b'{"a":' * (MAX_JSON_DEPTH + 1) + b"1" + b"}" * (MAX_JSON_DEPTH + 1),
     b'{"n": NaN}', b'{"n": Infinity}', b'{"n": -Infinity}', b'{"n": ' + b"9" * 5000 + b"}",
+    b'{"n": 1e400}', b'{"n": [-1e999]}',  # would become infinity (rig-report-v1)
     b"[]", b'"text"', b"42", b"null", b"true", b"",
 ])
 def test_ok_replies_that_are_not_a_plain_json_object_are_refused(raw: bytes) -> None:

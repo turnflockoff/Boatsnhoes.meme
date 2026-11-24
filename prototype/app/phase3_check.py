@@ -25,6 +25,19 @@ same files, same expected answer) passing on a second, different card.
 What it can't do: the reports aren't signed, so this catches mistakes and mismatches, not a
 determined forger. It never upgrades anything to proof of inference (`proves_inference` stays
 false). Evidence gets strong when someone else repeats the same run and gets the same answer.
+
+Reading the files safely (`rig-report-v1`, 0.5.56, code audit fifth pass). These reports
+come from a rig: today yours, later a volunteer's, sent by chat or email. So they are
+files from strangers, and are read like the other ones (`app/json_file.py`): a regular file
+of at most 4 MiB, strict UTF-8, depth 32, no `NaN`/`1e400`, no key written twice. Then
+`vet_inventory` / `vet_run` check every field this checker reads: if it is there, it must
+have the type the recording tools write (a real `true`/`false`, not the text "false", which
+Python counts as true; numbers below 1e15, not a 400-digit number that crashes `:g`; lists
+of objects, at most 64 cards or devices). Names that end up in the printed checklist (OS,
+kernel, slots, card and driver names) must be printable text of at most 200 characters,
+so a report can't hide terminal codes or right-to-left marks in them. Missing fields are
+fine, as before: the check then simply finds less evidence. Anything else is refused with
+one line naming the file and the field, exit code 2.
 """
 from __future__ import annotations
 
@@ -35,7 +48,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from app import json_file
+from app.worker_guard import say
+
 SCHEMA_VERSION = "bnh-phase3-check/1"
+RIG_REPORT_VERSION = "rig-report-v1"
 INVENTORY_SCHEMA = "bnh-hw-inventory/1"
 RUN_SCHEMA = "bnh-gpu-run/1"
 RX470_PCI_DEVICE = "67df"  # Polaris 10 (Ellesmere): RX 470, and also RX 480/570/580
@@ -76,18 +93,128 @@ def normalize_slot(slot: str | None) -> str | None:
     return s
 
 
+# --- reading the rig's files safely (`rig-report-v1`) ----------------------------------------
+# A spec says what type each field the checker reads must have, when present. Fields not
+# listed are never read here, so they aren't checked either.
+TEXT, BOOL, INT, NUM = "text", "bool", "int", "num"
+MAX_TEXT = 200          # longest name/version/slot an honest report holds is ~60 characters
+MAX_ITEMS = 64          # cards, devices, render nodes, findings...
+MAX_FILES = 256         # argument files recorded by gpu_run
+MAX_NUMBER = 10 ** 15   # temperatures, watts, MiB, seconds, exit codes: far below this
+MAX_REPORT_BYTES = 4 * 1024 * 1024  # honest reports are 5-100 KB (command output is capped)
+
+
+class Each:
+    """A dict whose keys are free (command names, sensor names), each value of `spec`."""
+
+    def __init__(self, spec: Any) -> None:
+        self.spec = spec
+
+
+class ListOf:
+    def __init__(self, spec: Any, max_items: int = MAX_ITEMS) -> None:
+        self.spec, self.max_items = spec, max_items
+
+
+_DURING = Each({"max": NUM, "readings": INT})
+INVENTORY_SPEC: dict[str, Any] = {
+    "os": {"pretty_name": TEXT, "id": TEXT},
+    "kernel": TEXT,
+    "pci_display_devices": ListOf({"slot": TEXT, "device_id": TEXT, "is_amd": BOOL,
+                                   "subsystem": TEXT, "driver_in_use": TEXT}),
+    "vulkan": {"devices": ListOf({"index": INT, "vendor_id": TEXT, "is_cpu": BOOL,
+                                  "device_name": TEXT, "driver_info": TEXT,
+                                  "driver_name": TEXT})},
+    "dri_nodes": ListOf({"name": TEXT, "kind": TEXT, "user_can_open": BOOL}),
+    "commands": Each({"available": BOOL, "returncode": INT}),
+}
+RUN_SPEC: dict[str, Any] = {
+    "proves_inference": BOOL,
+    "label": TEXT,
+    "target_card": TEXT,
+    "command": {"program_sha256": TEXT, "files": ListOf({"sha256": TEXT}, MAX_FILES)},
+    "run": {"timed_out": BOOL, "stopped_early": BOOL, "exit_code": INT, "ran_as_root": BOOL,
+            "duration_seconds": NUM, "started_at": TEXT},
+    "expected": {"method": TEXT, "matched": BOOL, "expected_sha256": TEXT},
+    "sensors": {"cards": ListOf({"card": TEXT, "pci_slot": TEXT, "is_amd": BOOL,
+                                 "driver": TEXT, "vram_added_mib": NUM, "during": _DURING})},
+    "evidence": {"exit_ok": BOOL, "target_card_busy": BOOL,
+                 "busy_elsewhere": ListOf(TEXT)},
+}
+
+
+def _vet(value: Any, spec: Any, where: str, name: str) -> None:
+    """Raise InputError unless `value` (not None) has the type `spec` asks for."""
+    if value is None:
+        return  # missing or null: the checker treats it as "no evidence"
+
+    def bad(kind: str) -> InputError:
+        return InputError(f"{name}: {say(where, 120)} must be {kind}")
+
+    if spec == TEXT:
+        if not isinstance(value, str):
+            raise bad("text")
+        if len(value) > MAX_TEXT:
+            raise bad(f"at most {MAX_TEXT} characters")
+        if not value.isprintable():
+            raise bad("plain printable text (it holds a control code, line break or "
+                      "invisible mark)")
+    elif spec == BOOL:
+        if not isinstance(value, bool):
+            raise bad("true or false (not text or a number)")
+    elif spec in (INT, NUM):
+        ok = (int,) if spec == INT else (int, float)
+        if isinstance(value, bool) or not isinstance(value, ok):
+            raise bad("a whole number" if spec == INT else "a number")
+        if abs(value) > MAX_NUMBER:
+            raise bad(f"a number below {MAX_NUMBER:.0e}")
+    elif isinstance(spec, ListOf):
+        if not isinstance(value, list):
+            raise bad("a list")
+        if len(value) > spec.max_items:
+            raise bad(f"a list of at most {spec.max_items} items")
+        for i, item in enumerate(value):
+            if item is None:
+                raise bad("a list without null items")
+            _vet(item, spec.spec, f"{where}[{i}]", name)
+    elif isinstance(spec, Each):
+        if not isinstance(value, dict):
+            raise bad("an object")
+        if len(value) > MAX_ITEMS:
+            raise bad(f"an object of at most {MAX_ITEMS} entries")
+        for key, item in value.items():
+            _vet(item, spec.spec, f"{where}.{say(str(key), 60)}", name)
+    elif isinstance(spec, dict):
+        if not isinstance(value, dict):
+            raise bad("an object")
+        for key, sub in spec.items():
+            _vet(value.get(key), sub, f"{where}.{key}" if where else key, name)
+    else:  # pragma: no cover - a mistake in the specs above
+        raise AssertionError(f"unknown spec {spec!r}")
+
+
+def vet_inventory(data: dict[str, Any], name: str = "inventory") -> None:
+    _vet(data, INVENTORY_SPEC, "", name)
+
+
+def vet_run(data: dict[str, Any], name: str = "run") -> None:
+    _vet(data, RUN_SPEC, "", name)
+
+
 def load_report(path: Path, schema: str) -> tuple[dict[str, Any], str]:
+    name = say(path.name, 80)
     try:
-        raw = path.read_bytes()
-    except OSError as exc:
-        raise InputError(f"can't read {path.name}: {exc.strerror or exc}") from exc
-    try:
-        data = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise InputError(f"{path.name} is not valid JSON ({exc})") from exc
+        raw = json_file.read_bytes(path, name, max_bytes=MAX_REPORT_BYTES)
+        data = json_file.parse(raw, name)
+    except FileNotFoundError:
+        raise InputError(f"can't read {name}: no such file") from None
+    except json_file.UnsafeJSONError as exc:
+        raise InputError(f"refusing to read it: {exc}") from None
     if not isinstance(data, dict) or data.get("schema_version") != schema:
         got = data.get("schema_version") if isinstance(data, dict) else None
-        raise InputError(f"{path.name} is not a {schema} report (schema_version: {got!r})")
+        raise InputError(f"{name} is not a {schema} report (schema_version: "
+                         f"{say(repr(got), 60)})")
+    (vet_inventory if schema == INVENTORY_SCHEMA else vet_run)(data, name)
     return data, hashlib.sha256(raw).hexdigest()
 
 
@@ -169,7 +296,7 @@ def assess_run(run: dict[str, Any], inventory_slots: set[str]) -> dict[str, Any]
     during = (target or {}).get("during") or {}
     peaks = {k: (during.get(k) or {}).get("max") for k in
              ("temp_c", "power_w", "vram_used_mib", "busy_percent")}
-    sensor_counts = {k: (during.get(k) or {}).get("readings", 0) for k in
+    sensor_counts = {k: (during.get(k) or {}).get("readings") or 0 for k in
                      ("temp_c", "power_w", "vram_used_mib")}
     return {
         "label": run.get("label"),
@@ -194,7 +321,8 @@ def _item(status: str, note: str) -> dict[str, str]:
 
 
 def _model_note(amd: list[dict[str, Any]], vk: list[dict[str, Any]]) -> tuple[bool, str]:
-    not_polaris = [g["slot"] for g in amd if g.get("device_id") != RX470_PCI_DEVICE]
+    not_polaris = [g.get("slot") or "?" for g in amd
+                   if g.get("device_id") != RX470_PCI_DEVICE]
     if not_polaris:
         return False, (f"slot(s) {', '.join(not_polaris)} are not PCI device 1002:{RX470_PCI_DEVICE}, "
                        "so they are not RX 470s")
@@ -231,9 +359,9 @@ def check(inventory: dict[str, Any], runs: list[dict[str, Any]]) -> dict[str, An
     elif not amd:
         items["pci_drivers"] = _item("problem", "lspci ran but saw no AMD graphics card")
     else:
-        wrong = [f"{g['slot']} ({g.get('driver_in_use') or 'no driver'})" for g in amd
+        wrong = [f"{g.get('slot') or '?'} ({g.get('driver_in_use') or 'no driver'})" for g in amd
                  if g.get("driver_in_use") != "amdgpu"]
-        listed = ", ".join(f"{g['slot']} [1002:{g.get('device_id')}]" for g in amd)
+        listed = ", ".join(f"{g.get('slot') or '?'} [1002:{g.get('device_id')}]" for g in amd)
         if wrong:
             items["pci_drivers"] = _item("problem", f"{listed}; not on amdgpu: {', '.join(wrong)}")
         else:
@@ -252,7 +380,7 @@ def check(inventory: dict[str, Any], runs: list[dict[str, Any]]) -> dict[str, An
         items["vulkan"] = _item("evidenced", names)
 
     renders = [n for n in inventory.get("dri_nodes") or [] if n.get("kind") == "render"]
-    blocked = [n["name"] for n in renders if not n.get("user_can_open")]
+    blocked = [n.get("name") or "?" for n in renders if not n.get("user_can_open")]
     if not renders:
         items["dri"] = _item("missing", "no /dev/dri/renderD* nodes in the inventory")
     elif blocked:
@@ -362,18 +490,19 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         inventory, inv_sha = load_report(Path(args.inventory), INVENTORY_SCHEMA)
-        runs, inputs, seen = [], [{"file": Path(args.inventory).name, "sha256": inv_sha}], {inv_sha}
+        runs, seen = [], {inv_sha}
+        inputs = [{"file": say(Path(args.inventory).name, 80), "sha256": inv_sha}]
         for p in args.runs:
             data, sha = load_report(Path(p), RUN_SCHEMA)
             if sha in seen:
-                print(f"note: {Path(p).name} is a copy of a file already given; counted once",
-                      file=sys.stderr)
+                print(f"note: {say(Path(p).name, 80)} is a copy of a file already given; "
+                      "counted once", file=sys.stderr)
                 continue
             seen.add(sha)
             runs.append(data)
-            inputs.append({"file": Path(p).name, "sha256": sha})
+            inputs.append({"file": say(Path(p).name, 80), "sha256": sha})
     except InputError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        print(f"error: {say(str(exc), 400)}", file=sys.stderr)
         return 2
     result = check(inventory, runs)
     result["inputs"] = inputs
@@ -382,19 +511,20 @@ def main(argv: list[str] | None = None) -> int:
             with open(args.out, "x", encoding="utf-8") as fh:
                 fh.write(json.dumps(result, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
         except FileExistsError:
-            print(f"refusing to overwrite {args.out}", file=sys.stderr)
+            print(f"refusing to overwrite {say(args.out, 120)}", file=sys.stderr)
             return 2
 
     for i in result["items"]:
-        print(f"{STATUS_MARK[i['status']]} {i['roadmap_item']}: {i['note']}")
+        # say(): a second layer; the names in these notes were already vetted as printable.
+        print(say(f"{STATUS_MARK[i['status']]} {i['roadmap_item']}: {i['note']}", 2000))
     for r, inp in zip(result["runs"], inputs[1:]):
         verdict = "passes" if r["passes"] else "doesn't count: " + "; ".join(
             r["problems"] + r["reasons"])
-        print(f"  run {inp['file']} ({r['target_card']}): {verdict}")
+        print(say(f"  run {inp['file']} ({r['target_card']}): {verdict}", 2000))
     print("Not proof of inference: these files are unsigned; a repeat by someone else is what "
           "makes them evidence.")
     if args.out:
-        print(f"saved {args.out}")
+        print(f"saved {say(args.out, 120)}")
     return 0 if result["all_required_evidenced"] else 1
 
 

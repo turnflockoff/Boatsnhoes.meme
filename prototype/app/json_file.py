@@ -28,8 +28,10 @@ They read those files with a plain `json.loads(path.read_text())`, so before thi
      never more than that many bytes are read, even if the file grows while it is read;
   2. strict UTF-8 (a leading byte-order mark is refused too);
   3. brackets nested at most `MAX_JSON_DEPTH` (32) deep, checked before parsing;
-  4. no `NaN`/`Infinity`, no numbers Python refuses to convert (4,300+ digits), and no key
-     twice in the same object.
+  4. no `NaN`/`Infinity`, no numbers Python refuses to convert (4,300+ digits), no number
+     so big it turns into infinity (`1e400`; added in `rig-report-v1`, 0.5.56, after the
+     fifth audit pass found that `NaN` and `Infinity` were refused but `1e400` slipped in as
+     infinity), and no key twice in the same object.
 
 `say(text)` (from `worker_guard`) makes any text taken from such a file safe to print:
 terminal control codes and invisible characters become `?`.
@@ -46,7 +48,7 @@ from pathlib import Path
 from typing import Any
 
 from app.input_limits import MAX_JSON_DEPTH, json_depth
-from app.worker_guard import say
+from app.worker_guard import finite_float, say
 
 JSON_FILE_VERSION = "json-file-v1"
 
@@ -88,7 +90,7 @@ def parse(raw: bytes, what: str = "file", max_depth: int = MAX_JSON_DEPTH) -> An
     if json_depth(raw) > max_depth:
         raise UnsafeJSONError(f"{what} is nested deeper than {max_depth} levels")
     try:
-        return json.loads(text, parse_constant=_no_constants,
+        return json.loads(text, parse_constant=_no_constants, parse_float=finite_float,
                           object_pairs_hook=_no_duplicate_keys)
     except RecursionError:
         raise UnsafeJSONError(f"{what} is nested too deeply") from None
@@ -98,10 +100,11 @@ def parse(raw: bytes, what: str = "file", max_depth: int = MAX_JSON_DEPTH) -> An
         raise UnsafeJSONError(f"{what} is not plain JSON ({say(reason, 80)})") from None
 
 
-def load(path: str | os.PathLike[str], what: str = "file",
-         max_bytes: int = MAX_JSON_BYTES, max_depth: int = MAX_JSON_DEPTH) -> Any:
-    """Read and parse one JSON file someone else may have written. Raises FileNotFoundError
-    if it doesn't exist and UnsafeJSONError for anything else that isn't plain JSON."""
+def read_bytes(path: str | os.PathLike[str], what: str = "file",
+               max_bytes: int = MAX_JSON_BYTES) -> bytes:
+    """The bytes of one regular file of at most `max_bytes`, never reading more than that.
+    Raises FileNotFoundError if it doesn't exist and UnsafeJSONError for a pipe, device,
+    folder or a file that is (or grows) too big."""
     path = Path(path)
     label = f"{what} {say(str(path), 120)}"
     try:
@@ -131,4 +134,12 @@ def load(path: str | os.PathLike[str], what: str = "file",
                 raise UnsafeJSONError(f"{label} is too big (over {max_bytes} bytes)")
     finally:
         os.close(fd)
-    return parse(b"".join(chunks), label, max_depth)
+    return b"".join(chunks)
+
+
+def load(path: str | os.PathLike[str], what: str = "file",
+         max_bytes: int = MAX_JSON_BYTES, max_depth: int = MAX_JSON_DEPTH) -> Any:
+    """Read and parse one JSON file someone else may have written. Raises FileNotFoundError
+    if it doesn't exist and UnsafeJSONError for anything else that isn't plain JSON."""
+    label = f"{what} {say(str(Path(path)), 120)}"
+    return parse(read_bytes(path, what, max_bytes), label, max_depth)

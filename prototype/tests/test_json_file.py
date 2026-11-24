@@ -35,6 +35,9 @@ HOSTILE = {
     "Infinity": b'{"x": -Infinity}',
     "duplicate key": b'{"report_type": "x", "report_type": "y"}',
     "huge number": b'{"x": ' + b"9" * 5000 + b"}",
+    # rig-report-v1 (0.5.56): NaN/Infinity were refused, but 1e400 became infinity.
+    "number that becomes infinity": b'{"x": 1e400}',
+    "number that becomes minus infinity": b'{"x": [-1.5e999]}',
     "bad utf-8": b'{"x": "\xff"}',
     "byte-order mark": b'\xef\xbb\xbf{"x": 1}',
     "empty": b"",
@@ -50,6 +53,11 @@ def test_loader_refuses_hostile_json(tmp_path: Path, name: str) -> None:
     f.write_bytes(HOSTILE[name])
     with pytest.raises(json_file.UnsafeJSONError):
         json_file.load(f, "test file")
+
+
+def test_big_but_finite_numbers_are_still_fine() -> None:
+    assert json_file.parse(b'{"a": 1.7e308, "b": -0.0, "c": 5e-324}') == {
+        "a": 1.7e308, "b": -0.0, "c": 5e-324}
 
 
 def test_loader_reads_plain_json_and_nested_within_the_limit(tmp_path: Path) -> None:
