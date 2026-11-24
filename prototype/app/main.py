@@ -8,11 +8,12 @@ import time
 import uuid
 from typing import Any, Callable
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from .config import Settings, get_settings
-from . import (audit_policy, client_address, key_rotation, observability, points,
+from . import (audit_policy, client_address, input_limits, key_rotation, observability, points,
                public_counts, rate_limit, review, rewards, schemas, tasks, vouches, workers)
 from .ledger import PAUSE_VERSION, CoordinatorPaused, HiddenTestRevealed, Ledger
 from .models import (ChallengeCreate, EnrollmentCreate, JobCreate, JobEnvelope, PauseRequest,
@@ -92,6 +93,10 @@ def create_app(settings: Settings | None = None,
     limiter = rate_limit.RateLimiter(settings.rate_limit_per_minute, settings.auth_failure_limit,
                                      settings.auth_failure_window_seconds, limiter_clock)
     app.state.limiter = limiter
+    # `input-limits-v1` (app/input_limits.py): body size and nesting limits. Added before the
+    # request logger below, so it runs inside it: refused bodies are still logged and counted.
+    app.add_middleware(input_limits.BodyLimit, max_bytes=settings.max_body_bytes)
+    app.add_exception_handler(RequestValidationError, input_limits.validation_error)
     # `public-counts-v1` (threat model #14): public job counts are batched per window.
     batched_counts = public_counts.BatchedCounts(settings.public_counts_interval_seconds,
                                                  ledger.status_counts)
@@ -604,7 +609,10 @@ def create_app(settings: Settings | None = None,
             "audit_policy": audit_policy.AUDIT_POLICY_VERSION}
 
     @app.get("/v1/rewards/report")
-    def reward_report(since: int = 0, until: int | None = None, sign: bool = False,
+    def reward_report(since: int = Query(default=0, ge=0, le=input_limits.MAX_TIMESTAMP),
+                      until: int | None = Query(default=None, ge=0,
+                                                le=input_limits.MAX_TIMESTAMP),
+                      sign: bool = False,
                       x_operator_token: str | None = Header(default=None)) -> dict[str, Any]:
         """Operator-only Phase 5 report. Operator-only because a live per-job settlement
         view could let a worker spot a failed hidden challenge right after submitting;

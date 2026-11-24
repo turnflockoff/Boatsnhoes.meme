@@ -329,6 +329,22 @@ Tested in software only.
 
 **Limits:** counts and lock-outs live in memory, so a restart clears them, and one coordinator process is assumed. "Client" means the connecting address: behind a home router, many machines share one address and its limits, and one rig with a bad key can lock the others on that address out for the window. (Behind your own reverse proxy, set `TRUSTED_PROXIES`; see 0.5.20 above.) Someone with many addresses gets many buckets; this slows a flood, it doesn't stop a distributed one (that needs the host's DDoS protection). A submitter could still queue jobs with up to 1000 points for a friend's rig to claim (fixed with `POINTS_TABLE`, see 0.5.22 above), so give the submitter token only to programs you run.
 
+## Implemented: hostile-input limits and a route-by-route fuzz (0.5.52, `input-limits-v1`)
+
+Tested in software only. First pass of the "code audit" item: every API route was sent broken and hostile input to look for crashes. It found five real problems, now fixed in `app/input_limits.py` and `app/models.py`:
+
+- **No body size limit.** Anyone, no login needed, could send a 1 GB body and the coordinator read all of it into memory before the field checks refused it. Now `MAX_BODY_BYTES` (default 262144 = 256 KiB, allowed 16 KiB to 4 MiB) is enforced before reading: a `Content-Length` over the limit gets `413` without reading a byte; a body sent without a length (chunked) is cut off with `413` as soon as it passes the limit; a broken `Content-Length` gets `400`. The largest honest request (a hidden test with every field at its maximum, every character an escaped emoji) is about 150 KB, so it fits.
+- **Deeply nested JSON crashed the request.** A few thousand `[` made Python's JSON reader run out of recursion: a `500` and a stack trace in the log, on any route. Bodies nested deeper than 32 levels now get `400` before parsing (no coordinator request nests deeper than 2; brackets inside strings don't count).
+- **A refused body was echoed back.** FastAPI's `422` repeats each wrong value (`"input": ...`): a secret typed into the wrong field, or a 4 MB string. And a number like `1e999` (infinity) in that echo couldn't be written as JSON, so the `422` itself crashed into a `500`. Errors now carry only `type`, `loc` and `msg`.
+- **Numbers too big for SQLite.** `GET /v1/rewards/report?until=2^70` crashed (`OverflowError`). `since`/`until` are now `0` to `2^53`, a `422` otherwise.
+- **Negative worker timestamps were accepted.** `started_at = -2^70` passed the "completed after started" check. `started_at`/`completed_at` are now `0` to `2^53`.
+- **Plain names only.** Worker names (registration and `target_worker`) must be 3-80 of `A-Z a-z 0-9 . _ : -`, so a name can't carry a newline, a NUL, a right-to-left override or HTML into logs, reports or pages. Capability lists: at most 16 lowercase names of up to 64 characters. Already-registered workers aren't touched; the rule applies to new registrations.
+- **Order:** the limit runs inside the request logger and rate limiter, so refused requests are still logged (path and status, never the body) and still count toward `RATE_LIMIT_PER_MINUTE`.
+- **The fuzz** (`tests/test_input_limits.py`): every API route, with valid operator, submitter and worker credentials, gets odd path segments, odd query values, 11 broken bodies and 19 hostile values in each field of a valid example (about 1,000 requests). A request may be refused, never crash (`5xx`) or show a stack trace. A new route or request type without an example makes the test fail, so it stays complete.
+- 38 new tests (1,063 in total). Each fix was switched off once on purpose (13 changes); all were caught, two only after a sharper test was added (see BUILD-LOG 0.5.52).
+
+**Limits:** this checks crashes and resource use from single requests, not slow-sending clients (that's the web server's job: run uvicorn with `--timeout-keep-alive` and behind a proxy with its own limits) and not a flood from many addresses (threat model #17). A fuzz finds what it tries; it is not a full audit.
+
 ## Safety and correctness boundaries
 
 The Ed25519 signature shows a manifest came from the holder of the coordinator's private key, but only to a worker that checks it against the right public key. The demo worker verifies it before executing. Result hashes are integrity identifiers, not proofs of execution. The coordinator is trusted in this MVP. Rewards are simulated ledger points only; no token minting, private-key handling, wallet signing, or on-chain transfer is implemented.
