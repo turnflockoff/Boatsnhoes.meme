@@ -41,8 +41,8 @@ Address = ipaddress.IPv4Address | ipaddress.IPv6Address
 # Walk at most this many hops from the right. Real chains are 1-3 proxies long.
 MAX_HOPS = 20
 
-_IPV4_WITH_PORT = re.compile(r"^(\d{1,3}(?:\.\d{1,3}){3}):\d{1,5}$")
-_BRACKETED_V6 = re.compile(r"^\[([0-9A-Fa-f:.]+)\](?::\d{1,5})?$")
+_IPV4_WITH_PORT = re.compile(r"^(\d{1,3}(?:\.\d{1,3}){3}):\d{1,5}\Z")
+_BRACKETED_V6 = re.compile(r"^\[([0-9A-Fa-f:.]+)\](?::\d{1,5})?\Z")
 
 
 def parse_trusted_proxies(raw: str | Iterable[str] | None) -> tuple[Network, ...]:

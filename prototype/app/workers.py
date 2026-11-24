@@ -30,7 +30,7 @@ from pathlib import Path
 from .ledger import CoordinatorPaused, Ledger
 from .security import sha256_text
 
-OWNER_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+OWNER_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}\Z")
 MIN_TTL, MAX_TTL = 60, 7 * 86400
 
 

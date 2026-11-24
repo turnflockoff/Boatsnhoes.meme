@@ -44,9 +44,11 @@ from typing import Any
 
 from packaging.version import InvalidVersion, Version
 
+from . import json_file
 from .security import canonical_json
 from .signing import (ManifestSigner, SigningKeyError, fingerprint, parse_public_key,
                       verify_manifest)
+from .worker_guard import say
 
 RULE = "release-sign-v1"
 MANIFEST_FORMAT = "bnh-release/1"
@@ -57,9 +59,9 @@ SIGN_PURPOSE = "bnh-release-signature/1"  # separate from job and report signatu
 SUMS_NAME = "SHA256SUMS"
 MIN_THRESHOLD = 2
 MAX_FILES = 5000
-NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
-HEX64 = re.compile(r"^[0-9a-f]{64}$")
-COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}\Z")
+HEX64 = re.compile(r"^[0-9a-f]{64}\Z")
+COMMIT_RE = re.compile(r"^[0-9a-f]{40}\Z")
 # Folders a running rig keeps next to the code (keys, databases, caches, virtualenvs).
 IGNORED_DIRS = {"__pycache__", "data", "venv", "node_modules"}
 
@@ -106,12 +108,15 @@ def _dump(value: Any) -> bytes:
 
 
 def _load_json(path: Path, what: str) -> Any:
+    # Release files come from whoever published the download: read them with the limits in
+    # app/json_file.py (`json-file-v1`): size, depth, no NaN, no key written twice.
     try:
-        return json.loads(Path(path).read_text(encoding="utf-8"))
+        return json_file.load(path, what)
     except FileNotFoundError as exc:
-        raise ReleaseError(f"{what} {path} does not exist") from exc
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ReleaseError(f"{what} {path} is not readable JSON") from exc
+        raise ReleaseError(f"{what} {say(str(path))} does not exist") from exc
+    except (OSError, ValueError) as exc:
+        raise ReleaseError(str(exc) if isinstance(exc, json_file.UnsafeJSONError)
+                           else f"{what} {say(str(path))} is not readable") from None
 
 
 # ---- paths ------------------------------------------------------------------------------

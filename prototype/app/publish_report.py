@@ -37,6 +37,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import sqlite3
 import sys
@@ -44,11 +45,13 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import rewards
+from . import json_file, rewards
 from .ledger import Ledger
 from .ledger_compare import CompareError, compare_copies
 from .ledger_copy import COPY_FORMAT, copy_info
+from .json_file import MAX_REPORT_BYTES
 from .signing import fingerprint, parse_public_key
+from .worker_guard import say
 
 RULE = "reports-v1"
 INDEX_FORMAT = "bnh-reports-index/1"
@@ -91,9 +94,9 @@ def load_index(folder: Path) -> dict[str, Any]:
     if not path.exists():
         return empty_index()
     try:
-        index = json.loads(path.read_text())
+        index = json_file.load(path, INDEX_NAME)
     except (OSError, ValueError) as exc:
-        raise PublishError(f"{path} is not readable JSON: {exc}") from exc
+        raise PublishError(f"{INDEX_NAME} is not readable: {exc}") from None
     if not isinstance(index, dict) or index.get("format") != INDEX_FORMAT \
             or not isinstance(index.get("periods"), list):
         raise PublishError(f"{path} is not a {INDEX_FORMAT} index")
@@ -136,11 +139,11 @@ def plan(report_path: Path, copy_path: Path, folder: Path, public_key: str | Non
     if min_wait_hours < 0:
         raise PublishError("--min-wait-hours can't be negative")
     try:
-        report = json.loads(report_path.read_text())
+        report = json_file.load(report_path, "report", max_bytes=MAX_REPORT_BYTES)
     except FileNotFoundError:
-        raise PublishError(f"file not found: {report_path}") from None
+        raise PublishError(f"file not found: {say(str(report_path))}") from None
     except ValueError as exc:
-        raise PublishError(f"{report_path.name} is not JSON: {exc}") from None
+        raise PublishError(str(exc)) from None
     if not isinstance(report, dict) or report.get("report_type") != rewards.REPORT_TYPE:
         raise PublishError(f"{report_path.name} is not a reward report")
     if "signature" not in report:
@@ -148,9 +151,14 @@ def plan(report_path: Path, copy_path: Path, folder: Path, public_key: str | Non
     problems = rewards.check_signature(report, key)
     if problems:
         raise PublishError("signature check failed: " + "; ".join(problems))
-    if not (report.get("checks") or {}).get("ok"):
+    checks = report.get("checks")
+    if not isinstance(checks, dict) or checks.get("ok") is not True:
         raise PublishError("the report fails its own checks")
-    since, until = int(report["period"]["since"]), int(report["period"]["until"])
+    period = report.get("period")
+    if not isinstance(period, dict) or not _is_int(period.get("since")) \
+            or not _is_int(period.get("until")):
+        raise PublishError("the report has no valid period")
+    since, until = period["since"], period["until"]
 
     info = _is_copy(copy_path)
     if info["until"] != until:
@@ -167,6 +175,11 @@ def plan(report_path: Path, copy_path: Path, folder: Path, public_key: str | Non
         raise PublishError("the report does not match the copy: " + "; ".join(problems[:5]))
 
     index = load_index(folder)
+    for entry in index["periods"]:
+        label, problem = _entry_shape(entry)
+        if problem:
+            raise PublishError(f"{INDEX_NAME} is damaged ({label}: {problem}); run "
+                               "`publish_report check` and fix it first")
     pid = period_id(since, until)
     if any(p.get("id") == pid for p in index["periods"]) or (folder / pid).exists():
         raise PublishError(f"period {pid} is already published; published files are never "
@@ -187,15 +200,11 @@ def plan(report_path: Path, copy_path: Path, folder: Path, public_key: str | Non
                                f"{last['id']}: " + "; ".join(result["problems"][:5]))
         previous = {"id": last["id"], "history_unchanged": True}
 
-    totals = report.get("totals") or {}
     return {
         "id": pid, "since": since, "until": until, "published_at": now,
-        "scoring_version": report["scoring"]["version"],
+        **_summary(report),
         "report_sha256": report["report_sha256"],
         "signed_by": {"public_key": key, "fingerprint": fingerprint(key)},
-        "rigs": len(report.get("workers") or []),
-        "accepted_results": int(totals.get("accepted_results", 0)),
-        "payable_points": int(totals.get("payable_points", 0)),
         "files": {
             "report": {"path": f"{pid}/{REPORT_NAME}", "sha256": _sha256(report_path),
                        "bytes": report_path.stat().st_size},
@@ -204,6 +213,22 @@ def plan(report_path: Path, copy_path: Path, folder: Path, public_key: str | Non
         },
         "previous": previous,
     }
+
+
+def _summary(report: dict[str, Any]) -> dict[str, Any]:
+    """The numbers the /reports/ page shows for a period, taken from its signed report."""
+    totals = report.get("totals")
+    totals = totals if isinstance(totals, dict) else {}
+    workers = report.get("workers")
+    scoring = report.get("scoring")
+
+    def whole(value: Any) -> Any:
+        return value if _is_int(value) else None
+
+    return {"scoring_version": scoring.get("version") if isinstance(scoring, dict) else None,
+            "rigs": len(workers) if isinstance(workers, list) else 0,
+            "accepted_results": whole(totals.get("accepted_results", 0)),
+            "payable_points": whole(totals.get("payable_points", 0))}
 
 
 def _write_json(path: Path, data: Any) -> None:
@@ -245,12 +270,73 @@ def publish(report_path: Path, copy_path: Path, folder: Path, public_key: str | 
     return entry
 
 
+# Fields `add` writes. `check` refuses anything else, because the page shows the index to
+# visitors and CI must vouch for every value on it (`json-file-v1`).
+INDEX_KEYS = {"format", "rule", "notice", "site", "coordinator", "periods"}
+ENTRY_KEYS = {"id", "since", "until", "published_at", "scoring_version", "report_sha256",
+              "signed_by", "rigs", "accepted_results", "payable_points", "files", "previous"}
+PERIOD_ID_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{4}Z_\d{4}-\d{2}-\d{2}T\d{4}Z")
+
+
+def _is_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and 0 <= value < 2 ** 53
+
+
+def _signed_by(key: Any) -> dict[str, str] | None:
+    """The `signed_by` block `add` writes for this key, or None if it isn't a valid key."""
+    if not isinstance(key, str):
+        return None
+    try:
+        parse_public_key(key)
+    except ValueError:
+        return None
+    if key != key.strip().lower():
+        return None
+    return {"public_key": key, "fingerprint": fingerprint(key)}
+
+
+def _entry_shape(p: Any) -> tuple[str, str | None]:
+    """(printable id, problem or None) for one index entry, before anything else uses it."""
+    if not isinstance(p, dict):
+        return "?", "an index entry is not an object"
+    pid = p.get("id")
+    label = say(str(pid), 60)
+    if not isinstance(pid, str) or not PERIOD_ID_RE.fullmatch(pid):
+        return label, "index entry has no valid period id"
+    extra = sorted(set(p) - ENTRY_KEYS)
+    missing = sorted(ENTRY_KEYS - set(p))
+    if extra or missing:
+        return label, ("index entry has unexpected fields " + say(", ".join(extra), 80)
+                       if extra else "index entry is incomplete (" + ", ".join(missing) + ")")
+    if not all(_is_int(p[k]) for k in ("since", "until", "published_at", "rigs",
+                                         "accepted_results", "payable_points")):
+        return label, "index entry has a number that isn't a whole number"
+    files = p["files"]
+    if not isinstance(files, dict) or set(files) != {"report", "ledger_copy"} or not all(
+            isinstance(files[k], dict) and set(files[k]) == {"path", "sha256", "bytes"}
+            for k in files):
+        return label, "index entry's files block is malformed"
+    if files["report"]["path"] != f"{pid}/{REPORT_NAME}" \
+            or files["ledger_copy"]["path"] != f"{pid}/{COPY_NAME}":
+        # The page links to these paths and check reads them: only the two fixed names.
+        return label, "index entry points at files outside its own period folder"
+    if not isinstance(p["signed_by"], dict) or _signed_by(p["signed_by"].get("public_key")) \
+            != p["signed_by"]:
+        return label, ("index entry's signed_by is not a valid key with its own fingerprint "
+                       "(the page shows that fingerprint)")
+    return label, None
+
+
 def check_folder(folder: Path, public_keys: list[str] | str | None = None) -> list[str]:
     """Re-check everything published. Returns problems; empty means all good.
 
     With `public_keys` (or BNH_COORDINATOR_KEY), every period must be signed by one of them;
     after a key rotation, pass the old and the new key. Without, it only checks that the
-    folder is consistent with itself, which proves nothing about who signed it."""
+    folder is consistent with itself, which proves nothing about who signed it.
+
+    The index is what the /reports/ page shows, so every value in it (rig, result and point
+    counts, scoring version, fingerprints, file sizes, "history unchanged") must match the
+    signed report and copy, not just the file hashes (`json-file-v1`)."""
     folder = Path(folder)
     if not (folder / INDEX_NAME).exists():
         return [f"{INDEX_NAME} is missing"]
@@ -263,51 +349,94 @@ def check_folder(folder: Path, public_keys: list[str] | str | None = None) -> li
     trusted = {_trusted_key(k) for k in public_keys} if public_keys else (
         {_trusted_key(None)} if os.environ.get("BNH_COORDINATOR_KEY") else set())
     problems: list[str] = []
+    extra = sorted(set(index) - INDEX_KEYS)
+    if extra:
+        problems.append(f"{INDEX_NAME} has unexpected fields: {say(', '.join(extra), 80)}")
+    for name, value in (("rule", RULE), ("notice", NOTICE), ("site", SITE_URL)):
+        if index.get(name) != value:
+            problems.append(f"{INDEX_NAME}: '{name}' was changed")
+    good = []
     listed = set()
-    periods = sorted(index["periods"], key=lambda p: int(p.get("until", 0)))
+    for p in index["periods"]:
+        label, problem = _entry_shape(p)
+        if problem:
+            problems.append(f"{label}: {problem}")
+            if isinstance(p, dict) and isinstance(p.get("id"), str):
+                listed.add(p["id"])
+            continue
+        if p["id"] in listed:
+            problems.append(f"{label}: listed twice")
+            continue
+        listed.add(p["id"])
+        good.append(p)
+    periods = sorted(good, key=lambda p: p["until"])
+    newest = periods[-1]["signed_by"] if periods and len(good) == len(index["periods"]) \
+        else None
+    if periods and len(good) == len(index["periods"]) and index.get("coordinator") != newest:
+        problems.append(f"{INDEX_NAME}: 'coordinator' (shown on the page) isn't the key that "
+                        "signed the newest period")
+    if not index["periods"] and index.get("coordinator") is not None:
+        problems.append(f"{INDEX_NAME}: 'coordinator' is set but nothing is published")
     previous_copy: Path | None = None
     previous_until = None
+    previous_id = None
     for p in periods:
-        pid = str(p.get("id"))
-        listed.add(pid)
-        try:
-            since, until = int(p["since"]), int(p["until"])
-            report_meta, copy_meta = p["files"]["report"], p["files"]["ledger_copy"]
-            key = str(p["signed_by"]["public_key"])
-        except (KeyError, TypeError, ValueError):
-            problems.append(f"{pid}: index entry is incomplete")
-            continue
+        pid = p["id"]
+        since, until = p["since"], p["until"]
+        report_meta, copy_meta = p["files"]["report"], p["files"]["ledger_copy"]
+        key = p["signed_by"]["public_key"]
         if pid != period_id(since, until):
             problems.append(f"{pid}: folder name doesn't match its period")
         if previous_until is not None and since < previous_until:
             problems.append(f"{pid}: overlaps the period before it")
+        if p["published_at"] < until:
+            problems.append(f"{pid}: published_at is before the period ended")
+        expected_previous = None if previous_id is None else {"id": previous_id,
+                                                              "history_unchanged": True}
+        if p["previous"] != expected_previous:
+            problems.append(f"{pid}: 'previous' doesn't name the period before it")
         report_path = folder / report_meta["path"]
         copy_path = folder / copy_meta["path"]
-        missing = [x.name for x in (report_path, copy_path) if not x.exists()]
+        if (folder / pid).is_symlink() or report_path.is_symlink() or copy_path.is_symlink():
+            problems.append(f"{pid}: a published file or folder is a symlink")
+            continue
+        missing = [x.name for x in (report_path, copy_path) if not x.is_file()]
         if missing:
             problems.append(f"{pid}: missing {', '.join(missing)}")
             continue
         for path, meta in ((report_path, report_meta), (copy_path, copy_meta)):
             if _sha256(path) != meta.get("sha256"):
                 problems.append(f"{pid}: {path.name} doesn't match its sha256 in the index")
+            if path.stat().st_size != meta.get("bytes"):
+                problems.append(f"{pid}: {path.name}'s size in the index is wrong")
         sums = folder / pid / SUMS_NAME
         expected = (f"{report_meta.get('sha256')}  {REPORT_NAME}\n"
                     f"{copy_meta.get('sha256')}  {COPY_NAME}\n")
-        if not sums.exists() or sums.read_text() != expected:
+        if not sums.is_file() or sums.is_symlink() or sums.stat().st_size > 4096 \
+                or sums.read_bytes() != expected.encode():
             problems.append(f"{pid}: {SUMS_NAME} is missing or doesn't match the index")
         if trusted and key not in trusted:
             problems.append(f"{pid}: signed by {fingerprint(key)}, not a key you trust ("
                             + ", ".join(sorted(fingerprint(k) for k in trusted)) + ")")
         try:
-            report = json.loads(report_path.read_text())
+            report = json_file.load(report_path, REPORT_NAME, max_bytes=MAX_REPORT_BYTES)
             info = _is_copy(copy_path)
         except (ValueError, PublishError) as exc:
             problems.append(f"{pid}: {exc}")
             continue
-        if info["until"] != until or (report.get("period") or {}).get("until") != until:
-            problems.append(f"{pid}: report, copy and index disagree on when the period ends")
+        if not isinstance(report, dict) or report.get("report_type") != rewards.REPORT_TYPE:
+            problems.append(f"{pid}: {REPORT_NAME} is not a reward report")
+            continue
+        if info["until"] != until or (report.get("period") or {}).get("until") != until \
+                or (report.get("period") or {}).get("since") != since:
+            problems.append(f"{pid}: report, copy and index disagree on the period")
         if report.get("report_sha256") != p.get("report_sha256"):
             problems.append(f"{pid}: report_sha256 doesn't match the index")
+        shown = _summary(report)
+        for name, value in shown.items():
+            if p[name] != value:
+                problems.append(f"{pid}: the index shows {name} {say(p[name], 40)}, the "
+                                f"signed report says {say(value, 40)}")
         for issue in rewards.verify_report(report, Ledger(copy_path, untrusted=True), key):
             problems.append(f"{pid}: {issue}")
         if previous_copy is not None:
@@ -318,10 +447,10 @@ def check_folder(folder: Path, public_keys: list[str] | str | None = None) -> li
                                     + "; ".join(result["problems"][:3]))
             except CompareError as exc:
                 problems.append(f"{pid}: can't compare with the period before it: {exc}")
-        previous_copy, previous_until = copy_path, until
+        previous_copy, previous_until, previous_id = copy_path, until, pid
     for child in sorted(folder.iterdir()):
         if child.is_dir() and not child.name.startswith(".") and child.name not in listed:
-            problems.append(f"folder {child.name} is not listed in {INDEX_NAME}")
+            problems.append(f"folder {say(child.name, 60)} is not listed in {INDEX_NAME}")
     return problems
 
 

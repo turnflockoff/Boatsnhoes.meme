@@ -60,8 +60,8 @@ DEFAULT_LICENSES = PROTOTYPE_DIR / "licenses.json"
 INSTALLER_PACKAGES = {"pip", "setuptools", "wheel"}
 
 _HASH_RE = re.compile(r"--hash[=\s]+(\S+)")
-_SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
-_EXACT_PIN_RE = re.compile(r"^==\s*([A-Za-z0-9][A-Za-z0-9.+!_-]*)$")
+_SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}\Z")
+_EXACT_PIN_RE = re.compile(r"^==\s*([A-Za-z0-9][A-Za-z0-9.+!_-]*)\Z")
 
 # Plain-text license names seen in package metadata (the `License` field or a classifier),
 # mapped to SPDX ids. Only unambiguous names; "BSD License" alone says no clause count.

@@ -62,9 +62,9 @@ RISKY_TRIGGERS = {
     "workflow_run": "runs with this repo's access after a workflow a fork can start",
 }
 
-_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
-_ACTION_RE = re.compile(r"^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)((?:/[^@\s]+)?)@(\S+)$")
-_DOCKER_RE = re.compile(r"^docker://[^@\s]+@sha256:[0-9a-f]{64}$")
+_SHA_RE = re.compile(r"^[0-9a-f]{40}\Z")
+_ACTION_RE = re.compile(r"^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)((?:/[^@\s]+)?)@(\S+)\Z")
+_DOCKER_RE = re.compile(r"^docker://[^@\s]+@sha256:[0-9a-f]{64}\Z")
 _USES_LINE_RE = re.compile(
     r"""^\s*(?:-\s+)?uses:\s*(?P<q>['"]?)(?P<ref>[^\s'"#]+)(?P=q)\s*(?:\#\s*(?P<comment>.*?))?\s*$""")
 _VERSION_COMMENT_RE = re.compile(r"^v\d+(\.\d+)*\b")
