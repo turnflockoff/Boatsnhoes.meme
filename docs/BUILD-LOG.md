@@ -898,3 +898,29 @@
 2. **Rules beat logos.** Logos and screenshots are easy to copy. "We never DM first and never ask for your recovery phrase" can't be faked, because the scam needs to break it.
 3. **The recovery phrase is the wallet.** Whoever has those 12 or 24 words owns the money; no real support person ever needs them.
 4. **Report security holes quietly.** Posting the details publicly helps attackers before it's fixed; that's why the page asks for an issue with no details (and why turning on GitHub's private reporting is on your list).
+
+## 2026-11-24 (12:30 UTC): Throwing junk at every door of the coordinator, and the five things that broke (0.5.52)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions. "Code audit" was open, and the cheapest useful first step needs nobody's decision: send every API route broken and hostile input and see what crashes. Before strangers can reach the coordinator, it should refuse bad requests politely instead of falling over.
+
+**Shipped (`input-limits-v1`)**
+- **A fuzz of every route** (`tests/test_input_limits.py`). With valid operator, submitter and worker logins, each route gets odd path segments (`%00`, `../`, 5,000 letters), odd query values, 11 broken bodies (empty, `null`, `1e999`, cut-off JSON, 3,000 brackets, invalid bytes) and 19 hostile values in each field of a valid example (huge and negative numbers, NUL, newlines, right-to-left marks, 10,000 letters, SQL-looking text, lists, objects): about 1,000 requests. The rule: refusing is fine, crashing (`5xx`) or showing a stack trace is not. A new route or request type without an example makes it fail, so it can't quietly go stale.
+- **What it found, and the fixes:**
+  1. **No size limit on what you send.** Anyone, no login needed, could send a 1 GB body and the coordinator read all of it into memory before saying "too long". Now anything over **256 KiB** (`MAX_BODY_BYTES`) gets `413 Payload Too Large`: straight away if the request says its size up front (not one byte read), or the moment a request that doesn't say its size passes the limit. The biggest honest request is about 150 KB, so nothing real is affected.
+  2. **Nested brackets crashed the request.** `[[[[...` 5,000 deep made Python's JSON reader give up with a `500` and a stack trace in the log. Now anything nested deeper than 32 levels gets `400` before it's read as JSON. Real requests nest at most 2 deep.
+  3. **Error messages repeated what you sent.** When a field was wrong, the `422` reply quoted it back: a secret pasted into the wrong box, or a 4 MB string. And `1e999` (which Python reads as infinity) couldn't be written back out, so the error message itself crashed into a `500`. Errors now say only what was wrong and where.
+  4. **Numbers too big for the database.** Asking for a reward report "until 2^70" crashed SQLite (`OverflowError`). Dates are now limited to 0 through 2^53 (about 285,000 years from now).
+  5. **A worker could claim it started a job before time began.** `started_at = -2^70` was accepted. Now 0 or later.
+  - Also: **worker names are plain** (3-80 of letters, digits, `. _ : -`), so a name can't sneak a newline, an invisible character or HTML into logs, reports or pages; **capability lists** are at most 16 short lowercase names.
+- **Refused requests still count.** The new check runs inside the request logger and the per-address speed limit, so a flood of oversized requests still gets logged (path and status only, never the body) and still gets slowed down with `429`.
+- **Proof.**
+  - 38 new tests, **1,063 total, all passing** (Python 3.13, installed from the hash-checked lock; one release test is skipped until the work is committed, as designed).
+  - Checked on a real web server (uvicorn), not just the test client: a 1 MB body got `413`, the same 1 MB sent without a size got `413`, 5,000-deep brackets got `400`, `/health` stayed `200`, no stack trace in the log.
+  - I switched each fix off on purpose, 13 ways (no up-front size check, no cut-off while reading, off-by-one at the limit, no depth check, counting brackets inside text, echoing input, no error handler, unbounded report dates, negative start times, unlimited capabilities, any worker name...). 11 were caught at once. The other 2 slipped past: the up-front size check (the cut-off while reading covered for it, so I added a test that fails if even one byte is read), and one report date (my break hit `since`, which another check already covers; breaking `until` was caught).
+- **Honest limits:** a fuzz only finds what it tries. It checks single requests, not a client that sends one byte a minute (the web server's timeouts handle that) or a flood from thousands of addresses (needs a protected host before going public, threat model #17). It's a first pass of the code audit, not the audit.
+
+**What you learned**
+1. **Check the size before you read.** A server that reads the whole request and *then* checks it has already spent the memory. The `Content-Length` header lets it say no first; for requests without one, it counts as it reads and stops at the limit.
+2. **Fuzzing is throwing junk on purpose.** Instead of guessing which bad input matters, send lots of kinds to every door and only ask "did anything crash?". It found 5 problems no one had written a test for.
+3. **Error messages can leak.** Repeating someone's input back is friendly for debugging, but it can repeat a secret or a huge payload. Saying *where* the problem is ("body → enrollment_code: wrong type") is enough.
+4. **Computers have number limits.** Python can handle any size of whole number, but SQLite stops at about 9.2 quintillion (2^63). Passing a bigger one across that border crashes unless something checks first.
