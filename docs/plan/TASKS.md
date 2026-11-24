@@ -1,5 +1,5 @@
 # BOATS N HOES: Project Task List (Claude + dev work)
-**Version:** 0.5.50 | **Last updated:** 2026-11-24 | Personal to-dos live in USER_TODO.md.
+**Version:** 0.5.51 | **Last updated:** 2026-11-24 | Personal to-dos live in USER_TODO.md.
 
 ## Phase 0: Foundation
 - [x] Buy boatsnhoes.meme
@@ -118,7 +118,8 @@
 - [x] Desktop/mobile testing (390, 768, 1440 px)
 - [x] Subpages restyled to match the orange/black homepage
 - [x] Public logbook page (`/reports/`): lists published periods from `reports/index.json`, how to check them, FAQ; linked from /contribute (homepage unchanged)
-- [ ] Rebuild or upload Mine, Tokenomics, Stay Safe pages
+- [x] Stay Safe page rebuilt in the orange/black subpage style *(`/stay-safe`, 0.5.51: honest status (no coin, token, presale, airdrop, casino or miner yet), six "we will never" rules, the only official places (site and GitHub; social accounts "not announced yet"), how signed downloads will be checked (`sha256sum -c`, `app.release verify`, 2+ signers), how to report a fake or a security hole, FAQ. Linked from the /contribute and /reports/ footers and the contribute scam FAQ; homepage unchanged. Site and accessibility checks pass; no sideways scroll at 390/768/1440 px; new `tests/test_site_pages.py` (31 tests) also guards every subpage against hype/money claims. Your own draft can still replace it: upload it as `stay-safe.html`)*
+- [ ] Rebuild or upload Mine and Tokenomics pages (need the supply/launch decisions first)
 - [ ] Litepaper, Casino coming-soon, Meme Lab
 - [x] Waitlist backend: Netlify Forms (`gpu-testers`)
 - [x] Netlify project created (`boatsnhoes-dik6`), form detection on

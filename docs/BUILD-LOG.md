@@ -873,3 +873,28 @@
 2. **A screen reader reads names, not pictures.** A logo link with no text is announced as just "link". An `aria-label="Boats n Hoes home"` gives it words; `alt=""` tells it an image is only decoration.
 3. **Keyboard users need a shortcut past the menu.** A hidden "Skip to content" link that appears when you press Tab saves pressing Tab through every menu item on every page.
 4. **Two tools beat one.** Each checker had a blind spot the other covered (gradients for axe, script-made content for mine), so running both found more than either alone.
+
+## 2026-11-24 (UTC): A "Stay safe" page, because fakes show up before the real coin does (0.5.51)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions. On the website list, "Rebuild or upload Mine, Tokenomics, Stay Safe pages" was open; Mine and Tokenomics depend on supply and launch choices you haven't made, but Stay Safe doesn't. It answers SECURITY threat #2 (fake sites, fake miners, wallet drainers, fake admins), which is the most likely way someone gets hurt by this project's name before anything exists.
+
+**Shipped**
+- **New page `/stay-safe`** (`stay-safe.html`, same orange/black style as /contribute and /reports/):
+  - A plain callout: **there is no $BNH coin** (no token, presale, airdrop, wallet, exchange listing, casino or miner download). Anyone selling one is not us.
+  - **Six "we will never" rules** people can test any message against: ask for a recovery phrase, DM first, sell early coins, ask you to connect a wallet, send software by DM (or need admin rights / antivirus off), promise money.
+  - **Only two official places:** boatsnhoes.meme and the GitHub repo, with the common look-alike tricks (swapped letters, extra words, other endings). Social accounts are listed as **"not announced yet"**; I didn't invent any handles.
+  - **How to check a download** once one exists: `sha256sum -c` and the signed-release check from 0.5.49 (at least two named signers, signer list posted first). It says clearly that nothing is released yet.
+  - **How to report a fake** (a GitHub issue) and a security hole (an issue *without* details, so it isn't made public), and what to do after a loss (and that "recovery services" charging a fee are a second scam).
+- **Linked** from the footers of /contribute and /reports/ and from the contribute FAQ answer about scam DMs. **Your homepage is unchanged.** A tiny new `assets/nav.js` only opens and closes the phone menu.
+- **A guard for every subpage:** new tests fail if any subpage (homepage excluded) says things like "to the moon", "100x", "guaranteed", "risk-free", "earn $50", "presale is live" or "claim your", including in the hidden share-card text. They also check the safety page keeps its honest statements, links only to our own site and GitHub, and passes the website and accessibility checkers.
+- **Proof.**
+  - 31 new tests, **1,025 total, all passing** (one release test only runs once the work is committed, as designed). Website check: 15 pass, 3 notes, no failures. Accessibility check: all 6 pages pass (homepage notes unchanged).
+  - In a real Chromium browser at phone (390 px), tablet (768 px) and desktop (1440 px) widths: no sideways scrolling, the phone menu opens and closes, no script errors.
+  - I broke things 12 ways on purpose (removed each footer link, slipped in "Presale is live!" and "To the moon", hype in the share-card description, a Telegram link, removed the "no coin" line, an image without alt text, a broken share card, risky code in nav.js, dropped the page from the live check). All were caught, but two only after I sharpened the tests: the "no coin" line also lived in the share-card text, and the FAQ link hid a missing footer link.
+- **Honest limits:** a word list can't catch every hype claim, only the common ones; it's a safety net, not an editor. The page is advice, not protection: it only helps people who read it. If you have your own Stay Safe draft, it can replace this one (USER_TODO).
+
+**What you learned**
+1. **Scammers move first.** A recognisable name with no real coin yet is the perfect bait: fake presales and "airdrops" can't be compared against anything real, so a page saying "none of this exists" is the comparison.
+2. **Rules beat logos.** Logos and screenshots are easy to copy. "We never DM first and never ask for your recovery phrase" can't be faked, because the scam needs to break it.
+3. **The recovery phrase is the wallet.** Whoever has those 12 or 24 words owns the money; no real support person ever needs them.
+4. **Report security holes quietly.** Posting the details publicly helps attackers before it's fixed; that's why the page asks for an issue with no details (and why turning on GitHub's private reporting is on your list).

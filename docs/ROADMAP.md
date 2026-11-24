@@ -113,6 +113,7 @@ This roadmap separates implemented repository assets from proposed work. A check
 - [ ] Verify HTTPS, canonical URL, mobile layout, and outbound links. *(Checker built, 0.5.45, `site-check-v1`: `python -m app.site_check static` checks links, files, share cards and CSP fit offline (CI runs it); `live` checks headers, http→https, www→bare domain, hidden folders and the share image on the real site. Not yet run against boatsnhoes.meme: this sandbox can't reach it; the `site-check` GitHub workflow can. Outbound links to other sites aren't fetched.)*
 - [x] Add a custom domain only after DNS ownership and target are confirmed. *(boatsnhoes.meme, owner confirmed DNS 2026-11-21.)*
 - [x] Check every page for common accessibility problems, offline in CI. *(`a11y-check-v1`, 0.5.50: `python -m app.a11y_check`; subpages pass, homepage findings are notes for the owner. Cross-checked with axe-core in a real browser. A pass isn't a full accessibility audit.)*
+- [x] Publish a "Stay safe" page against fake sites, tokens and downloads. *(`/stay-safe`, 0.5.51: no coin/presale/airdrop/miner exists yet; what the project will never do; the only official places; how signed downloads will be checked; how to report a fake. Linked from /contribute and /reports/ footers, homepage unchanged. Content guard in tests: no hype or money claims on any subpage.)*
 - [ ] Add deployment status to README after the site is actually live.
 
 ## Guardrails
