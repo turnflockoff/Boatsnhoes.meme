@@ -177,6 +177,28 @@ def request_json(client: httpx.Client, method: str, url: str, *,
     except httpx.HTTPError as exc:
         raise CoordinatorError(f"could not reach the coordinator ({type(exc).__name__})") from exc
     try:
+        body = read_limited(response, max_bytes=max_bytes, deadline=deadline,
+                            started=started, clock=clock)
+    finally:
+        response.close()
+    try:
+        data = parse_json(body)
+    except CoordinatorError:
+        if 200 <= response.status_code < 300:
+            raise
+        data = None
+    if 200 <= response.status_code < 300 and not isinstance(data, dict):
+        raise CoordinatorError("reply is not a JSON object")
+    return Reply(response.status_code, response.headers, data)
+
+
+def read_limited(response: httpx.Response, *, max_bytes: int, deadline: float, started: float,
+                 clock: Callable[[], float]) -> bytes:
+    """Read a streamed reply's raw body within the limits, or raise CoordinatorError:
+    compressed replies refused, at most `max_bytes` (checked against Content-Length before
+    reading, then while reading), done within `deadline` seconds of `started`. Doesn't
+    close the response; the caller does. Shared with app/operator_client.py."""
+    try:
         encoding = response.headers.get("content-encoding", "identity").strip().lower()
         if encoding not in ("", "identity"):
             raise CoordinatorError(f"compressed reply ({say(encoding, 20)}) refused")
@@ -198,17 +220,7 @@ def request_json(client: httpx.Client, method: str, url: str, *,
                 raise CoordinatorError(f"reply too big (over {max_bytes} bytes)") from None
     except httpx.HTTPError as exc:
         raise CoordinatorError(f"reply cut off ({type(exc).__name__})") from exc
-    finally:
-        response.close()
-    try:
-        data = parse_json(bytes(body))
-    except CoordinatorError:
-        if 200 <= response.status_code < 300:
-            raise
-        data = None
-    if 200 <= response.status_code < 300 and not isinstance(data, dict):
-        raise CoordinatorError("reply is not a JSON object")
-    return Reply(response.status_code, response.headers, data)
+    return bytes(body)
 
 
 def check_worker_key(key: Any) -> str:

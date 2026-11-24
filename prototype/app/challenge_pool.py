@@ -48,6 +48,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import secrets
 import sys
 import time
@@ -60,7 +61,9 @@ from typing import Any
 import httpx
 
 from app import tasks
+from app.operator_client import OperatorClient, ReplyRefused, check_operator_url
 from app.security import sha256_text
+from app.worker_guard import JOB_ID_PATTERN, say
 
 POOL_FORMAT = "bnh-test-pool/1"
 POOL_POLICY = "test-pool-v1"
@@ -250,12 +253,26 @@ def status_text(status: dict[str, Any]) -> str:
 
 # ---- issuing ----------------------------------------------------------------------------
 
+# Rig names as the coordinator accepts them (models.WORKER_ID_PATTERN).
+RIG_NAME = re.compile(r"[A-Za-z0-9._:-]{3,80}")
+
+
 def _detail(response: httpx.Response) -> str:
+    """The coordinator's error message, safe to print (`operator-client-v1`: control codes
+    become `?`, cut to 200 characters)."""
     try:
         body = response.json()
     except ValueError:
         return ""
-    return str(body.get("detail", ""))[:200] if isinstance(body, dict) else ""
+    if not isinstance(body, dict) or "detail" not in body:
+        return ""
+    value = body["detail"]
+    return say(value if isinstance(value, str) else json.dumps(value))
+
+
+def _lost(exc: httpx.HTTPError) -> str:
+    why = say(str(exc)) if isinstance(exc, ReplyRefused) else exc.__class__.__name__
+    return f"lost contact with the coordinator ({why})"
 
 
 def issue_tests(path: Path, client: httpx.Client, operator_token: str, count: int, *,
@@ -315,16 +332,23 @@ def issue_tests(path: Path, client: httpx.Client, operator_token: str, count: in
                 wait(max(1, min(pause, 60)))
         except httpx.HTTPError as exc:
             response = None
-            result["stopped"] = (f"lost contact with the coordinator ({exc.__class__.__name__}); "
-                                 "this test may or may not have been queued, so it stays used")
+            result["stopped"] = (f"{_lost(exc)}; this test may or may not have been "
+                                 "queued, so it stays used")
         status = response.status_code if response is not None else None
         detail = _detail(response) if response is not None else ""
 
+        job_id = None
         if status == 200:
             try:
                 job_id = response.json().get("job_id")
             except (ValueError, AttributeError):
                 job_id = None
+            if not (isinstance(job_id, str) and JOB_ID_PATTERN.fullmatch(job_id)):
+                # `operator-client-v1`: a 200 without a job id we can use is not "issued".
+                status, job_id = None, None
+                result["stopped"] = ("the coordinator said yes but sent no usable job id; this "
+                                     "test may or may not have been queued, so it stays used")
+        if status == 200:
             record["outcome"], record["job_id"] = "issued", job_id
             result["issued"].append({"job_id": record["job_id"], "task_type": entry["task_type"]})
         elif status == 409 and "already a hidden test" in detail:
@@ -395,8 +419,8 @@ def issue_to_leads(path: Path, client: httpx.Client, operator_token: str, *,
         response = client.get("/v1/operator/vouches",
                               headers={"X-Operator-Token": operator_token})
     except httpx.HTTPError as exc:
-        raise PoolError(f"couldn't reach the coordinator ({exc.__class__.__name__}); "
-                        "nothing was sent") from None
+        why = say(str(exc)) if isinstance(exc, ReplyRefused) else exc.__class__.__name__
+        raise PoolError(f"couldn't reach the coordinator ({why}); nothing was sent") from None
     if response.status_code != 200:
         detail = _detail(response)
         raise PoolError(f"the coordinator wouldn't show the vouch check ({response.status_code}"
@@ -409,6 +433,7 @@ def issue_to_leads(path: Path, client: httpx.Client, operator_token: str, *,
         raise PoolError("the coordinator's vouch check has no `leads_to_test` list; update "
                         f"it to {LEADS_POLICY} or later first, otherwise a rig that already "
                         "has a test waiting would get another one. Nothing was sent") from None
+    leads = _vet_leads(leads, to_test, unchecked)
 
     result: dict[str, Any] = {
         "policy": LEADS_POLICY, "dry_run": dry_run, "unchecked_leads": len(unchecked),
@@ -457,6 +482,33 @@ def issue_to_leads(path: Path, client: httpx.Client, operator_token: str, *,
             break
     result["ready_left"] = sum(ready.values())
     return result
+
+
+def _vet_leads(leads: dict[Any, Any], to_test: list[Any],
+               unchecked: list[Any]) -> dict[str, dict[str, Any]]:
+    """`operator-client-v1`: every rig name the tool will aim a test at or print must be a
+    real rig name, and each lead's task types a list of names. Unknown task types are
+    dropped (there are no tests for them). Anything else: refuse, nothing sent."""
+    def bad(what: str) -> PoolError:
+        return PoolError(f"the coordinator's vouch check has {what}; nothing was sent")
+
+    if len(to_test) > 10_000 or len(unchecked) > 10_000 or len(leads) > 10_000:
+        raise bad("more leads than any coordinator could have")
+    for name in [*leads, *to_test, *unchecked]:
+        if not (isinstance(name, str) and RIG_NAME.fullmatch(name)):
+            raise bad("a rig name in the wrong shape")
+    if len(set(to_test)) != len(to_test):
+        raise bad("a rig listed twice to test")
+    vetted: dict[str, dict[str, Any]] = {}
+    for name, lead in leads.items():
+        types = lead.get("task_types") if isinstance(lead, dict) else None
+        if types is None:
+            types = []
+        if not isinstance(types, list) or len(types) > 64 or \
+                not all(isinstance(t, str) for t in types):
+            raise bad(f"task types in the wrong shape for {name}")
+        vetted[name] = {"task_types": sorted({t for t in types if t in tasks.EXECUTORS})}
+    return vetted
 
 
 def leads_text(result: dict[str, Any]) -> str:
@@ -511,7 +563,12 @@ def main(argv: list[str] | None = None) -> int:
         if name == "status":
             p.add_argument("--json", action="store_true")
         if name == "issue":
-            p.add_argument("--url", required=True, help="coordinator, e.g. http://127.0.0.1:8000")
+            p.add_argument("--url", required=True,
+                           help="coordinator: https://..., or http://127.0.0.1:8000 on this "
+                                "machine")
+            p.add_argument("--allow-plain-http", action="store_true",
+                           help="allow http:// to another machine (a test lab you control); "
+                                "the operator token and answers then travel unencrypted")
             p.add_argument("--count", type=int, required=True, help=f"1-{MAX_ISSUE}")
             p.add_argument("--task", choices=sorted(tasks.EXECUTORS))
             aim = p.add_mutually_exclusive_group()
@@ -519,7 +576,12 @@ def main(argv: list[str] | None = None) -> int:
             aim.add_argument("--tier", choices=TIERS, help="a random active rig in this tier")
             p.add_argument("--ttl", type=int, default=600, help="seconds, 10-3600")
         if name == "issue-leads":
-            p.add_argument("--url", required=True, help="coordinator, e.g. http://127.0.0.1:8000")
+            p.add_argument("--url", required=True,
+                           help="coordinator: https://..., or http://127.0.0.1:8000 on this "
+                                "machine")
+            p.add_argument("--allow-plain-http", action="store_true",
+                           help="allow http:// to another machine (a test lab you control); "
+                                "the operator token and answers then travel unencrypted")
             p.add_argument("--task", choices=sorted(tasks.EXECUTORS),
                            help="test type to use (default: one the lead agreed on)")
             p.add_argument("--max", type=int, default=10, help=f"rigs per run, 1-{MAX_LEADS}")
@@ -565,8 +627,12 @@ def main(argv: list[str] | None = None) -> int:
             print("Refusing: set OPERATOR_TOKEN in the environment (not on the command line).",
                   file=sys.stderr)
             return 2
+        try:
+            check_operator_url(args.url, args.allow_plain_http)
+        except ValueError as exc:
+            raise PoolError(str(exc)) from None
         if args.command == "issue-leads":
-            with httpx.Client(base_url=args.url, timeout=15) as client:
+            with OperatorClient(args.url, allow_plain_http=args.allow_plain_http) as client:
                 leads = issue_to_leads(args.pool, client, token, task_type=args.task,
                                        max_leads=args.max, ttl_seconds=args.ttl,
                                        dry_run=args.dry_run)
@@ -574,7 +640,7 @@ def main(argv: list[str] | None = None) -> int:
             clean = not (leads["stopped"] or leads["unknown"] or leads["skipped"]
                          or leads["not_reached"])
             return 0 if clean else 1
-        with httpx.Client(base_url=args.url, timeout=15) as client:
+        with OperatorClient(args.url, allow_plain_http=args.allow_plain_http) as client:
             result = issue_tests(args.pool, client, token, args.count, task_type=args.task,
                                  target_worker=args.worker, target_tier=args.tier,
                                  ttl_seconds=args.ttl)
