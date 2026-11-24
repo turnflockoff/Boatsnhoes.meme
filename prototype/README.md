@@ -393,6 +393,25 @@ Tested in software only. Fourth pass of the "code audit" item. Three tools read 
 
 **Limits:** it makes reading these files safe and the page's numbers match the signed files. It doesn't make a report true (the signature, consistency checks and `compare` do that), and a person still has to get the coordinator's key from somewhere they trust.
 
+## Implemented: checking a release folder for planted code (0.5.57, `release-folder-v1`)
+
+Tested in software only. Sixth pass of the "code audit" item. The Stay Safe page tells people to run `python -m app.release verify release.json --signers signers.json --root .` on a download before running it, so the folder it checks is something a stranger handed over. Python runs more than `.py` files, and `verify` only looked for extra `.py`/`.pth` files and skipped `__pycache__`. Three planted files passed `verify` (it printed OK) and then **ran their code** when the worker started (`python -m app.worker`):
+
+- **A sourceless `json.pyc` next to the code.** `python -m` puts the folder first on Python's search path, so a compiled `json.pyc` (or `hashlib.so`, or a `json/` folder holding only `__init__.pyc`) is imported instead of the standard library's `json`. `.pyc` files were skipped and `.so` files counted as harmless "extra files".
+- **A `__pycache__/worker.cpython-313.pyc` with other code inside.** Python trusts a cache file whose header carries the source's modification time and size, and runs it *instead of* the source. A download can set any time it likes. The signed, unchanged `worker.py` checked out fine; the cache beside it ran.
+- **A linked folder named like a module** (`json -> /somewhere/evil`). The folder walk didn't follow links, so it never saw what was behind it; Python does follow them.
+
+What changed (`app/release.py`, `check_files`):
+- **Anything Python could import that isn't in the release is a problem**: every ending this Python can load (`importlib.machinery.all_suffixes()`: `.py`, `.pyc`, `.so`, `.cpython-313-…so`, `.abi3.so`) plus `.pth`, `.pyw`, `.pyd`, `.pyo`, anywhere outside the skipped folders. A test fails if Python ever adds an ending the list doesn't cover.
+- **Links** not in the release are problems (a linked `data/` is still fine: it's skipped and never imported). **A folder it can't read** is a problem instead of a silent skip (it can't promise there's no code inside). More than 100,000 entries stops with a problem.
+- **Caches are checked, not skipped.** Each `__pycache__/<name>.<tag>[.opt-N].pyc` whose source is in the release must be byte-for-byte what this Python builds from the already-checked source (same header layout: time + size, or a source hash for "checked"/"unchecked" caches; same compiled code). Cache bytes are only compared, never unpacked (Python's `marshal` isn't safe on hostile data). Caches from another Python version can't be compared, so they're one problem line per folder. Names Python never looks up (pytest's own rewrite caches, modules no longer in the release) are one note.
+- **The fix is always the same and always safe:** delete the `__pycache__` folders and check again; Python rebuilds them from the checked source. Caches built in another folder (a moved checkout) also fail the byte check, which is the safe direction.
+- **Listed files** are opened without following a final link and without blocking on a pipe or device, and at most the signed size plus one byte is read. **Printing:** every problem and note goes through `say()`, so file names with terminal codes or invalid UTF-8 can't clear the screen or crash the printout. **Versions** with spaces, line breaks or other hidden characters are refused.
+- **Tests** (`tests/test_release_folder.py`, 53): each of the three holes is shown to really run code with the old check, then caught; honest caches made by Python itself (`-O`, `-OO`, timestamp, checked-hash and unchecked-hash) pass; 10 kinds of damaged or odd cache; every importable ending at the top and in `app/`; links to files, folders and cache folders; an unreadable folder (simulated, and for real as a non-root user); a 5 GB sparse file never read; a pipe; hostile names. Run on Python 3.13 and 3.11.
+- **Shown against the old code:** 47 of the new tests fail on it, including all three holes. 17 deliberate breakages of the new code: all caught (two first runs exposed redundant checks, now removed). Tried on this repo's own `prototype/` folder with throwaway keys: OK with 42 caches Python built itself, after clearing caches a Python 3.11 run had left (flagged, as designed).
+
+**Limits:** it checks the folder at the moment you run it; something that changes the folder afterwards isn't seen. It covers what Python imports from the release folder, not your installed packages (`requirements.lock` hashes those), `PYTHONPATH`, or llama.cpp and model files. `data/`, `venv` and `node_modules` are still skipped (nothing imports them by name). No signed release exists yet.
+
 ## Implemented: reading rig reports safely (0.5.56, `rig-report-v1`)
 
 Tested in software only. Fifth pass of the "code audit" item. `python -m app.phase3_check` reads an inventory (`hw_inventory`) and run reports (`gpu_run`) that will come from volunteers' rigs, by chat or email, so they are files from strangers too. What was wrong and what changed:
@@ -565,8 +584,11 @@ signed it with their own Ed25519 key.
 - `verify` passes only when the manifest is well formed, enough distinct pinned signers
   signed exactly it, **every** signature present from a listed signer is valid (a listed
   name with a different key fails), and with `--root` every listed file matches, nothing is
-  a symlink or points outside, and no extra `.py`/`.pth` file sits in the folder (other extra
-  files are notes; `data/`, `__pycache__`, `venv` and hidden folders are skipped).
+  a symlink or points outside, and nothing else in the folder could be imported by Python
+  (`release-folder-v1`, 0.5.57: no extra `.py`, `.pyc`, `.so`, `.pth` or other importable
+  file, no links, no folder it can't read, and every `__pycache__` file this Python might
+  load is byte-for-byte what it builds from the checked source; other extra files are
+  notes; `data/`, `venv`, `node_modules` and hidden folders are skipped).
   Signatures from people not on the list are noted and not counted. `--not-older-than`
   refuses an old signed release (rollback). Exit 0 ok, 1 not ok, 2 unusable input.
 

@@ -111,6 +111,13 @@ This assumes the auditor is honest. The rest of this document is about when that
   `"exit_ok": "false"` passed as a clean smoke test. They are still unsigned: this
   catches mistakes and sloppy edits, not a careful forger; a repeat by someone else is
   what makes them evidence.
+- **A release folder is a download from a stranger too.** Since 0.5.57
+  (`release-folder-v1`) `release verify --root` treats anything Python could import that
+  isn't in the signed release as a problem, refuses links and unreadable folders, and only
+  accepts a `__pycache__` file that is byte-for-byte what this Python builds from the
+  checked source. Before, a sourceless `json.pyc`, a cache file with the source's time and
+  size in its header, or a linked folder named `json` passed the check and ran when the
+  worker started. It checks the folder when you run it, not afterwards.
 - **The tolerance rule is a guess** until Phase 3 produces real output from two cards.
 
 ## Order of the next fixes

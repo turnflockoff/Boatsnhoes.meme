@@ -1020,3 +1020,32 @@
 2. **Allow-list the fields you read.** Instead of guessing what a bad file might contain, write down exactly which fields the tool uses and what each must be. Everything the tool touches is checked; everything else is ignored.
 3. **A test can watch the code read.** Wrapping the data so it records every field looked up lets a test prove "nothing is read without being checked first", even after future changes.
 4. **Computers have a biggest number.** A normal decimal number tops out near 1.8 × 10^308. Write `1e400` and many readers silently turn it into "infinity", which then breaks maths and comparisons in odd ways. Refuse it at the door.
+
+## 2026-11-24 (17:30 UTC): The release check looked for the wrong kind of file (0.5.57)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions, so this session continued the "code audit" item. The Stay Safe page tells people: before you run a download, check it with `python -m app.release verify ... --root .`. That makes the folder being checked a gift from a stranger. I went looking for ways to sneak code past it.
+
+**Found: three ways to get code past the check, all shown really running**
+1. **A compiled file next to the code.** Python can run `.pyc` files (compiled Python) with no `.py` beside them. Drop a `json.pyc` into the folder and, because `python -m` looks in the folder first, it is loaded instead of Python's own `json`. The check skipped every `.pyc` file. Same for `.so` files (compiled C), which it called "extra files, not code".
+2. **A cache file posing as the real one.** Python keeps compiled copies in `__pycache__` folders and trusts one if its label says "made from a file with this date and this size". A download can carry any date. I made a cache with the real `worker.py`'s date and size but other code inside: the signed `worker.py` checked out perfectly, and Python ran the cache instead. The check skipped `__pycache__` entirely.
+3. **A shortcut (link) named like a module.** A link called `json` pointing to a folder elsewhere. The check didn't look behind links; Python does.
+In all three, `verify` printed **OK** and then starting the worker printed `EVIL CODE RAN`.
+
+**Shipped (`release-folder-v1`)**
+- **Anything Python could load that isn't in the signed release now fails the check**: every file ending Python can import (the test asks Python itself for its list), links, and any folder the check can't read (it used to skip those silently).
+- **Caches are checked instead of skipped.** A cache passes only if it is *exactly*, byte for byte, what this copy of Python would build from the already-checked source file. The check never opens a cache up to look inside (that unpacking step isn't safe on hostile files); it builds its own and compares.
+- **The fix for any cache problem is always the same and always safe:** delete the `__pycache__` folders and run the check again. Python rebuilds them from the checked source.
+- Smaller things: listed files are opened without following links or hanging on pipes, and never read past their signed size; file names with hidden terminal codes or broken characters can't mess up the printout; a version number with hidden spaces or line breaks is refused.
+- **Proof.**
+  - 53 new tests, **1,983 total: 1,981 passing, 2 skipped** (the release test that only runs on a committed tree, and the real unreadable-folder test, which can't work as the all-powerful root user; I ran it separately as an ordinary user and it passed). Run on Python 3.13 and 3.11 (what CI uses).
+  - Each of the three holes has a test that first shows the planted code really runs, then that the check now catches it. 47 of the new tests fail against the old code.
+  - Honest caches made by Python itself pass, in every flavour Python can write.
+  - I broke the new checks 17 ways on purpose; all 17 were caught. Two earlier attempts showed two checks were redundant (the read was already limited), so I removed them.
+  - Dogfood: I made a throwaway release of this repo's own `prototype/` folder, signed it with two throwaway keys and checked it. The first try failed on 31 caches left by a Python 3.11 test run (exactly as designed: it can't compare another version's caches). After deleting those, it passed with 42 caches Python had built itself.
+- **Honest limits:** it checks the folder at the moment you run it. It covers what Python loads from the release folder, not your installed packages (the lock file's hashes cover those), llama.cpp or model files. `data/`, `venv` and `node_modules` are still skipped. No signed release exists yet; choosing signers is still your step.
+
+**What you learned**
+1. **Python runs more than `.py` files.** It also runs compiled `.pyc` files and `.so` libraries, and it will follow links. A check that only looks for `.py` files is checking the wrong thing.
+2. **Caches are trusted by their label.** A cache file says "I was made from a file of this size, saved at this time". Python believes the label. Labels can lie, so the check now rebuilds the cache itself and compares every byte.
+3. **"Where does Python look first?"** `python -m` searches the current folder before its own built-in modules, so a file named like a built-in (`json`, `hashlib`) in that folder wins. This is called *shadowing*.
+4. **A silent skip is a hole.** If a checker can't read a folder and just moves on, that folder is the perfect hiding place. Now "can't read it" means "can't vouch for it", and the check fails.
