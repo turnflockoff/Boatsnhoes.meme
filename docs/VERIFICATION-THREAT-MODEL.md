@@ -91,6 +91,13 @@ This assumes the auditor is honest. The rest of this document is about when that
   prints none of the coordinator's text with terminal control codes, and won't send its key
   over plain http to another machine, so a fake coordinator or a man in the middle can't
   crash a rig or read its key.
+- **Ledger copies are files from strangers.** Anyone re-checking a published copy runs our
+  tools on a file someone else made. Since 0.5.54 (`copy-open-v1`, `app/copy_guard.py`)
+  a copy must hold exactly the plain tables `ledger_copy export` writes (no views, which
+  could make the numbers depend on the date or the reader's machine; no triggers, virtual
+  or extra tables), pass `integrity_check`, stay under size limits, and is opened read-only
+  and immutable, so checking it never changes it. That makes reading a copy safe, not its
+  numbers true.
 - **The tolerance rule is a guess** until Phase 3 produces real output from two cards.
 
 ## Order of the next fixes

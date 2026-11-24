@@ -44,6 +44,9 @@ python -m app.ledger_copy compare ../reports/<older>/ledger-copy.sqlite3 ../repo
 
 Get the coordinator's public key from more than one place (`index.json`, the website, a
 project post) and check they match. After a key rotation, pass `--public-key` once per key.
+The tools treat every copy as a file from a stranger: they refuse one that holds anything
+but the plain ledger tables (views, triggers, extra tables), is damaged or is oversized, and
+they never change the file while checking it (`copy-open-v1`, `prototype/app/copy_guard.py`).
 Checking proves who issued a report, that its numbers come from the posted ledger, and that
 later copies didn't rewrite earlier history. It can't prove the coordinator recorded
 everything honestly to begin with (see `docs/VERIFICATION-THREAT-MODEL.md`).

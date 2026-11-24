@@ -951,3 +951,26 @@
 2. **A signature checks the message, not the delivery.** Signed jobs couldn't be faked before either, but a reply can still be huge, slow or malformed *before* the signature is ever checked. Limits come first, then the signature.
 3. **Text can be a weapon in a terminal.** The `ESC` character starts hidden commands for the terminal (colours, clear screen, window title). Printing a stranger's text without removing them is like pasting it into the terminal's settings.
 4. **http vs https.** With `http://` anyone between the two computers (same Wi-Fi, the router, the internet provider) can read and change everything sent, including passwords and keys. `https://` encrypts it. On one machine (`127.0.0.1`) nothing travels over the network, so http is fine there.
+
+## 2026-11-24 (14:35 UTC): A ledger copy is a file from a stranger, so check it like one (0.5.54)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions. The last two sessions threw junk at the coordinator and at the worker. This one turns to the third thing strangers touch: the **ledger copies** we publish on `/reports/` and tell everyone to download and re-check. Our checking tools opened those files like any trusted database. But a SQLite file can carry more than rows, and the person running the check is a volunteer, maybe on a copy from a fake mirror or a pull request.
+
+**Shipped (`copy-open-v1`)**
+- **New `prototype/app/copy_guard.py`**, run before any of our code reads a copy. What I found and fixed:
+  1. **A "time-bomb" copy passed verification.** A table inside the file can be swapped for a *view*, which is a small program. I built a copy whose `submissions` view shows the honest points until a date and adds 1,000 after it. Our `verify` said it matched the signed report perfectly. The same kind of file with a date in the past failed. Same bytes, same sha256, different numbers depending on the reader's clock. Now views (and triggers, and virtual tables) are refused, and a copy must have exactly the tables, columns and indexes that `ledger_copy export` writes.
+  2. **Checking a copy could change it.** If a half-finished write left a `-journal` file next to a copy, a normal open "repairs" the copy from it, rewriting the file on your disk, so its sha256 no longer matches the published one. Shown in a test. Now copies are opened read-only *and* "immutable": SQLite ignores anything next to the file and never writes or creates a file.
+  3. **Quiet damage.** An index can disagree with its table while every page still looks fine; a lookup and a full scan then give different answers. Now `integrity_check` must say `ok`, and every row is read once up front.
+  4. **Size and time.** Files over 512 MiB, single values over 1 MiB and anything that isn't a SQLite file are refused before SQLite parses them; every connection is stopped after 5 minutes.
+  5. **Crashes.** An empty `copy_info` table crashed with a `TypeError`, and a junk file printed a Python traceback from `ledger_copy info`. Now every tool prints one line ("refusing to read ...") and exits with code 2.
+- **Used by** `rewards verify --db`, `ledger_copy compare` and `info`, and `publish_report add|check`. Your own export runs the same check on its output before saving, so an honest copy can never be one the tools refuse. Your live ledger (the operator's own tools) is opened exactly as before.
+- **Proof.**
+  - 28 new tests, **1,194 total: 1,193 passing, 1 skipped** (the release test that only runs on a committed tree, as designed). Run on Python 3.13 and on Python 3.11 (what CI uses, with an older SQLite and without one of the extra switches).
+  - I broke the guard 19 ways on purpose. **12 were caught by my first tests; the other 7 only after I added tests** (e.g. turning off the "immutable" open slipped past until I added a copy in WAL format, which a normal read-only open quietly adds two files beside). The tests also caught a real bug in the guard: the size limit was frozen when the module loaded.
+- **Honest limits:** this makes *reading* a copy safe; it doesn't make the numbers true (the signature, the consistency checks and `compare` do that). It can't protect against a bug inside SQLite itself, so keep Python updated. Nothing is published yet, so nobody has run into this; the point was to fix it before the first period goes up.
+
+**What you learned**
+1. **A database file can contain code.** A "view" looks like a table but runs a query every time it's read. That's handy in your own database and dangerous in someone else's.
+2. **Same hash, different meaning.** A sha256 proves the bytes didn't change. It doesn't prove the bytes mean the same thing tomorrow, if they contain code that looks at the date.
+3. **Opening can be writing.** SQLite "fixes" a file on open if it finds a leftover journal. For evidence files, open read-only and immutable so the evidence stays exactly as published.
+4. **Allow-list, don't block-list.** Instead of listing every bad thing a file might hold, the guard says what a good copy looks like (these tables, these columns, nothing else) and refuses everything else.
