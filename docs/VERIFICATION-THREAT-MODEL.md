@@ -102,6 +102,16 @@ This assumes the auditor is honest. The rest of this document is about when that
   or extra tables), pass `integrity_check`, stay under size limits, and is opened read-only
   and immutable, so checking it never changes it. That makes reading a copy safe, not its
   numbers true.
+- **What rigs, the submitter and strangers write ends up on the operator's screen.** A rig's
+  answer is any text up to 8 KiB, and the review queue shows held answers side by side.
+  Before 0.5.61 the text views printed it as it was, so an answer with terminal escape
+  codes could clear the operator's screen, rename the window or print a fake instruction
+  (shown with a real ledger). Since 0.5.61 (`operator-screen-v1`, `app/screen.py`) the
+  review queue, vouch check, rig list, pause status, `ledger_copy info`/`compare` and the
+  site and dependency checkers print every line with control codes and invisible marks as
+  `?`. The JSON views and the API still give the exact text, so a person can see what was
+  really sent. Tools that write JSON for another program to show are only as safe as that
+  program.
 - **Reports, release files and the public index are JSON from strangers too.** Since
   0.5.55 (`json-file-v1`, `app/json_file.py`) they are read with size, depth, encoding,
   `NaN` and duplicate-key limits. A report's `fingerprint` field is only a label (not
