@@ -268,6 +268,7 @@ def test_consistency_check_flags_same_owner_audit(pinned, tmp_path: Path) -> Non
 
 def test_pre_auth_database_is_migrated_and_old_workers_must_enroll(tmp_path: Path) -> None:
     path = tmp_path / "db.sqlite3"
+    path.touch(mode=0o600)  # owner-only, as the coordinator keeps it (secret-file-v1)
     db = sqlite3.connect(path)
     db.executescript("CREATE TABLE workers (worker_id TEXT PRIMARY KEY, "
                      "capabilities TEXT NOT NULL, registered_at INTEGER NOT NULL);"

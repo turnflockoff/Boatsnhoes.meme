@@ -205,6 +205,7 @@ def test_receipt_helper_hashes_the_payload_it_was_given() -> None:
 
 def test_jobs_from_before_versioning_are_marked_legacy_and_refused(tmp_path: Path) -> None:
     path = tmp_path / "old.sqlite3"
+    path.touch(mode=0o600)  # owner-only, as the coordinator keeps it (secret-file-v1)
     with sqlite3.connect(path) as db:
         db.executescript("""
             CREATE TABLE jobs (job_id TEXT PRIMARY KEY, task_type TEXT NOT NULL,

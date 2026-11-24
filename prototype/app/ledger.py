@@ -59,7 +59,7 @@ from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-from . import copy_guard, tasks
+from . import copy_guard, secret_file, tasks
 from .audit_policy import (
     AUDITOR_PICK_RULES,
     PASSED_STATUSES,
@@ -308,7 +308,7 @@ class Ledger:
             if not self.path.exists():
                 raise FileNotFoundError(self.path)
             return
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._prepare_private_files()
         with closing(self._connect()) as db:
             db.execute("PRAGMA journal_mode=WAL")
             db.executescript(SCHEMA)
@@ -322,6 +322,27 @@ class Ledger:
             db.execute("CREATE UNIQUE INDEX IF NOT EXISTS workers_key_hash ON workers(key_hash)")
 
     # -- plumbing -----------------------------------------------------------------
+    # SQLite side files that hold the same data as the ledger itself.
+    SIDE_FILES = ("-wal", "-shm", "-journal")
+
+    def _prepare_private_files(self) -> None:
+        """`secret-file-v1`: the ledger holds every hidden test's expected answer, job
+        inputs and key hashes. SQLite on its own creates it readable by every user on the
+        machine (0644 under the usual umask). Create the folder (0700) and an empty file
+        (0600) first, so SQLite and its -wal/-shm files inherit owner-only permissions,
+        and refuse to start on an existing ledger, side file or folder that other users
+        can read or change (the message says which `chmod` fixes it)."""
+        secret_file.make_private_folder(self.path.parent, "the ledger")
+        secret_file.create_empty(self.path, "the ledger")
+        for name in ("",) + self.SIDE_FILES:
+            side = self.path.with_name(self.path.name + name)
+            try:
+                secret_file.check_path(side, "the ledger" if not name else
+                                       f"the ledger's {name[1:]} file", secret=True,
+                                       folder=False)
+            except FileNotFoundError:
+                continue
+
     def _connect(self) -> sqlite3.Connection:
         if self.untrusted:
             db = copy_guard.connect(self.path)

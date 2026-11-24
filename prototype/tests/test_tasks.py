@@ -171,6 +171,7 @@ def test_cli_pin_and_list(registry: Path, tmp_path: Path,
 
 def test_phase1_database_is_migrated_in_place(tmp_path: Path) -> None:
     db_path = tmp_path / "old.sqlite3"
+    db_path.touch(mode=0o600)  # owner-only, as the coordinator keeps it (secret-file-v1)
     with sqlite3.connect(db_path) as db:
         db.execute("CREATE TABLE submissions (job_id TEXT PRIMARY KEY, worker_id TEXT NOT NULL, "
                    "result_hash TEXT NOT NULL, reward_points INTEGER NOT NULL, "

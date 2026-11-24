@@ -352,6 +352,7 @@ def worker_main(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, signer: Manifes
     replies come from `claim`. Registration works; the coordinator key is given up front."""
     key_file = tmp_path / "worker.key"
     key_file.write_text(GOOD_KEY + "\n")
+    key_file.chmod(0o600)  # owner-only, or the worker stops (secret-file-v1)
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v1/workers/register":

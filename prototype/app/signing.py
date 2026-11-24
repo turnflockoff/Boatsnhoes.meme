@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import os
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +21,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
+from . import secret_file
 from .security import canonical_json
 
 SIGNATURE_PREFIX = "ed25519:"
@@ -86,18 +86,22 @@ class ManifestSigner:
             pem = key.private_bytes(serialization.Encoding.PEM,
                                     serialization.PrivateFormat.PKCS8,
                                     serialization.NoEncryption())
-            path.parent.mkdir(parents=True, exist_ok=True)
             try:
-                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                # Owner-only file in an owner-only new folder, never through a planted
+                # link (`secret-file-v1`). The folder itself isn't required to be private:
+                # the handover key may sit on a USB stick.
+                secret_file.write_new(path, pem, "signing key", folder=False)
             except FileExistsError:
                 return cls.load_or_create(path)  # another process created it first
-            with os.fdopen(fd, "wb") as fh:
-                fh.write(pem)
             return cls(key)
-        if os.name == "posix" and path.stat().st_mode & 0o077:
-            raise SigningKeyError(f"{path} can be read by other users; run: chmod 600 {path}")
+        # `secret-file-v1`: checked on the open file (a pipe no longer hangs this, and the
+        # file can't be swapped between the permission check and the read).
         try:
-            key = serialization.load_pem_private_key(path.read_bytes(), password=None)
+            data = secret_file.read(path, "signing key", secret=True, folder=False)
+        except secret_file.UnsafeFileError as exc:
+            raise SigningKeyError(str(exc)) from None
+        try:
+            key = serialization.load_pem_private_key(data, password=None)
         except (ValueError, TypeError) as exc:
             raise SigningKeyError(f"{path} is not a readable PEM private key") from exc
         if not isinstance(key, Ed25519PrivateKey):

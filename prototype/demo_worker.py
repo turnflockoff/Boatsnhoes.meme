@@ -28,7 +28,7 @@ from typing import Any
 import httpx
 from dotenv import load_dotenv
 
-from app import schemas, tasks
+from app import schemas, secret_file, tasks
 from app.key_rotation import RotationError, check_announcement, follow_chain
 from app.security import sha256_text
 from app.signing import fingerprint, parse_public_key, verify_manifest
@@ -93,20 +93,56 @@ def local_model_sha256(job: dict[str, Any]) -> str | None:
         raise ManifestError(f"can't run this job here: {say(str(exc))}") from exc
 
 
-def save_key(path: Path, key: str) -> None:
-    """Write the key readable by this user only. Never overwrites an existing key file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "w") as fh:
-        fh.write(key + "\n")
+def save_key(path: Path, key: str, what: str = "pinned key") -> None:
+    """Write the key readable by this user only, in a folder only this user can change
+    (created owner-only if missing). Never overwrites an existing file or follows a planted
+    link (`secret-file-v1`)."""
+    try:
+        secret_file.write_new(path, (key + "\n").encode("ascii"), what)
+    except secret_file.UnsafeFileError as exc:
+        raise SystemExit(f"Stopped: {exc}") from None
 
 
 def replace_key_file(path: Path, key: str) -> None:
     """Swap the pinned key in one step: write a private temporary file, then rename it."""
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.unlink(missing_ok=True)
-    save_key(tmp, key)
-    os.replace(tmp, path)
+    try:
+        secret_file.replace(path, (key + "\n").encode("ascii"), "pinned key")
+    except secret_file.UnsafeFileError as exc:
+        raise SystemExit(f"Stopped: {exc}") from None
+
+
+def read_pin(path: Path, what: str) -> str | None:
+    """A pinned public key, or None if nothing is pinned yet (`secret-file-v1`). Stops if
+    other users could have changed it (file or folder), if it isn't a plain small file
+    (a pipe used to hang the worker here), or if it doesn't hold a key."""
+    try:
+        pinned = secret_file.read_text(path, what, secret=False).lower()
+    except FileNotFoundError:
+        return None
+    except secret_file.UnsafeFileError as exc:
+        raise SystemExit(f"Stopped: {exc}") from None
+    try:
+        parse_public_key(pinned)
+    except ValueError:
+        raise SystemExit(f"Stopped: {what} {say(str(path), 160)} doesn't hold a key. Check "
+                         f"with the operator; delete it only if they confirm the key.") from None
+    return pinned
+
+
+def read_worker_key(path: Path) -> str | None:
+    """This worker's saved key, or None if there is none yet (`secret-file-v1`). Stops if
+    other users can read it or change its folder, or if it isn't a worker key."""
+    try:
+        key = secret_file.read_text(path, "worker key", secret=True)
+    except FileNotFoundError:
+        return None
+    except secret_file.UnsafeFileError as exc:
+        raise SystemExit(f"Stopped: {exc}") from None
+    try:
+        return check_worker_key(key)
+    except CoordinatorError:
+        raise SystemExit(f"Stopped: {say(str(path), 160)} doesn't hold a worker key "
+                         f"(bnhw_...). Is it the right file?") from None
 
 
 def handover_pin_path(pin_file: Path) -> Path:
@@ -118,7 +154,7 @@ def load_handover_pin(pin_file: Path, given: str | None) -> str | None:
     """The offline handover key this worker trusts (`handover-key-v1`), or None.
     A key given by the operator out of band is pinned; it must agree with an earlier pin."""
     path = handover_pin_path(pin_file)
-    pinned = path.read_text().strip().lower() if path.exists() else None
+    pinned = read_pin(path, "pinned handover key")
     if not given:
         return pinned
     try:
@@ -197,8 +233,8 @@ def load_or_pin_coordinator_key(client: httpx.Client, pin_file: Path,
         parse_public_key(served)
     except ValueError as exc:
         raise SystemExit(f"Coordinator served a bad key: {say(str(exc))}") from exc
-    if pin_file.exists():
-        pinned = pin_file.read_text().strip().lower()
+    pinned = read_pin(pin_file, "pinned coordinator key")
+    if pinned is not None:
         if served != pinned:
             try:
                 path = follow_chain(info.get("rotations") or [], pinned, served, handover)
@@ -226,8 +262,8 @@ def load_or_enroll(client: httpx.Client, worker_id: str, key_file: Path,
                    enrollment_code: str | None, capabilities: list[str]) -> str:
     """Return this worker's key. With a saved key, update capabilities using it.
     Without one, use the operator's one-time code to register and save the new key."""
-    if key_file.exists():
-        key = key_file.read_text().strip()
+    key = read_worker_key(key_file)
+    if key is not None:
         response = coordinator_call(client, "POST", "/v1/workers/register", json={
             "worker_id": worker_id, "capabilities": capabilities},
             headers={"Authorization": f"Bearer {key}"})
@@ -248,7 +284,7 @@ def load_or_enroll(client: httpx.Client, worker_id: str, key_file: Path,
         key = check_worker_key(response.json().get("worker_key"))
     except CoordinatorError as exc:
         raise SystemExit(f"Registration failed: {exc}. Nothing was saved.") from exc
-    save_key(key_file, key)
+    save_key(key_file, key, "worker key")
     return key
 
 
