@@ -24,7 +24,10 @@ Commands (run from `prototype/`):
 
 `verify` exits 0 only when the manifest is well formed, enough distinct pinned signers
 signed exactly this manifest, every signature present is valid, and (with `--root`) every
-file on disk matches. It never runs, installs or downloads anything.
+file on disk matches and nothing else in the folder could be imported by Python
+(`release-folder-v1`: no extra `.py`/`.pyc`/`.so`/`.pth`, no links, and every
+`__pycache__` file Python might load is byte-for-byte what this Python builds from the
+checked source). It never runs, installs or downloads anything.
 
 What it does not prove: that the signed code is safe (only that enough named people agreed
 to ship it), or that a signer's machine wasn't compromised when they signed.
@@ -33,9 +36,13 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.machinery
+import importlib.util
 import json
+import marshal
 import os
 import re
+import stat
 import subprocess
 import sys
 import time
@@ -62,8 +69,10 @@ MAX_FILES = 5000
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}\Z")
 HEX64 = re.compile(r"^[0-9a-f]{64}\Z")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}\Z")
-# Folders a running rig keeps next to the code (keys, databases, caches, virtualenvs).
-IGNORED_DIRS = {"__pycache__", "data", "venv", "node_modules"}
+# Folders a running rig keeps next to the code (keys, databases, virtualenvs). Python caches
+# (`__pycache__`) are not skipped: they are checked against the source (`release-folder-v1`).
+IGNORED_DIRS = {"data", "venv", "node_modules"}
+VERSION_RE = re.compile(r"^[0-9A-Za-z.+!_-]{1,64}\Z")
 
 
 class ReleaseError(ValueError):
@@ -162,8 +171,9 @@ def check_manifest(manifest: Any) -> list[str]:
         problems.append("release name must be lowercase letters, digits, '-' or '_'")
     try:
         Version(str(manifest.get("version")))
-        if not isinstance(manifest.get("version"), str):
-            raise InvalidVersion
+        if not isinstance(manifest.get("version"), str) \
+                or not VERSION_RE.match(manifest["version"]):
+            raise InvalidVersion  # no spaces, line breaks or other hidden characters
     except InvalidVersion:
         problems.append("release version is not a valid version number")
     commit = manifest.get("source_commit")
@@ -394,26 +404,205 @@ def keygen(out: Path, name: str) -> dict[str, str]:
 
 # ---- verify -----------------------------------------------------------------------------
 
-def _walk_extra(root: Path, listed: set[str]) -> list[str]:
-    extra = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames
-                             if not d.startswith(".") and d not in IGNORED_DIRS)
-        for fn in sorted(filenames):
-            rel = (Path(dirpath) / fn).relative_to(root).as_posix()
-            if fn.startswith(".") or rel in listed or fn.endswith(".pyc"):
+# ---- the release folder on disk (`release-folder-v1`) -----------------------------------
+#
+# `verify --root` is run on a folder someone else handed over (a download, a USB stick, a
+# "fixed" copy). Python runs more than `.py` files: a sourceless `json.pyc` or an extension
+# module `json.so` next to the code shadows the standard library (the folder is first on
+# sys.path under `python -m`), a `__pycache__/worker.cpython-313.pyc` whose header matches
+# the source's time and size is run *instead of* the checked source, and a linked folder
+# named like a module is imported through the link. All three passed `release-sign-v1`
+# and ran their code (see tests/test_release_folder.py). Now anything Python could import
+# that isn't in the signed release is a problem, and a compiled cache only passes when it
+# is byte-for-byte what this Python builds from the checked source.
+
+FOLDER_RULE = "release-folder-v1"
+# Every ending Python can import or load (plus `.pth`, `.pyw`, `.pyd` and the old `.pyo`).
+CODE_SUFFIXES = tuple(sorted(set(importlib.machinery.all_suffixes())
+                             | {".py", ".pyc", ".pyo", ".pyw", ".pyd", ".pth", ".so"}))
+CACHE_NAME_RE = re.compile(r"^(?P<stem>[^./]+)\.(?P<tag>[^./]+)(?:\.opt-(?P<opt>[12]))?\.pyc\Z")
+MAX_FOLDER_ENTRIES = 100_000  # an honest prototype/ holds a few hundred
+MAX_LISTED_NOTES = 50         # extra non-code files listed one by one before summarising
+
+
+def _open_regular(full: Path) -> int:
+    """File descriptor for a plain file, never following a final symlink and never
+    blocking on a pipe or device. Raises OSError otherwise."""
+    fd = os.open(full, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0))
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(f"{full} is not a regular file")
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _read_regular(full: Path, size: int) -> bytes | None:
+    """The file's bytes if it is a plain file of exactly `size` bytes, else None. Reads at
+    most `size + 1` bytes (the signed size), so a huge file is never read in full."""
+    try:
+        fd = _open_regular(full)
+    except OSError:
+        return None
+    with os.fdopen(fd, "rb") as fh:
+        data = fh.read(size + 1)
+    return data if len(data) == size else None
+
+
+def expected_cache(source: bytes, source_path: Path, source_mtime: float, flags: int,
+                   opt: int) -> bytes | None:
+    """The exact `.pyc` this Python writes for `source` (CPython's layout: magic, flags,
+    then time+size or a source hash, then the compiled code). Our own compile of a source
+    that already matched its signed hash; untrusted cache bytes are only compared, never
+    unmarshalled (marshal isn't safe on hostile data)."""
+    if flags not in (0, 1, 3):
+        return None
+    try:
+        code = compile(source, str(source_path), "exec", dont_inherit=True, optimize=opt)
+    except (SyntaxError, ValueError):
+        return None
+    head = bytearray(importlib.util.MAGIC_NUMBER) + flags.to_bytes(4, "little")
+    if flags == 0:
+        head += (int(source_mtime) & 0xFFFFFFFF).to_bytes(4, "little")
+        head += (len(source) & 0xFFFFFFFF).to_bytes(4, "little")
+    else:
+        head += importlib.util.source_hash(source)
+    return bytes(head) + marshal.dumps(code)
+
+
+def _is_code(name: str) -> bool:
+    return name.endswith(CODE_SUFFIXES)
+
+
+def _scan_folder(root: Path, listed: set[str]) -> tuple[list[str], list[str], list[str]]:
+    """Walk the folder without following links. Returns (problems, extra non-code files,
+    `__pycache__` folders to check). Hidden names and IGNORED_DIRS are skipped."""
+    problems: list[str] = []
+    extras: list[str] = []
+    caches: list[str] = []
+    stack = [""]
+    seen = 0
+    while stack:
+        rel_dir = stack.pop()
+        try:
+            with os.scandir(root / rel_dir if rel_dir else root) as it:
+                entries = sorted(it, key=lambda e: e.name)
+        except OSError:
+            problems.append(f"{rel_dir or '.'}/: can't read this folder, so can't confirm "
+                            "it holds no extra code (fix its permissions and check again)")
+            continue
+        for entry in entries:
+            seen += 1
+            if seen > MAX_FOLDER_ENTRIES:
+                problems.append(f"more than {MAX_FOLDER_ENTRIES} files and folders; not an "
+                                "honest worker folder (stopped looking)")
+                return problems, extras, caches
+            name = entry.name
+            rel = f"{rel_dir}/{name}" if rel_dir else name
+            if name.startswith("."):
                 continue
-            extra.append(rel)
-    return extra
+            try:
+                is_link = entry.is_symlink()
+                is_dir = not is_link and entry.is_dir(follow_symlinks=False)
+            except OSError:
+                problems.append(f"{rel}: can't be inspected")
+                continue
+            if is_dir:
+                if name == "__pycache__":
+                    caches.append(rel)
+                elif name not in IGNORED_DIRS:
+                    stack.append(rel)
+                continue
+            if rel in listed:
+                continue  # compared against its signed hash in check_files
+            if is_link:
+                if name in IGNORED_DIRS:
+                    continue
+                problems.append(f"{rel}: link not in the signed release (a link can bring "
+                                "in code from anywhere; Python follows it)")
+            elif _is_code(name):
+                problems.append(f"{rel}: Python code not in the signed release (Python can "
+                                "import it)")
+            else:
+                extras.append(rel)
+    return problems, extras, caches
+
+
+def _check_cache_folder(root: Path, rel_dir: str, verified: dict[str, dict[str, Any]],
+                        problems: list[str], notes: list[str]) -> None:
+    """Every cache in one `__pycache__` that Python might load must be exactly what this
+    Python builds from the checked source next to it."""
+    folder = root / rel_dir
+    parent = rel_dir.rsplit("/", 1)[0] if "/" in rel_dir else ""
+    fix = ("delete the __pycache__ folders and check again (always safe: Python rebuilds "
+           "them from the checked source)")
+    unused = 0
+    try:
+        with os.scandir(folder) as it:
+            entries = sorted(it, key=lambda e: e.name)
+    except OSError:
+        problems.append(f"{rel_dir}/: can't read this folder, so can't check its caches; {fix}")
+        return
+    for entry in entries[:MAX_FOLDER_ENTRIES]:
+        rel = f"{rel_dir}/{entry.name}"
+        try:
+            plain = entry.is_file(follow_symlinks=False)
+        except OSError:
+            plain = False
+        if not plain:
+            problems.append(f"{rel}: not a plain file inside a Python cache folder; {fix}")
+            continue
+        m = CACHE_NAME_RE.match(entry.name)
+        source_rel = f"{parent}/{m['stem']}.py" if (m and parent) else (
+            f"{m['stem']}.py" if m else "")
+        if not m or source_rel not in verified:
+            unused += 1  # Python never looks this name up (or its source isn't in the release)
+            continue
+        if m["tag"] != sys.implementation.cache_tag:
+            problems.append(f"{rel}: compiled by another Python ({m['tag']}); this check can "
+                            f"only compare {sys.implementation.cache_tag} caches; {fix}")
+            continue
+        src = verified[source_rel]
+        if src.get("data") is None:
+            continue  # its source already failed; that problem is reported
+        expected = None
+        fd = None
+        try:
+            fd = _open_regular(root / rel)
+            with os.fdopen(fd, "rb") as fh:
+                fd = None
+                head = fh.read(16)
+                if len(head) == 16:
+                    flags = int.from_bytes(head[4:8], "little")
+                    expected = expected_cache(src["data"], src["path"], src["mtime"], flags,
+                                              int(m["opt"] or 0))
+                # Reads at most one byte past the expected length: enough to see extra data.
+                ok = expected is not None and head + fh.read(len(expected)) == expected
+        except OSError:
+            ok = False
+        finally:
+            if fd is not None:
+                os.close(fd)
+        if not ok:
+            problems.append(f"{rel}: compiled cache doesn't match the checked source; Python "
+                            f"could run it instead of {source_rel}; {fix}")
+    if unused:
+        notes.append(f"{rel_dir}/: {unused} cache file(s) Python won't load for this release "
+                     "(other tools, or files no longer in the release); left alone")
 
 
 def check_files(manifest: dict[str, Any], root: Path) -> tuple[list[str], list[str]]:
-    """Compare the files on disk with the manifest. Extra `.py` files are problems (Python
-    can import them); other extra files are notes (rigs keep logs and reports there)."""
+    """Compare the folder on disk with the manifest (`release-folder-v1`). Problems: a
+    listed file missing, changed, linked or outside; anything Python could import that isn't
+    listed (`.py`, `.pyc`, `.so`, `.pth`...); a link; a compiled cache that isn't exactly
+    what this Python builds from the checked source; a folder that can't be read. Other
+    extra files are notes (rigs keep logs and reports there)."""
     root = Path(root)
     problems: list[str] = []
     notes: list[str] = []
     resolved_root = root.resolve()
+    verified: dict[str, dict[str, Any]] = {}
     for entry in manifest["files"]:
         rel = entry["path"]
         full = root / PurePosixPath(rel)
@@ -423,18 +612,32 @@ def check_files(manifest: dict[str, Any], root: Path) -> tuple[list[str], list[s
             inside = False
         if full.is_symlink() or not inside:
             problems.append(f"{rel}: is a symlink or points outside the release folder")
+            verified[rel] = {}
             continue
-        if not full.is_file():
+        if not full.exists():
             problems.append(f"{rel}: missing")
+            verified[rel] = {}
             continue
-        if full.stat().st_size != entry["size"] or sha256_file(full) != entry["sha256"]:
+        data = _read_regular(full, entry["size"])
+        if data is None and not full.is_file():
+            problems.append(f"{rel}: not a plain file (a pipe, device or folder)")
+            verified[rel] = {}
+            continue
+        if data is None or hashlib.sha256(data).hexdigest() != entry["sha256"]:
             problems.append(f"{rel}: contents differ from the signed release")
-    listed = {e["path"] for e in manifest["files"]}
-    for rel in _walk_extra(root, listed):
-        if rel.endswith(".py") or rel.endswith(".pth"):
-            problems.append(f"{rel}: Python file not in the signed release")
-        else:
-            notes.append(f"{rel}: extra file not in the release (not code; left alone)")
+            verified[rel] = {}
+            continue
+        verified[rel] = {"data": data if rel.endswith(".py") else None,
+                         "path": resolved_root / PurePosixPath(rel),
+                         "mtime": full.stat().st_mtime}
+    scan_problems, extras, caches = _scan_folder(root, set(verified))
+    problems += scan_problems
+    for rel_dir in caches:
+        _check_cache_folder(root, rel_dir, verified, problems, notes)
+    for rel in extras[:MAX_LISTED_NOTES]:
+        notes.append(f"{rel}: extra file not in the release (not code; left alone)")
+    if len(extras) > MAX_LISTED_NOTES:
+        notes.append(f"... and {len(extras) - MAX_LISTED_NOTES} more extra files (not code)")
     return problems, notes
 
 
@@ -508,6 +711,7 @@ def verify_release(manifest_path: Path, signers_path: Path, *, sigs_path: Path |
         problems += file_problems
         notes += file_notes
         report["checked_root"] = True
+        report["folder_rule"] = FOLDER_RULE
     else:
         report["checked_root"] = False
         notes.append("files on disk not checked (no --root given)")
@@ -518,16 +722,17 @@ def verify_release(manifest_path: Path, signers_path: Path, *, sigs_path: Path |
 
 
 def report_text(report: dict[str, Any]) -> str:
+    # File names come from someone else's folder: print them without terminal control codes.
     lines = []
     if report.get("name"):
-        lines.append(f"release {report['name']} {report['version']} "
+        lines.append(f"release {say(report['name'])} {say(report['version'])} "
                      f"(commit {report['source_commit'][:12]}, {report['files']} files)")
     lines.append(f"signers: {len(report['valid_signers'])} valid of {report['threshold']} "
                  f"required ({', '.join(report['valid_signers']) or 'none'})")
     for p in report["problems"]:
-        lines.append(f"FAIL  {p}")
+        lines.append(f"FAIL  {say(p, 600)}")
     for n in report["notes"]:
-        lines.append(f"note  {n}")
+        lines.append(f"note  {say(n, 600)}")
     lines.append("OK: enough different signers signed exactly these files" if report["ok"]
                  else "NOT OK: don't run this release")
     return "\n".join(lines)

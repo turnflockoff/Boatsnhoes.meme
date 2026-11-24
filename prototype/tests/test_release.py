@@ -398,12 +398,11 @@ def test_extra_python_file_fails_other_extras_are_notes(repo, tmp_path, keys):
     out = signed(repo, tmp_path, keys)
     (repo / "app" / "sitecustomize.py").write_text("import os\n")
     (repo / "run.log").write_text("log")
-    (repo / "app" / "__pycache__").mkdir()
-    (repo / "app" / "__pycache__" / "worker.cpython-311.pyc").write_bytes(b"x")
     report = release.verify_release(out, signer_list(tmp_path, keys), root=repo)
-    assert "app/sitecustomize.py: Python file not in the signed release" in report["problems"]
+    assert ("app/sitecustomize.py: Python code not in the signed release (Python can import "
+            "it)") in report["problems"]
     assert any(n.startswith("run.log") for n in report["notes"])
-    assert not any("pycache" in x for x in report["problems"] + report["notes"])
+    # Compiled caches are no longer skipped (`release-folder-v1`); see test_release_folder.py.
 
 
 def test_symlinked_file_on_disk_fails(repo, tmp_path, keys):
