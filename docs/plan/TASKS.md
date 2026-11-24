@@ -1,5 +1,5 @@
 # BOATS N HOES: Project Task List (Claude + dev work)
-**Version:** 0.5.52 | **Last updated:** 2026-11-24 | Personal to-dos live in USER_TODO.md.
+**Version:** 0.5.53 | **Last updated:** 2026-11-24 | Personal to-dos live in USER_TODO.md.
 
 ## Phase 0: Foundation
 - [x] Buy boatsnhoes.meme
@@ -80,7 +80,7 @@
 - [ ] Testnet, then public testnet
 - [ ] Checkpoint/finality design against 51% attacks
 - [ ] Hashrate monitoring dashboard
-- [ ] Code audit and bug bounty *(first pass done in Phase 4: hostile-input fuzz of the coordinator API, 0.5.52; an outside audit and a bounty still to come)*
+- [ ] Code audit and bug bounty *(first pass done in Phase 4: hostile-input fuzz of the coordinator API, 0.5.52; second pass: the worker against a hostile coordinator, 0.5.53; an outside audit and a bounty still to come)*
 
 ## Phase 4: Security (see README SECURITY)
 - [x] Stay Safe page built
@@ -96,6 +96,7 @@
 - [x] Signed miner releases with checksums (multi-signer) *(`release-sign-v1`, 0.5.49: `python -m app.release keygen|make|sign|verify`; release = every git-tracked file's sha256 plus a `SHA256SUMS`; counts only with at least 2 different signers from a pinned list, every signature valid, files on disk matching and no extra Python files; `--not-older-than` against rollbacks. 54 tests (924 total); 20 deliberate breakages all caught. Software only; no real signer keys or signed release yet)*
 - [ ] Pick the release signers (at least 2 people, each with their own key) and publish the signer list (owner decision; see USER_TODO.md)
 - [x] Code audit, first pass: hostile input against every API route *(`input-limits-v1`, 0.5.52: a fuzz sends ~1,000 broken and hostile requests to every route; found and fixed no body size limit (now `MAX_BODY_BYTES`, 256 KiB, `413` before reading), deeply nested JSON crashing (`400` past 32 levels), `422` errors echoing what was sent (and crashing on `1e999`), huge numbers crashing SQLite, negative worker timestamps; worker and capability names now plain ASCII. 38 tests, 1,063 total)*
+- [x] Code audit, second pass: the worker against a hostile coordinator or network *(`worker-input-v1`, 0.5.53: reply size limit (8 MiB, refused before reading when declared), no compressed replies, 60 s whole-reply deadline, broken/deep/`NaN` JSON refused, coordinator text printed without terminal control codes, worker key and job id shape checks, no worker key over plain http to another machine without `--allow-plain-http`, growing wait after refused jobs; any malformed job is refused, never a crash. 103 tests, 1,166 total)*
 - [ ] Many seed nodes in different regions
 - [ ] Node peer limits and rate limits
 - [ ] Public status page

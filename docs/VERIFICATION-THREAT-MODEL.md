@@ -86,6 +86,11 @@ This assumes the auditor is honest. The rest of this document is about when that
   That is fine for useful work; it matters only if rewards are ever meant to be "GPU only".
 - **The coordinator is trusted.** This is a central service run by the project, not a
   trustless network.
+  Trusted to sign honest jobs, not to send well-formed replies: since 0.5.53
+  (`worker-input-v1`) the worker refuses oversized, slow, compressed or malformed replies,
+  prints none of the coordinator's text with terminal control codes, and won't send its key
+  over plain http to another machine, so a fake coordinator or a man in the middle can't
+  crash a rig or read its key.
 - **The tolerance rule is a guess** until Phase 3 produces real output from two cards.
 
 ## Order of the next fixes
