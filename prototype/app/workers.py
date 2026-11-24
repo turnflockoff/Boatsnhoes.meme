@@ -29,6 +29,7 @@ from pathlib import Path
 
 from .ledger import CoordinatorPaused, Ledger
 from .security import sha256_text
+from .screen import say
 
 OWNER_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}\Z")
 MIN_TTL, MAX_TTL = 60, 7 * 86400
@@ -96,7 +97,9 @@ def main(argv: list[str] | None = None) -> int:
     for w in ledger.list_workers():
         state = "revoked" if w["revoked_at"] is not None else (
             "active" if w["has_key"] else "no key (re-enroll)")
-        print(f"{w['worker_id']}\towner={w['owner'] or '-'}\t{state}")
+        # Names are checked on the way in since 0.5.52, but an older ledger can hold
+        # anything, so they are printed safely (`operator-screen-v1`).
+        print(f"{say(w['worker_id'])}\towner={say(w['owner'] or '-')}\t{state}")
     return 0
 
 

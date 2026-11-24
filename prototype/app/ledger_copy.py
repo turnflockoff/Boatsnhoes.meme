@@ -55,6 +55,7 @@ from typing import Any
 
 from . import copy_guard
 from .ledger import Ledger
+from .screen import MAX_SCREEN_LINE_CHARS, say, say_lines
 
 COPY_FORMAT = "bnh-ledger-copy/1"
 OPEN_STATES = ("queued", "leased")
@@ -228,25 +229,28 @@ def _compare_cli(older: Path, newer: Path, out: Path | None) -> int:
     try:
         result = compare_copies(older, newer)
     except CompareError as exc:
-        print(str(exc), file=sys.stderr)
+        print(say(str(exc), MAX_SCREEN_LINE_CHARS), file=sys.stderr)
         return 2
+    # Both copies may come from someone else, and every name in a problem line (rigs, jobs,
+    # events) is read from them, so all of it is printed safely (`operator-screen-v1`). The
+    # --out JSON keeps the exact text.
     o, n, c = result["older"], result["newer"], result["compared"]
-    print(f"older: {o['file']} until={o['until']} sha256={o['sha256']}")
-    print(f"newer: {n['file']} until={n['until']} sha256={n['sha256']}")
-    print(f"compared {c['jobs']} jobs, {c['results']} results, {c['rigs']} rigs, "
-          f"{c['events']} events from the older copy")
+    lines = [f"older: {o['file']} until={o['until']} sha256={o['sha256']}",
+             f"newer: {n['file']} until={n['until']} sha256={n['sha256']}",
+             f"compared {c['jobs']} jobs, {c['results']} results, {c['rigs']} rigs, "
+             f"{c['events']} events from the older copy"]
     if result["ok"]:
-        print("OK: the newer copy keeps the older copy's history unchanged "
-              "(nothing edited, deleted or back-dated)")
+        lines.append("OK: the newer copy keeps the older copy's history unchanged "
+                     "(nothing edited, deleted or back-dated)")
     else:
-        print(f"PROBLEM: {result['problem_count']} difference(s) in history that was "
-              "already shared:")
-        for line in result["problems"]:
-            print(f"  - {line}")
+        lines.append(f"PROBLEM: {result['problem_count']} difference(s) in history that was "
+                     "already shared:")
+        lines += [f"  - {line}" for line in result["problems"]]
         hidden = result["problem_count"] - len(result["problems"])
         if hidden:
-            print(f"  ... and {hidden} more")
-    print(result["note"])
+            lines.append(f"  ... and {hidden} more")
+    lines.append(result["note"])
+    sys.stdout.write(say_lines(lines))
     if out is not None:
         tmp = out.with_name(out.name + ".partial")
         tmp.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
@@ -282,14 +286,16 @@ def main(argv: list[str] | None = None) -> int:
         try:
             meta = copy_info(args.copy)
         except sqlite3.DatabaseError as exc:  # includes copy_guard.UnsafeCopyError
-            print(f"refusing to read {args.copy.name}: {exc}", file=sys.stderr)
+            print(say(f"refusing to read {args.copy.name}: {exc}", MAX_SCREEN_LINE_CHARS),
+                  file=sys.stderr)
             return 2
         if meta is None:
             print("not a ledger copy (this looks like a full, unredacted ledger)")
             return 1
-        print(f"format={meta['format']} until={meta['until']} created_at={meta['created_at']}")
-        print(f"sha256={_file_sha256(args.copy)}")
-        print(meta["note"])
+        # The header was written by whoever made the copy (`operator-screen-v1`).
+        sys.stdout.write(say_lines([
+            f"format={meta['format']} until={meta['until']} created_at={meta['created_at']}",
+            f"sha256={_file_sha256(args.copy)}", meta["note"]]))
         return 0
 
     try:

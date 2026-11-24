@@ -48,6 +48,8 @@ from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
 from packaging.version import InvalidVersion, Version
 
+from app.screen import say_lines
+
 SCHEMA = "bnh-deps-check/1"
 RULE = "deps-check-v1"
 LICENSES_SCHEMA = "bnh-dep-licenses/1"
@@ -473,10 +475,13 @@ def check_installed(lock_text: str, licenses: dict, distributions: Iterable | No
 # ------------------------------------------------------------------ CLI
 
 def _print(result: dict) -> None:
-    for c in result["checks"]:
-        print(f"{c['status'].upper():5} {c['name']:17} {c['detail']}")
+    # Details can quote package metadata and, for vuln_check, advisory text from OSV, which
+    # other people write: printed safely (`operator-screen-v1`, app/screen.py).
+    lines = [f"{c['status'].upper():5} {c['name']:17} {c['detail']}" for c in result["checks"]]
     counts = result.get("counts", {})
-    print(f"\n{'OK' if result['ok'] else 'PROBLEMS FOUND'}: " + ", ".join(f"{v} {k}" for k, v in sorted(counts.items())))
+    lines += ["", f"{'OK' if result['ok'] else 'PROBLEMS FOUND'}: "
+              + ", ".join(f"{v} {k}" for k, v in sorted(counts.items()))]
+    sys.stdout.write(say_lines(lines))
 
 
 def main(argv: list[str] | None = None) -> int:

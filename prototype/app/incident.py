@@ -42,6 +42,7 @@ from typing import Any
 
 from .config import _int_env
 from .ledger import PAUSE_VERSION, Ledger
+from .screen import say_lines
 
 DEFAULT_DB = Path("./data/prototype.sqlite3")
 
@@ -66,7 +67,7 @@ def _render(state: dict[str, Any]) -> str:
     past = [h for h in state["history"] if h["event"] == "coordinator_resumed"]
     if past:
         lines.append(f"Past pauses: {len(past)}; last resumed at {past[-1]['at']}.")
-    return "\n".join(lines) + "\n"
+    return say_lines(lines)
 
 
 def main(argv: list[str] | None = None) -> int:

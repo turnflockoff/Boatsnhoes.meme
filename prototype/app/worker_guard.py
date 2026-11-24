@@ -45,6 +45,9 @@ from urllib.parse import urlsplit
 import httpx
 
 from app.input_limits import MAX_JSON_DEPTH, json_depth
+# Terminal-safe printing lives in app/screen.py (no third-party imports, so the site and
+# dependency checkers can use it too); re-exported here for the many callers that import it.
+from app.screen import MAX_SAY_CHARS, MAX_SCREEN_LINE_CHARS, say, say_lines  # noqa: F401
 
 WORKER_GUARD_VERSION = "worker-input-v1"
 
@@ -55,8 +58,6 @@ MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 # Whole reply, start to last byte. httpx's own timeout is per read, so a server sending a
 # byte every few seconds could otherwise keep the worker waiting for ever.
 RESPONSE_DEADLINE_SECONDS = 60.0
-# Longest text from the coordinator the worker prints in one message.
-MAX_SAY_CHARS = 200
 # After a refused job the worker waits 5 s, then 10, 20, 40, then 60 s each time.
 FIRST_REFUSAL_WAIT_SECONDS = 5
 MAX_REFUSAL_WAIT_SECONDS = 60
@@ -88,16 +89,6 @@ class Reply:
             value = self.data["detail"]
             return say(value if isinstance(value, str) else json.dumps(value))
         return "(no details)"
-
-
-def say(value: Any, limit: int = MAX_SAY_CHARS) -> str:
-    """`value` as text that is safe to print to a terminal: control characters (including
-    ESC, which starts colour and cursor codes), invisible and right-to-left marks, and
-    line breaks become `?`; anything past `limit` characters is cut off."""
-    text = value if isinstance(value, str) else repr(value)
-    cut = len(text) > limit
-    text = "".join(ch if ch.isprintable() else "?" for ch in text[:limit])
-    return text + "..." if cut else text
 
 
 def is_loopback(host: str) -> bool:

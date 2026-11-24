@@ -47,6 +47,7 @@ from pathlib import Path
 from typing import Any
 
 from .ledger import Ledger
+from .screen import say_lines
 
 VOUCH_RULE = "vouch-check-v1"
 ROLE_BY_KIND = {"work": "original", "audit": "audit", "tiebreak": "tie-breaker"}
@@ -161,7 +162,7 @@ def render_text(report: dict[str, Any]) -> str:
         if not lead["revoked"]:
             lines.append(f"  next: {lead['next_step']}")
     lines += ["", report["note"]]
-    return "\n".join(lines) + "\n"
+    return say_lines(lines)
 
 
 def main(argv: list[str] | None = None) -> int:

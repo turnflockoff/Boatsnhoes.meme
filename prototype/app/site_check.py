@@ -48,6 +48,8 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Callable
 
+from app.screen import say_lines
+
 RULE = "site-check-v1"
 FORMAT = "bnh-site-check/1"
 DEFAULT_ROOT = Path(__file__).resolve().parents[2]
@@ -641,10 +643,13 @@ def live_check(base_url: str, root: Path = DEFAULT_ROOT, fetch: Callable[[str], 
 # ------------------------------------------------------------------ CLI
 
 def _print(result: dict) -> None:
-    for c in result["checks"]:
-        print(f"{c['status'].upper():5} {c['name']:15} {c['detail']}")
+    # Details quote headers, redirects and page text the live site (or whatever answers at
+    # --url) sent: printed safely (`operator-screen-v1`, app/screen.py).
+    lines = [f"{c['status'].upper():5} {c['name']:15} {c['detail']}" for c in result["checks"]]
     counts = result.get("counts", {})
-    print(f"\n{'OK' if result['ok'] else 'PROBLEMS FOUND'}: " + ", ".join(f"{v} {k}" for k, v in sorted(counts.items())))
+    lines += ["", f"{'OK' if result['ok'] else 'PROBLEMS FOUND'}: "
+              + ", ".join(f"{v} {k}" for k, v in sorted(counts.items()))]
+    sys.stdout.write(say_lines(lines))
 
 
 def main(argv: list[str] | None = None) -> int:
