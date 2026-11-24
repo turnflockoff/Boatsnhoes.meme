@@ -47,6 +47,10 @@ project post) and check they match. After a key rotation, pass `--public-key` on
 The tools treat every copy as a file from a stranger: they refuse one that holds anything
 but the plain ledger tables (views, triggers, extra tables), is damaged or is oversized, and
 they never change the file while checking it (`copy-open-v1`, `prototype/app/copy_guard.py`).
+Reports and `index.json` are read the same careful way (`json-file-v1`): oversized, deeply
+nested or ambiguous JSON (a key written twice) is refused, and the fingerprint the tools
+print is computed from the key that signed, never copied from the file. CI checks that
+every number shown on the page matches the signed report.
 Checking proves who issued a report, that its numbers come from the posted ledger, and that
 later copies didn't rewrite earlier history. It can't prove the coordinator recorded
 everything honestly to begin with (see `docs/VERIFICATION-THREAT-MODEL.md`).

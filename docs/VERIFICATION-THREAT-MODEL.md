@@ -98,6 +98,13 @@ This assumes the auditor is honest. The rest of this document is about when that
   or extra tables), pass `integrity_check`, stay under size limits, and is opened read-only
   and immutable, so checking it never changes it. That makes reading a copy safe, not its
   numbers true.
+- **Reports, release files and the public index are JSON from strangers too.** Since
+  0.5.55 (`json-file-v1`, `app/json_file.py`) they are read with size, depth, encoding,
+  `NaN` and duplicate-key limits. A report's `fingerprint` field is only a label (not
+  signed), so it must match the key that signed it and tools print the fingerprint they
+  compute: before, a report signed by anyone could show the coordinator's fingerprint to
+  someone checking without `--public-key`. `publish_report check` also checks that every
+  number the /reports/ page shows matches the signed report.
 - **The tolerance rule is a guess** until Phase 3 produces real output from two cards.
 
 ## Order of the next fixes
