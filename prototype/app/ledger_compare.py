@@ -37,6 +37,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
+from . import copy_guard
 from .ledger import Ledger
 from .ledger_copy import COPY_FORMAT, _file_sha256, copy_info
 from .rewards import build_report
@@ -61,7 +62,7 @@ class CompareError(ValueError):
 
 
 def _open(path: Path) -> sqlite3.Connection:
-    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    db = copy_guard.connect(path)  # vetted by copy_info first; immutable, hardened
     db.row_factory = sqlite3.Row
     return db
 
@@ -139,7 +140,7 @@ def compare_copies(older: Path, newer: Path) -> dict[str, Any]:
     problems: list[str] = []
     # Each copy must also be sound on its own.
     for p in (older, newer):
-        for issue in Ledger(p, read_only=True).check_consistency():
+        for issue in Ledger(p, untrusted=True).check_consistency():
             problems.append(f"{p.name} fails its own consistency check: {issue}")
 
     a, b = _load(older), _load(newer)
@@ -199,8 +200,8 @@ def compare_copies(older: Path, newer: Path) -> dict[str, Any]:
     # 3. Same numbers: a report up to the older `until` must be identical from both copies.
     report_old = report_new = None
     if until > 0:
-        report_old = build_report(Ledger(older, read_only=True), 0, until)["report_sha256"]
-        report_new = build_report(Ledger(newer, read_only=True), 0, until)["report_sha256"]
+        report_old = build_report(Ledger(older, untrusted=True), 0, until)["report_sha256"]
+        report_new = build_report(Ledger(newer, untrusted=True), 0, until)["report_sha256"]
         if report_old != report_new:
             problems.append(f"a reward report for everything before {until} differs between "
                             "the two copies")

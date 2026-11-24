@@ -162,7 +162,7 @@ def plan(report_path: Path, copy_path: Path, folder: Path, public_key: str | Non
         raise PublishError(f"the period ended less than {min_wait_hours} hours ago; publish "
                            f"on or after {ready} (threat model #14: copies show which jobs "
                            "were hidden tests, so they are shared late)")
-    problems = rewards.verify_report(report, Ledger(copy_path, read_only=True), key)
+    problems = rewards.verify_report(report, Ledger(copy_path, untrusted=True), key)
     if problems:
         raise PublishError("the report does not match the copy: " + "; ".join(problems[:5]))
 
@@ -308,7 +308,7 @@ def check_folder(folder: Path, public_keys: list[str] | str | None = None) -> li
             problems.append(f"{pid}: report, copy and index disagree on when the period ends")
         if report.get("report_sha256") != p.get("report_sha256"):
             problems.append(f"{pid}: report_sha256 doesn't match the index")
-        for issue in rewards.verify_report(report, Ledger(copy_path, read_only=True), key):
+        for issue in rewards.verify_report(report, Ledger(copy_path, untrusted=True), key):
             problems.append(f"{pid}: {issue}")
         if previous_copy is not None:
             try:

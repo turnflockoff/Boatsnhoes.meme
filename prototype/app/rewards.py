@@ -49,6 +49,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -323,8 +324,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"database not found: {args.db}", file=sys.stderr)
         return 2
     # A shared ledger copy is opened read-only so checking it never changes its sha256.
+    # Someone else's copy is vetted first (app/copy_guard.py, `copy-open-v1`).
     from .ledger_copy import copy_info
-    ledger = Ledger(args.db, read_only=copy_info(args.db) is not None)
+    try:
+        is_copy = copy_info(args.db) is not None
+        ledger = Ledger(args.db, untrusted=is_copy)
+    except sqlite3.DatabaseError as exc:
+        print(f"refusing to read {args.db}: {exc}", file=sys.stderr)
+        return 2
     if args.cmd == "report":
         now = int(time.time())
         if args.until is not None:

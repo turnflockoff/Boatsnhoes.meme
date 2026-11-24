@@ -59,7 +59,7 @@ from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-from . import tasks
+from . import copy_guard, tasks
 from .audit_policy import (
     AUDITOR_PICK_RULES,
     PASSED_STATUSES,
@@ -263,13 +263,18 @@ class Ledger:
                  active_seconds: int = 300, assign_seconds: int = 120,
                  read_only: bool = False,
                  tier_of: Callable[[dict[str, int]], str] | None = None,
-                 auditor_pick: str = "uniform", tiebreak_decides: str = "always"):
+                 auditor_pick: str = "uniform", tiebreak_decides: str = "always",
+                 untrusted: bool = False):
         """`rng` picks auditors; the default uses the OS's secure randomness so workers
         can't predict who gets an audit. A worker counts as active for `active_seconds`
         after it last asked for a job, sent a result, or enrolled. An assigned worker has
         `assign_seconds` to claim its audit before someone else gets it.
         `read_only` opens an existing file without changing a single byte (no WAL switch,
         no migrations), for checking a shared ledger copy whose sha256 was published.
+        `untrusted` (implies `read_only`) is for a copy someone else made: the file is
+        vetted once (app/copy_guard.py, `copy-open-v1`: plain tables only, intact, size
+        limits) and every connection is immutable and hardened. Raises
+        copy_guard.UnsafeCopyError if the file isn't a plain ledger copy.
         `tier_of` maps a worker's audit_history() counts to its trust tier (see
         app/audit_policy.py); without it, hidden tests aimed at a tier find nobody.
         `auditor_pick` is "uniform" (any eligible worker) or "trusted-first" (audits and
@@ -294,6 +299,11 @@ class Ledger:
         self.tier_of = tier_of
         self.auditor_pick = auditor_pick
         self.tiebreak_decides = tiebreak_decides
+        self.untrusted = untrusted
+        if untrusted:
+            self.read_only = True
+            copy_guard.vet(self.path)
+            return
         if read_only:
             if not self.path.exists():
                 raise FileNotFoundError(self.path)
@@ -313,7 +323,9 @@ class Ledger:
 
     # -- plumbing -----------------------------------------------------------------
     def _connect(self) -> sqlite3.Connection:
-        if self.read_only:
+        if self.untrusted:
+            db = copy_guard.connect(self.path)
+        elif self.read_only:
             db = sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True,
                                  timeout=10, isolation_level=None)
         else:

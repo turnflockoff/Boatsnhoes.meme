@@ -53,6 +53,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
+from . import copy_guard
 from .ledger import Ledger
 
 COPY_FORMAT = "bnh-ledger-copy/1"
@@ -148,7 +149,11 @@ def export_copy(source: Path, dest: Path, until: int, now: int,
         raise CopyError("the copy must be a different file from the ledger")
     if dest.exists():
         raise CopyError(f"{dest} already exists; pick a new file name")
-    if copy_info(source) is not None:
+    try:
+        source_info = copy_info(source)
+    except sqlite3.DatabaseError as exc:
+        raise CopyError(f"not a readable ledger: {exc}") from None
+    if source_info is not None:
         # Re-exporting a copy would also write the export record into a shared file.
         raise CopyError("that file is already a ledger copy; export from the live ledger")
     problems = Ledger(source).check_consistency()
@@ -176,7 +181,11 @@ def export_copy(source: Path, dest: Path, until: int, now: int,
                 raise
             db.execute("VACUUM")  # drop free pages so nothing deleted can be recovered
         # Redaction must not break any invariant the report relies on.
-        after = Ledger(partial, read_only=True).check_consistency()
+        # Vetted like a stranger's copy would be, so every honest export opens cleanly.
+        try:
+            after = Ledger(partial, untrusted=True).check_consistency()
+        except copy_guard.UnsafeCopyError as exc:
+            raise CopyError(f"redacted copy fails the copy check: {exc}") from None
         if after:
             raise CopyError("redacted copy fails the consistency check: " + "; ".join(after[:3]))
         partial.replace(dest)
@@ -198,18 +207,16 @@ def export_copy(source: Path, dest: Path, until: int, now: int,
 
 
 def copy_info(path: Path) -> dict[str, Any] | None:
-    """The copy's header, or None if `path` is a normal (unredacted) ledger."""
+    """The copy's header, or None if `path` is a normal (unredacted) ledger.
+
+    A copy may come from anyone, so it is vetted before it is believed (app/copy_guard.py,
+    `copy-open-v1`): plain ledger tables only, intact, one `copy_info` row. Raises
+    copy_guard.UnsafeCopyError (a sqlite3.DatabaseError) otherwise. Opening is read-only
+    and immutable, so it changes no bytes; a live WAL ledger still answers None."""
     path = Path(path)
-    if not path.exists():
-        raise FileNotFoundError(path)
-    # A plain read: it changes no bytes, and unlike mode=ro it also works on a live WAL ledger.
-    with closing(sqlite3.connect(path)) as db:
-        has = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='copy_info'"
-                         ).fetchone()
-        if not has:
-            return None
-        row = db.execute("SELECT format, until, created_at, note FROM copy_info").fetchone()
-    return {"format": row[0], "until": row[1], "created_at": row[2], "note": row[3]}
+    if not copy_guard.has_copy_info(path):
+        return None
+    return copy_guard.vet(path)
 
 
 def _compare_cli(older: Path, newer: Path, out: Path | None) -> int:
@@ -272,7 +279,11 @@ def main(argv: list[str] | None = None) -> int:
         if not args.copy.exists():
             print(f"file not found: {args.copy}", file=sys.stderr)
             return 2
-        meta = copy_info(args.copy)
+        try:
+            meta = copy_info(args.copy)
+        except sqlite3.DatabaseError as exc:  # includes copy_guard.UnsafeCopyError
+            print(f"refusing to read {args.copy.name}: {exc}", file=sys.stderr)
+            return 2
         if meta is None:
             print("not a ledger copy (this looks like a full, unredacted ledger)")
             return 1
