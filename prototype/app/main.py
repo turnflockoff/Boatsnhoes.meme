@@ -40,6 +40,22 @@ PRIVATE_EVENTS = {"audit_scheduled", "audit_match", "audit_mismatch", "audit_not
 PAUSED_RETRY_AFTER = 60
 
 
+# Headers that carry a token a person chose or typed (24+ characters), so worth guessing.
+# Worker keys and enrollment codes are 256-bit random values and don't take guess slots.
+GUESSABLE_HEADERS = ("x-operator-token", "x-submitter-token")
+
+LIMITED_DETAIL = {
+    "locked_out": "too many failed logins from this address; try again later",
+    "too_many_at_once": "too many login attempts at once from this address; try again "
+                        "in a moment",
+}
+
+
+def carries_guessable_token(request: Request) -> bool:
+    """True if the request sends an operator or submitter token (even an empty one)."""
+    return any(name in request.headers for name in GUESSABLE_HEADERS)
+
+
 class AuthRefused(HTTPException):
     """A credential was sent and it was wrong (bad worker key, operator or submitter token,
     or enrollment code). Counted per client by app/rate_limit.py; enough of them in a row
@@ -133,6 +149,14 @@ def create_app(settings: Settings | None = None,
                   "path": request.url.path}
         started = time.perf_counter()
         blocked = limiter.check(client_of(request), request.url.path)
+        # `guess-slot-v1`: a guessable token takes a slot before it is checked, so a burst
+        # of wrong tokens sent at the same moment can't all be checked before the first
+        # failure is counted. Freed only after the failure (if any) was recorded.
+        guess = (not blocked and request.url.path not in rate_limit.EXEMPT_PATHS
+                 and carries_guessable_token(request))
+        if guess:
+            blocked = limiter.start_guess(client_of(request))
+            guess = blocked is None
         try:
             if blocked:
                 reason, retry_after = blocked
@@ -140,8 +164,7 @@ def create_app(settings: Settings | None = None,
                 log.warning("request limited", extra={
                     "reason": reason, "retry_after": retry_after,
                     "client_tag": limiter.tag(client_of(request))})
-                detail = ("too many failed logins from this address; try again later"
-                          if reason == "locked_out" else "too many requests; slow down")
+                detail = LIMITED_DETAIL.get(reason, "too many requests; slow down")
                 response = JSONResponse(status_code=429, content={"detail": detail},
                                         headers={"Retry-After": str(retry_after)})
             else:
@@ -149,6 +172,9 @@ def create_app(settings: Settings | None = None,
         except Exception:
             access_log.exception("request failed", extra=fields | {"status": 500})
             raise
+        finally:
+            if guess:
+                limiter.finish_guess(client_of(request))
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
         response.headers["X-Request-ID"] = request_id
         level = logging.WARNING if response.status_code >= 500 else logging.INFO

@@ -12,6 +12,16 @@ Two simple rules, both kept in memory (a restart clears them):
    failures in the window is refused (`429`) on every endpoint until the oldest failure
    falls out of the window. A *missing* credential doesn't count: that's a setup mistake,
    not a guess.
+3. **Guesses at once** (`guess-slot-v1`, since 0.5.62). A request that carries an operator
+   or submitter token is a possible guess until the coordinator has checked it. Failures are
+   only counted when a check *finishes*, so before this rule a client could send hundreds of
+   wrong tokens at the same moment and every one was checked before the first failure was
+   counted (230 at once were all checked against a limit of 10). Now each such request takes
+   a "guess slot" first: failures in the window plus slots in use may not go above
+   `AUTH_FAILURE_LIMIT`. A request without a free slot gets `429` straight away and its token
+   is never looked at. Worker keys and enrollment codes don't take slots: they are 256-bit
+   random values nobody can guess, and rigs behind one home router may poll at the same
+   moment.
 
 Worker keys and enrollment codes are 256-bit random values, so nobody guesses those. The
 lock-out matters for the operator and submitter tokens, which the owner types in and which
@@ -54,6 +64,7 @@ class _Client:
     tokens: float
     updated: float
     failures: deque[float] = field(default_factory=deque)
+    guessing: int = 0  # requests with a guessable token still being checked
 
 
 class RateLimiter:
@@ -69,6 +80,7 @@ class RateLimiter:
         self.limited_requests = 0
         self.locked_out_requests = 0
         self.auth_failures = 0
+        self.guesses_refused = 0
 
     def tag(self, client: str) -> str:
         """A short, stable-until-restart label for a client that doesn't reveal its address."""
@@ -86,7 +98,7 @@ class RateLimiter:
     def _prune(self, t: float) -> None:
         idle = max(60.0, float(self.auth_failure_window))
         for name in [n for n, c in self._clients.items()
-                     if t - c.updated > idle and not c.failures]:
+                     if t - c.updated > idle and not c.failures and not c.guessing]:
             del self._clients[name]
 
     def _drop_old_failures(self, entry: _Client, t: float) -> None:
@@ -129,6 +141,33 @@ class RateLimiter:
             entry.tokens -= 1.0
             return None
 
+    def start_guess(self, client: str) -> tuple[str, int] | None:
+        """Take a guess slot before a guessable token is checked (`guess-slot-v1`).
+        None = go ahead, and `finish_guess` MUST be called afterwards (after the failure, if
+        any, was recorded). Otherwise ("too_many_at_once", retry_after_seconds): the request
+        must be refused without checking its token."""
+        if not self.auth_failure_limit:
+            return None
+        with self._lock:
+            t = self.clock()
+            entry = self._get(client, t)
+            self._drop_old_failures(entry, t)
+            if len(entry.failures) + entry.guessing >= self.auth_failure_limit:
+                self.guesses_refused += 1
+                return "too_many_at_once", max(1, math.ceil(self._locked_for(entry, t)))
+            entry.guessing += 1
+            entry.updated = t
+            return None
+
+    def finish_guess(self, client: str) -> None:
+        """Give back a slot taken by `start_guess`."""
+        if not self.auth_failure_limit:
+            return
+        with self._lock:
+            entry = self._clients.get(client)
+            if entry is not None and entry.guessing > 0:
+                entry.guessing -= 1
+
     def record_auth_failure(self, client: str) -> bool:
         """Count one wrong credential. Returns True if this failure locked the client out."""
         with self._lock:
@@ -158,7 +197,8 @@ class RateLimiter:
                 "auth_failure_window_seconds": self.auth_failure_window,
                 "since_start": {"rate_limited_requests": self.limited_requests,
                                 "locked_out_requests": self.locked_out_requests,
-                                "auth_failures": self.auth_failures},
+                                "auth_failures": self.auth_failures,
+                                "guesses_refused_at_once": self.guesses_refused},
                 "locked_out_clients": sorted(locked, key=lambda c: c["client_tag"]),
                 "note": "In memory: a restart clears these counts and lock-outs.",
             }
