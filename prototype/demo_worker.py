@@ -10,10 +10,16 @@ First run (the operator gives you a one-time code; see `python -m app.workers en
 Later runs reuse the saved worker key in ./data/worker-<id>.key and the pinned coordinator
 key in ./data/coordinator.pub:
     python demo_worker.py --worker-id rig-gpu0 --once
+
+Everything the coordinator sends goes through app/worker_guard.py (`worker-input-v1`) first:
+size and time limits on every reply, no compressed replies, no crashes on broken JSON,
+nothing printed with terminal control codes, no worker key over plain http to another
+machine (unless --allow-plain-http), and a growing wait after refused jobs.
 """
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import time
 from pathlib import Path
@@ -26,6 +32,8 @@ from app import schemas, tasks
 from app.key_rotation import RotationError, check_announcement, follow_chain
 from app.security import sha256_text
 from app.signing import fingerprint, parse_public_key, verify_manifest
+from app.worker_guard import (CoordinatorError, Reply, check_job_id, check_url,
+                              check_worker_key, refusal_wait, request_json, say)
 
 SIGNED_FIELDS = schemas.SIGNED_FIELDS
 
@@ -42,9 +50,12 @@ class ManifestError(Exception):
 def check_manifest(job: dict[str, Any], coordinator_key: str, now: float | None = None) -> None:
     """Raise ManifestError unless the job is signed by `coordinator_key` (hex Ed25519 public
     key), uses a manifest version this worker understands, its payload matches its hash,
-    this machine can run it with the same pinned model the job names, and it hasn't expired."""
+    this machine can run it with the same pinned model the job names, and it hasn't expired.
+    Anything malformed is a ManifestError too, never a crash (`worker-input-v1`)."""
+    if not isinstance(job, dict):
+        raise ManifestError("not a job object")
     if job.get("schema_version") != schemas.JOB_SCHEMA_VERSION:
-        raise ManifestError(f"unsupported job schema_version {job.get('schema_version')!r}; "
+        raise ManifestError(f"unsupported job schema_version {say(repr(job.get('schema_version')), 40)}; "
                             f"this worker understands {schemas.JOB_SCHEMA_VERSION}")
     missing = [k for k in (*SIGNED_FIELDS, "signature") if k not in job]
     if missing:
@@ -52,13 +63,22 @@ def check_manifest(job: dict[str, Any], coordinator_key: str, now: float | None 
     fields = {k: job[k] for k in SIGNED_FIELDS}
     if not verify_manifest(fields, str(job["signature"]), coordinator_key):
         raise ManifestError("bad signature: job was not signed by this coordinator")
+    # Signed by the coordinator from here on, but still checked for shape before use.
+    if not isinstance(job["payload"], str) or not isinstance(job["task_type"], str):
+        raise ManifestError("payload and task type must be text")
+    try:
+        check_job_id(job["job_id"])
+    except CoordinatorError as exc:
+        raise ManifestError(str(exc)) from exc
+    if type(job["expires_at"]) is not int:
+        raise ManifestError("expires_at must be a whole number")
     if sha256_text(job["payload"]) != job["payload_hash"]:
         raise ManifestError("payload hash mismatch")
     if job["task_type"] not in supported_tasks():
-        raise ManifestError(f"unsupported task type {job['task_type']!r}")
+        raise ManifestError(f"unsupported task type {say(repr(job['task_type']), 40)}")
     local = local_model_sha256(job)
     if local != job["model_sha256"]:
-        raise ManifestError(f"model pin mismatch: job wants {job['model_sha256']}, this "
+        raise ManifestError(f"model pin mismatch: job wants {say(job['model_sha256'], 80)}, this "
                             f"worker's registry has {local}")
     if int(job["expires_at"]) <= int(now if now is not None else time.time()):
         raise ManifestError("job already expired")
@@ -70,7 +90,7 @@ def local_model_sha256(job: dict[str, Any]) -> str | None:
     try:
         return tasks.get(job["task_type"]).model_sha256(job["payload"])
     except tasks.TaskError as exc:
-        raise ManifestError(f"can't run this job here: {exc}") from exc
+        raise ManifestError(f"can't run this job here: {say(str(exc))}") from exc
 
 
 def save_key(path: Path, key: str) -> None:
@@ -126,7 +146,8 @@ def maybe_pin_handover_key(info: dict[str, Any], trusted: str, pin_file: Path,
     try:
         handover = check_announcement(announced, trusted)
     except RotationError as exc:
-        print(f"Warning: ignoring the coordinator's handover key announcement ({exc}).")
+        print(f"Warning: ignoring the coordinator's handover key announcement "
+              f"({say(str(exc))}).")
         return
     if pinned is not None:
         if handover != pinned:
@@ -164,17 +185,18 @@ def load_or_pin_coordinator_key(client: httpx.Client, pin_file: Path,
             raise SystemExit(f"Bad coordinator key: {exc}") from exc
         return given.strip().lower()
     handover = load_handover_pin(pin_file, handover_given)
-    response = client.get("/v1/coordinator/key")
+    try:
+        response = request_json(client, "GET", "/v1/coordinator/key")
+    except CoordinatorError as exc:
+        raise SystemExit(f"Could not fetch the coordinator key: {exc}.") from exc
     if response.status_code != 200:
         raise SystemExit(f"Could not fetch the coordinator key ({response.status_code}).")
     info = response.json()
-    if not isinstance(info, dict):
-        raise SystemExit("Coordinator served a bad key response.")
     served = str(info.get("public_key", "")).strip().lower()
     try:
         parse_public_key(served)
     except ValueError as exc:
-        raise SystemExit(f"Coordinator served a bad key: {exc}") from exc
+        raise SystemExit(f"Coordinator served a bad key: {say(str(exc))}") from exc
     if pin_file.exists():
         pinned = pin_file.read_text().strip().lower()
         if served != pinned:
@@ -183,7 +205,8 @@ def load_or_pin_coordinator_key(client: httpx.Client, pin_file: Path,
             except (RotationError, AttributeError, TypeError, KeyError) as exc:
                 raise SystemExit(
                     f"Coordinator key CHANGED (pinned {fingerprint(pinned)}, now serving "
-                    f"{fingerprint(served)}) without a valid signed handover ({exc}). "
+                    f"{fingerprint(served)}) without a valid signed handover "
+                    f"({say(str(exc))}). "
                     f"Refusing to run jobs. If the operator really replaced the key, confirm "
                     f"the new fingerprint with them and delete {pin_file}.") from exc
             replace_key_file(pin_file, served)
@@ -205,23 +228,26 @@ def load_or_enroll(client: httpx.Client, worker_id: str, key_file: Path,
     Without one, use the operator's one-time code to register and save the new key."""
     if key_file.exists():
         key = key_file.read_text().strip()
-        response = client.post("/v1/workers/register", json={
+        response = coordinator_call(client, "POST", "/v1/workers/register", json={
             "worker_id": worker_id, "capabilities": capabilities},
             headers={"Authorization": f"Bearer {key}"})
         if response.status_code != 200:
             raise SystemExit(f"Saved key refused ({response.status_code}): "
-                             f"{response.json().get('detail')}")
+                             f"{response.detail()}")
         return key
     if not enrollment_code:
         raise SystemExit(f"No key at {key_file}. Ask the operator for a one-time enrollment "
                          "code and pass --enrollment-code (or set BNH_ENROLLMENT_CODE).")
-    response = client.post("/v1/workers/register", json={
+    response = coordinator_call(client, "POST", "/v1/workers/register", json={
         "worker_id": worker_id, "capabilities": capabilities,
         "enrollment_code": enrollment_code})
     if response.status_code != 200:
         raise SystemExit(f"Registration refused ({response.status_code}): "
-                         f"{response.json().get('detail')}")
-    key = str(response.json()["worker_key"])
+                         f"{response.detail()}")
+    try:
+        key = check_worker_key(response.json().get("worker_key"))
+    except CoordinatorError as exc:
+        raise SystemExit(f"Registration failed: {exc}. Nothing was saved.") from exc
     save_key(key_file, key)
     return key
 
@@ -229,7 +255,21 @@ def load_or_enroll(client: httpx.Client, worker_id: str, key_file: Path,
 MAX_BACKOFF_SECONDS = 60
 
 
-def retry_after_seconds(response: httpx.Response) -> int:
+def pause(seconds: float) -> None:
+    """Every wait the worker does goes through here (tests replace it)."""
+    time.sleep(seconds)
+
+
+def coordinator_call(client: httpx.Client, method: str, url: str, **kwargs: Any) -> Reply:
+    """One request through the worker's guards; a reply the worker won't use stops it with
+    a plain message instead of a stack trace."""
+    try:
+        return request_json(client, method, url, **kwargs)
+    except CoordinatorError as exc:
+        raise SystemExit(f"Stopped: {exc}.") from exc
+
+
+def retry_after_seconds(response: httpx.Response | Reply) -> int:
     """How long the coordinator asked us to wait after a 429 or 503 (1 to 60 s)."""
     try:
         wait = int(response.headers.get("Retry-After", "5"))
@@ -239,17 +279,16 @@ def retry_after_seconds(response: httpx.Response) -> int:
 
 
 def post_with_backoff(client: httpx.Client, url: str, tries: int = 5,
-                      sleep: Any = time.sleep, **kwargs: Any) -> httpx.Response:
+                      sleep: Any = None, **kwargs: Any) -> Reply:
     """POST, and if the coordinator says "too many requests" (429), wait as long as it asks
     and try again, a few times. Safe for claims and for submits (submits are idempotent)."""
     for attempt in range(tries):
-        response = client.post(url, **kwargs)
+        response = coordinator_call(client, "POST", url, **kwargs)
         if response.status_code != 429 or attempt == tries - 1:
             return response
         wait = retry_after_seconds(response)
-        print(f"Coordinator says slow down ({response.json().get('detail')}); "
-              f"waiting {wait} s.")
-        sleep(wait)
+        print(f"Coordinator says slow down ({response.detail()}); waiting {wait} s.")
+        (sleep or pause)(wait)
     return response
 
 
@@ -265,11 +304,11 @@ def run_job(job: dict[str, Any]) -> str | None:
     try:
         return execute(job)
     except tasks.TaskError as exc:
-        print(f"Could not run job {job.get('job_id')}: {exc}")
+        print(f"Could not run job {say(job.get('job_id'), 80)}: {say(str(exc))}")
         return None
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     load_dotenv()
     parser = argparse.ArgumentParser(description="Local deterministic demo worker")
     parser.add_argument("--url", default="http://127.0.0.1:8000")
@@ -285,11 +324,18 @@ def main() -> None:
     parser.add_argument("--handover-key", default=os.getenv("BNH_HANDOVER_KEY"),
                         help="coordinator's offline handover public key (hex) from the "
                              "operator; default: pin the one the coordinator announces")
+    parser.add_argument("--allow-plain-http", action="store_true",
+                        help="allow http:// to another machine (test labs only: the worker "
+                             "key travels unencrypted)")
     parser.add_argument("--coordinator-key-file", type=Path,
                         default=Path("data") / "coordinator.pub",
                         help="where the pinned coordinator key is kept")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     key_file = args.key_file or Path("data") / f"worker-{args.worker_id}.key"
+    try:
+        check_url(args.url, args.allow_plain_http)
+    except CoordinatorError as exc:
+        raise SystemExit(f"Stopped: {exc}") from exc
 
     with httpx.Client(base_url=args.url, timeout=10) as client:
         coordinator_key = load_or_pin_coordinator_key(client, args.coordinator_key_file,
@@ -297,6 +343,7 @@ def main() -> None:
         key = load_or_enroll(client, args.worker_id, key_file, args.enrollment_code,
                              sorted(supported_tasks()))
         client.headers["Authorization"] = f"Bearer {key}"
+        refusals = 0
         while True:
             response = post_with_backoff(client, "/v1/jobs/next",
                                          params={"worker_id": args.worker_id})
@@ -309,29 +356,38 @@ def main() -> None:
                 print(f"Coordinator is paused by its operator; try again in "
                       f"{retry_after_seconds(response)} s.")
                 return
-            response.raise_for_status()
+            if response.status_code != 200:
+                raise SystemExit(f"Coordinator answered {response.status_code}: "
+                                 f"{response.detail()}")
             job = response.json()
             try:
                 check_manifest(job, coordinator_key)
             except ManifestError as exc:
                 # Do not run it. The lease will time out and the coordinator will requeue it.
-                print(f"Refused job {job.get('job_id')}: {exc}")
+                print(f"Refused job {say(job.get('job_id'), 80)}: {say(str(exc))}")
                 if args.once:
                     return
+                refusals += 1
+                wait = refusal_wait(refusals)
+                print(f"Waiting {wait} s before asking again.")
+                pause(wait)
                 continue
             started = int(time.time())
             result = run_job(job)
             if result is None:
                 if args.once:
                     return
+                refusals += 1
+                pause(refusal_wait(refusals))
                 continue
+            refusals = 0
             completed = int(time.time())
             accepted = post_with_backoff(client, f"/v1/jobs/{job['job_id']}/submit", json={
                 "worker_id": args.worker_id, "result": result, "result_hash": sha256_text(result),
                 "started_at": started, "completed_at": completed,
                 **schemas.receipt_fields(job, local_model_sha256(job)),
             })
-            print(accepted.status_code, accepted.json())
+            print(accepted.status_code, say(json.dumps(accepted.json()), 300))
             if args.once:
                 return
 

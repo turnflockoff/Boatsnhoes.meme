@@ -10,6 +10,7 @@ from __future__ import annotations
 import stat
 from pathlib import Path
 
+import httpx
 import pytest
 
 from app import key_rotation
@@ -158,17 +159,19 @@ def test_worker_ignores_a_tampered_announcement_and_never_replaces_its_pin(
     offline = offline_key(tmp_path)
     client = make(tmp_path, offline.public_key_hex)
     other = ManifestSigner.load_or_create(tmp_path / "other.key")
-    real_get = client.get
+    real_send = client.send
 
-    def tampered_get(url: str, **kw):  # a man in the middle swaps the announced key
-        response = real_get(url, **kw)
+    def tampered_send(request, **kw):  # a man in the middle swaps the announced key
+        response = real_send(request, **kw)
+        if request.url.path != "/v1/coordinator/key":
+            return response
+        response.read()
         body = response.json()
         body["handover_key"]["handover_public_key"] = other.public_key_hex
-        response._content = __import__("json").dumps(body).encode()
-        return response
+        return httpx.Response(200, json=body, request=request)
 
     pin = tmp_path / "worker" / "coordinator.pub"
-    client.get = tampered_get  # type: ignore[method-assign]
+    client.send = tampered_send  # type: ignore[method-assign]
     load_or_pin_coordinator_key(client, pin)
     assert "ignoring the coordinator's handover key announcement" in capsys.readouterr().out
     assert not handover_pin_path(pin).exists()
