@@ -430,6 +430,45 @@ To update a pinned action: push a branch that uses the tag (e.g. `@v5`) once, re
 and pin to that hash. **Limit:** the checker can't tell whether a hash really belongs to the
 release its comment names; that part is a person's (or Dependabot's) job.
 
+## Signed worker releases, several signers (`release-sign-v1`)
+
+Threat: someone hands a rig owner a fake or tampered copy of the worker ("download the new
+miner here"), or one stolen key is enough to push a bad release. A release only counts when
+at least `threshold` (minimum 2) **different** people from a pinned signer list have each
+signed it with their own Ed25519 key.
+
+    python -m app.release keygen --out ~/bnh-private/release-signer.key --name alice   # each signer, once
+    python -m app.release make --root . --version 0.5.49 --out ../release/release.json  # from a clean checkout
+    python -m app.release sign ../release/release.json --key ~/bnh-private/release-signer.key --name alice
+    python -m app.release verify ../release/release.json --signers release-signers.json --root . [--not-older-than 0.5.48] [--json]
+
+- `make` lists every file **git tracks** under `--root` with its sha256 and size
+  (`bnh-release/1`, sorted, with the source commit) and writes a plain `SHA256SUMS` next to
+  it (`sha256sum -c` works without this tool). Untracked files such as `.env`, keys and
+  databases are never swept in. Refuses uncommitted changes to tracked files, symlinks, and
+  overwriting an existing release.
+- `sign` adds one signature to `release.sigs.json` (`bnh-release-signatures/1`) over the
+  release's sha256 with its own `purpose`, so a job or report signature can't stand in for
+  it. Never creates a key; refuses a key file others can read, a second signature from the
+  same name or key, and a signature file that belongs to another release.
+- `keygen` writes an owner-only key, never overwrites one and refuses any folder inside a
+  git checkout. It prints the public half as the JSON line to add to the signer list.
+- The signer list (`bnh-release-signers/1`: `threshold` and `signers` with `name` and
+  `public_key`) is pinned on each rig; a release can't bring its own. Threshold must be at
+  least 2 and no more than the signers listed; the same key can't be listed twice.
+- `verify` passes only when the manifest is well formed, enough distinct pinned signers
+  signed exactly it, **every** signature present from a listed signer is valid (a listed
+  name with a different key fails), and with `--root` every listed file matches, nothing is
+  a symlink or points outside, and no extra `.py`/`.pth` file sits in the folder (other extra
+  files are notes; `data/`, `__pycache__`, `venv` and hidden folders are skipped).
+  Signatures from people not on the list are noted and not counted. `--not-older-than`
+  refuses an old signed release (rollback). Exit 0 ok, 1 not ok, 2 unusable input.
+
+**Limits:** it proves enough named people agreed to ship exactly these files, not that the
+code is safe or that a signer's computer was clean. It checks Python files the worker runs,
+not llama.cpp, model files (those have `model_registry` pins) or the OS. No real signer keys
+exist yet and no release has been signed: choosing the signers is an owner step.
+
 ## Tests
 
     cd prototype
