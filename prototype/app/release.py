@@ -538,6 +538,7 @@ def _check_cache_folder(root: Path, rel_dir: str, verified: dict[str, dict[str, 
     fix = ("delete the __pycache__ folders and check again (always safe: Python rebuilds "
            "them from the checked source)")
     unused = 0
+    other_tags: dict[str, int] = {}  # caches from another Python, one line per version
     try:
         with os.scandir(folder) as it:
             entries = sorted(it, key=lambda e: e.name)
@@ -560,8 +561,7 @@ def _check_cache_folder(root: Path, rel_dir: str, verified: dict[str, dict[str, 
             unused += 1  # Python never looks this name up (or its source isn't in the release)
             continue
         if m["tag"] != sys.implementation.cache_tag:
-            problems.append(f"{rel}: compiled by another Python ({m['tag']}); this check can "
-                            f"only compare {sys.implementation.cache_tag} caches; {fix}")
+            other_tags[m["tag"]] = other_tags.get(m["tag"], 0) + 1
             continue
         src = verified[source_rel]
         if src.get("data") is None:
@@ -587,6 +587,10 @@ def _check_cache_folder(root: Path, rel_dir: str, verified: dict[str, dict[str, 
         if not ok:
             problems.append(f"{rel}: compiled cache doesn't match the checked source; Python "
                             f"could run it instead of {source_rel}; {fix}")
+    for tag, count in sorted(other_tags.items()):
+        problems.append(f"{rel_dir}/: {count} cache file(s) compiled by another Python "
+                        f"({tag}); this check can only compare "
+                        f"{sys.implementation.cache_tag} caches; {fix}")
     if unused:
         notes.append(f"{rel_dir}/: {unused} cache file(s) Python won't load for this release "
                      "(other tools, or files no longer in the release); left alone")

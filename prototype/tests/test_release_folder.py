@@ -194,8 +194,12 @@ def test_damaged_or_odd_caches_are_caught(repo, tmp_path, keys, honest, change):
 def test_cache_from_another_python_is_a_problem(repo, tmp_path, keys, honest):
     make_cache(repo, "worker.cpython-311.pyc" if TAG != "cpython-311" else "worker.cpython-312.pyc",
                b"x" * 40)
+    make_cache(repo, "__init__.cpython-311.pyc" if TAG != "cpython-311" else
+               "__init__.cpython-312.pyc", b"x" * 40)
     report = verify(honest, tmp_path, keys, repo)
-    assert any("compiled by another Python" in p and FIX in p for p in report["problems"])
+    other = [p for p in report["problems"] if "compiled by another Python" in p]
+    assert len(other) == 1 and FIX in other[0]  # one line per folder and version, not per file
+    assert other[0].startswith("app/__pycache__/: 2 cache file(s) compiled by another Python")
 
 
 def test_linked_cache_file_or_folder_is_a_problem(repo, tmp_path, keys, honest):
