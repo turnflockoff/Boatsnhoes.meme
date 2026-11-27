@@ -147,6 +147,17 @@ This assumes the auditor is honest. The rest of this document is about when that
   coordinator key, when other users can read or change the file or its folder. Before,
   the ledger was readable by every account (one copied it and read a hidden test's
   answer). This does not protect against root or anyone running as the same user.
+- **The server's clock decides which period work belongs to.** Before 0.5.65 a clock set
+  back after a period was signed and shared put new results inside that period: the signed
+  report stopped matching and `ledger_copy compare` (#10) reported back-dating, so an honest
+  operator looked like one rewriting history. Since 0.5.65 (`ledger-clock-v1`,
+  `app/ledger_clock.py`) the coordinator never writes a time earlier than one already in the
+  ledger, refuses to start more than `CLOCK_BEHIND_LIMIT_SECONDS` behind it, records each
+  report it signs, and shows clock steps on operator health; the operator CLIs follow the
+  same rule. A clock that jumps *forwards* by mistake still expires leases and deadlines
+  inside the jump (shown, not prevented), and a dishonest operator can still set any clock
+  they like before writing (#10): this protects honest operators from their clock, not
+  readers from the operator.
 - **The tolerance rule is a guess** until Phase 3 produces real output from two cards.
 
 ## Order of the next fixes
