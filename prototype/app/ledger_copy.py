@@ -53,7 +53,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
-from . import copy_guard
+from . import copy_guard, ledger_clock
 from .ledger import Ledger
 from .screen import MAX_SCREEN_LINE_CHARS, say, say_lines
 
@@ -299,8 +299,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
-        out = export_copy(args.db, args.out, args.until, int(time.time()))
-    except CopyError as exc:
+        # `ledger-clock-v1`: the export is recorded in the live ledger, never with a time
+        # earlier than one already there (and `until` must not be after it).
+        now = ledger_clock.tool_now(Ledger(args.db, read_only=True).latest_time()) \
+            if args.db.exists() else int(time.time())
+        out = export_copy(args.db, args.out, args.until, now)
+    except (CopyError, ledger_clock.ClockBehindError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
     print(f"wrote {args.out} until={out['until']} jobs={out['jobs']} "

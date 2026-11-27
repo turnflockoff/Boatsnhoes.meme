@@ -27,6 +27,7 @@ import sys
 import time
 from pathlib import Path
 
+from . import ledger_clock
 from .ledger import CoordinatorPaused, Ledger
 from .security import sha256_text
 from .screen import say
@@ -72,7 +73,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"database not found: {args.db}", file=sys.stderr)
         return 2
     ledger = Ledger(args.db)
-    now = int(time.time())
+    if args.cmd == "list":
+        now = int(time.time())  # read-only
+    else:
+        try:
+            # `ledger-clock-v1`: never earlier than the newest time already in the ledger.
+            now = ledger_clock.tool_now(ledger.latest_time())
+        except (ledger_clock.ClockBehindError, ValueError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
     if args.cmd == "enroll":
         try:
             code, expires_at = issue_code(ledger, args.owner, args.ttl, now)

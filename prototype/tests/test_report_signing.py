@@ -125,9 +125,12 @@ def test_verify_requires_signature_when_a_key_is_given(tmp_path: Path) -> None:
     assert "report is not signed" in rewards.verify_report(rep, ledger, key)
 
 
-def test_cli_sign_and_offline_verify(tmp_path: Path, capsys) -> None:
+def test_cli_sign_and_offline_verify(tmp_path: Path, capsys, monkeypatch) -> None:
     client, clock, ledger = make(tmp_path)
     sha_job(client, "wk-a")
+    clock.t += 60
+    # The CLI reads the server clock; this ledger lives at the tests' fake time.
+    monkeypatch.setattr(rewards.time, "time", lambda: float(clock.t))
     key_file = client.app.state.settings.resolved_signing_key_path()
     public = client.app.state.signer.public_key_hex
     out = tmp_path / "signed.json"
@@ -173,6 +176,7 @@ def test_cli_sign_never_creates_a_new_key(tmp_path: Path, capsys, monkeypatch) -
     """Signing with a missing key file must fail, not quietly mint a key nobody trusts."""
     client, clock, ledger = make(tmp_path)
     sha_job(client, "wk-a")
+    monkeypatch.setattr(rewards.time, "time", lambda: float(clock.t))
     missing = tmp_path / "nope" / "coordinator-signing.key"
     assert rewards.main(["report", "--db", str(ledger.path), "--sign",
                          "--key-file", str(missing)]) == 2

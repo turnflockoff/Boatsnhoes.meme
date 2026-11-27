@@ -228,8 +228,12 @@ def test_a_pick_that_already_took_its_job_gets_no_second_window(tmp_path: Path) 
 
 
 # -- the CLI --------------------------------------------------------------------------------
-def test_cli_pause_status_resume(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
-    client, _, ledger = make(tmp_path)
+def test_cli_pause_status_resume(tmp_path: Path, capsys: pytest.CaptureFixture,
+                                 monkeypatch: pytest.MonkeyPatch) -> None:
+    client, clock, ledger = make(tmp_path)
+    # The CLI reads the server clock; this ledger lives at the tests' fake time
+    # (`ledger-clock-v1` refuses a clock far behind the ledger).
+    monkeypatch.setattr(incident.time, "time", lambda: float(clock.t))
     queue_job(client)
     db = ["--db", str(ledger.path)]
     assert incident.main(db + ["status"]) == 0
@@ -256,8 +260,10 @@ def test_cli_never_creates_a_database(tmp_path: Path) -> None:
     assert not missing.exists()
 
 
-def test_workers_cli_refuses_codes_while_paused(tmp_path: Path) -> None:
+def test_workers_cli_refuses_codes_while_paused(tmp_path: Path,
+                                               monkeypatch: pytest.MonkeyPatch) -> None:
     _, clock, ledger = make(tmp_path)
+    monkeypatch.setattr(workers.time, "time", lambda: float(clock.t))
     ledger.pause(int(clock.t), REASON, by="test")
     assert workers.main(["--db", str(ledger.path), "enroll", "--owner", "x"]) == 3
     with pytest.raises(CoordinatorPaused):

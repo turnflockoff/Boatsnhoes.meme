@@ -87,6 +87,13 @@ class Settings:
     # `input-limits-v1` (app/input_limits.py): largest request body accepted, in bytes.
     # Bigger bodies get 413 before they are read. The largest honest body is ~150 KB.
     max_body_bytes: int = 256 * 1024
+    # `ledger-clock-v1` (app/ledger_clock.py): refuse to start when the server clock is
+    # more than this many seconds behind the newest time already in the ledger (a clock
+    # reset to 1970/2000, or set back), instead of writing new work into closed periods.
+    clock_behind_limit_seconds: int = 300
+    # A server clock that moves this many seconds more (or less) than a steady clock between
+    # two readings counts as a step: logged and shown on the operator health page.
+    clock_step_warn_seconds: int = 60
 
     def resolved_signing_key_path(self) -> Path:
         return self.signing_key_path or self.database_path.parent / "coordinator-signing.key"
@@ -221,4 +228,6 @@ def get_settings() -> Settings:
         public_counts_interval_seconds=_int_env("PUBLIC_COUNTS_INTERVAL_SECONDS", 900, 0,
                                                 86400),
         max_body_bytes=_int_env("MAX_BODY_BYTES", 256 * 1024, 16 * 1024, 4 * 1024 * 1024),
+        clock_behind_limit_seconds=_int_env("CLOCK_BEHIND_LIMIT_SECONDS", 300, 0, 7 * 86400),
+        clock_step_warn_seconds=_int_env("CLOCK_STEP_WARN_SECONDS", 60, 1, 86400),
     )

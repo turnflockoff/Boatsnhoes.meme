@@ -92,6 +92,9 @@ MAX_PAUSE_REASON = 200
 # "name a ship" with seed 8 just as well. Rewording is still not caught.
 TEST_REUSE_RULE = "test-reuse-v2"
 COPY_MADE_EVENT = "ledger_copy_made"
+# `ledger-clock-v1` (app/ledger_clock.py): a reward report was signed; its time is at or
+# after the report's `until`, so nothing is written into a signed period afterwards.
+REPORT_SIGNED_EVENT = "reward_report_signed"
 
 
 class HiddenTestRevealed(ValueError):
@@ -706,6 +709,30 @@ class Ledger:
         with self._tx() as db:
             self._event(db, now, COPY_MADE_EVENT,
                         detail=json.dumps({"until": int(until), "sha256": file_sha256}))
+
+    def record_signed_report(self, now: int, since: int, until: int, report_sha256: str) -> None:
+        """Note that a reward report for [since, until) was signed (`ledger-clock-v1`).
+        Its time (at or after `until`) is then a recorded time, so the coordinator never
+        writes anything into the signed period afterwards, even if the clock is set back."""
+        with self._tx() as db:
+            self._event(db, now, REPORT_SIGNED_EVENT, detail=json.dumps(
+                {"since": int(since), "until": int(until), "report_sha256": report_sha256}))
+
+    def latest_time(self) -> int | None:
+        """The newest time written anywhere in the ledger (`ledger-clock-v1`): events, job
+        updates, accepted results, rigs seen, enrollment codes. None for an empty ledger."""
+        with closing(self._connect()) as db:
+            row = db.execute(
+                "SELECT MAX(m) FROM (SELECT MAX(at) AS m FROM events "
+                "UNION ALL SELECT MAX(updated_at) FROM jobs "
+                "UNION ALL SELECT MAX(created_at) FROM jobs "
+                "UNION ALL SELECT MAX(accepted_at) FROM submissions "
+                "UNION ALL SELECT MAX(registered_at) FROM workers "
+                "UNION ALL SELECT MAX(last_seen_at) FROM workers "
+                "UNION ALL SELECT MAX(revoked_at) FROM workers "
+                "UNION ALL SELECT MAX(created_at) FROM enrollments "
+                "UNION ALL SELECT MAX(used_at) FROM enrollments)").fetchone()
+        return None if row[0] is None else int(row[0])
 
     def revealed_until(self) -> int | None:
         """End of the latest period covered by a ledger copy made from this ledger."""

@@ -55,7 +55,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import json_file
+from . import json_file, ledger_clock
 from .audit_policy import STRIKE_STATUSES
 from .ledger import SETTLEMENT, Ledger
 from .security import canonical_json, sha256_text
@@ -367,6 +367,14 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.cmd == "report":
         now = int(time.time())
+        if args.sign and not is_copy:
+            try:
+                # `ledger-clock-v1`: the signature is recorded in the ledger below, never
+                # with a time earlier than one already there.
+                now = ledger_clock.tool_now(ledger.latest_time())
+            except (ledger_clock.ClockBehindError, ValueError) as exc:
+                print(str(exc), file=sys.stderr)
+                return 2
         if args.until is not None:
             until = args.until
         else:
@@ -382,6 +390,9 @@ def main(argv: list[str] | None = None) -> int:
                     raise SigningKeyError(f"coordinator key file not found: {key_path}")
                 signer = ManifestSigner.load_or_create(key_path)
                 report = sign_report(report, signer, now)
+                if not is_copy:  # the signed period's end becomes a recorded time
+                    ledger.record_signed_report(now, args.since, until,
+                                                report["report_sha256"])
         except (ReportError, SigningKeyError, ValueError) as exc:
             print(str(exc), file=sys.stderr)
             return 2

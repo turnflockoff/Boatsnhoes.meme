@@ -20,6 +20,7 @@ from .ledger import (MAX_JOB_EVENTS, MAX_PAGE, PAUSE_VERSION, CoordinatorPaused,
                      HiddenTestRevealed, Ledger)
 from .models import (ChallengeCreate, EnrollmentCreate, JobCreate, JobEnvelope, PauseRequest,
                      ResultSubmission, WorkerRegistration)
+from .ledger_clock import LedgerClock, default_steady
 from .security import sha256_text
 from .signing import ManifestSigner, SigningKeyError, fingerprint, verify_manifest
 
@@ -81,8 +82,13 @@ LEDGER_CURSOR = re.compile(r"(\d{1,16}):([A-Za-z0-9_-]{1,80})")
 def create_app(settings: Settings | None = None,
                clock: Callable[[], float] = time.time,
                rng: random.Random | None = None,
-               limiter_clock: Callable[[], float] = time.monotonic) -> FastAPI:
+               limiter_clock: Callable[[], float] = time.monotonic,
+               steady_clock: Callable[[], float] | None = None) -> FastAPI:
     """Build the coordinator. `clock` and `rng` are injectable so tests are deterministic.
+    `clock` is the server clock; the coordinator never writes a time earlier than one it
+    already wrote and refuses to start far behind the ledger (`ledger-clock-v1`,
+    app/ledger_clock.py). `steady_clock` (default: time.monotonic for the real clock, the
+    injected clock itself in tests) is only used to notice clock steps.
     The default `rng` uses the OS's secure randomness, so workers can't predict audits.
     `limiter_clock` drives the request limits (app/rate_limit.py), which measure real
     elapsed time rather than the coordinator's job clock."""
@@ -163,8 +169,15 @@ def create_app(settings: Settings | None = None,
             request.scope["bnh_client"] = cached
         return cached
 
+    # `ledger-clock-v1`: max(server clock, newest time written), never decreasing; raises
+    # ClockBehindError here if the clock is far behind the ledger.
+    ledger_clock = LedgerClock(clock, steady_clock or default_steady(clock),
+                               ledger.latest_time(), settings.clock_behind_limit_seconds,
+                               settings.clock_step_warn_seconds)
+    app.state.ledger_clock = ledger_clock
+
     def now() -> int:
-        return int(clock())
+        return ledger_clock()
     app.state.now = now
     started_at = now()
 
@@ -478,6 +491,8 @@ def create_app(settings: Settings | None = None,
                             f"{REFUSAL_REPEAT_WARN} or more times since the coordinator started: "
                             f"{', '.join(loud)}. Usually a worker stuck in a retry loop; could "
                             "be someone probing. See repeated_refusals; revoke if it keeps on")
+        # `ledger-clock-v1`: the server clock was set back, or jumped, while running.
+        warnings.extend(ledger_clock.warnings())
         if problems:
             warnings.append(f"{len(problems)} consistency problem(s): see "
                             "consistency_problems")
@@ -505,6 +520,7 @@ def create_app(settings: Settings | None = None,
                 "pause": {"rule": PAUSE_VERSION, "paused": pause is not None} | (pause or {}),
                 "repeated_refusals": {"rule": REFUSAL_LOG_RULE, "since_start": repeats,
                                       "warn_at": REFUSAL_REPEAT_WARN},
+                "clock": ledger_clock.status(),
                 "consistency_problems": problems, "warnings": warnings}
 
     @app.get("/v1/operator/review")
@@ -690,7 +706,13 @@ def create_app(settings: Settings | None = None,
             t = now()
             report = rewards.build_report(ledger, since, until if until is not None else t + 1,
                                           settings.reward_scoring)
-            return rewards.sign_report(report, signer, t) if sign else report
+            if not sign:
+                return report
+            signed = rewards.sign_report(report, signer, t)
+            # `ledger-clock-v1`: the signed period's end becomes a recorded time.
+            ledger.record_signed_report(t, since, report["period"]["until"],
+                                        signed["report_sha256"])
+            return signed
         except rewards.ReportError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
