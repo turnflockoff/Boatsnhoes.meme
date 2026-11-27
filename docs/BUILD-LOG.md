@@ -1217,3 +1217,34 @@ In all three, `verify` printed **OK** and then starting the worker printed `EVIL
 2. **Pagination** is how big lists are served everywhere (search results, your email): a page at a time, with a bookmark for "where you left off". The bookmark has to be unique, which is why it includes the job number, not just the time.
 3. **A database index** works like the index in a book: without it, finding one job means reading every page. It costs a little disk space and makes lookups stay fast however big the ledger gets.
 4. **Bugs that only show up later.** With 10 test jobs everything was instant. The problem only appears after months of real work, which is why this pass filled a ledger with 100,000 fake rows on purpose before the rigs ever go live.
+
+## 2026-11-27 (UTC): One rig could grow the ledger forever (0.5.64)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions, so this session did the thirteenth "code audit" pass. Last time asked "what does it cost strangers to *read* a big ledger?". This one asked the mirror question: **what can one signed-up rig make the coordinator *write*?**
+
+**Found, shown really happening** (a real coordinator server on this sandbox, old code, two rigs `wk-a` and `wk-b`)
+1. **Every refused submission was written down, every time.** When a rig sends a result the coordinator refuses (a job someone else already finished, a job given to another rig, or a "receipt" that doesn't match the job), it adds a line to the permanent audit trail. `wk-b` sent 3,000 of those at `wk-a`'s finished job: **3,000 new lines, 180 bytes each.**
+2. **That adds up.** Inside the normal speed limit (240 requests a minute) one rig can add **345,600 lines, about 62 MB, every day, forever.** It can aim them at any job, because job numbers are public and the receipt is checked before "is this your job?".
+3. **And it hurts someone else.** With one day of that piled on `wk-a`'s job, the public page for that job (`GET /v1/jobs/{id}`) was **54 MB and took 1.5 seconds** each time anyone opened it.
+4. **A slow lookup on every result.** Each time a result is accepted, the coordinator looks up that rig's record to decide how often to re-check it. That lookup read *every* result ever accepted: about 10 ms at 100,000 results, and growing.
+
+**Shipped (`refusal-log-v1`)**
+- **Written once.** The same refusal (same job, same rig, same reason) now goes into the audit trail only the first time. Repeats are just counted, in memory.
+- **Operator health shows the repeats** (`repeated_refusals`) and warns once a rig has repeated a refused submission 100 times: usually a worker stuck in a retry loop, possibly someone poking at the coordinator. You'd then look at it and revoke it if it keeps on.
+- **Nothing changes for honest rigs.** Different rigs, jobs and reasons still each get their own line. A rig re-sending its own accepted result (after a dropped reply) still gets "accepted" and writes nothing. A wrong answer on a job it holds still uses up a try each time.
+- **The public job page is capped** at 200 lines (oldest first, so the job's own story comes first) and says how many there are in all (`events_total`). The cap is done inside the database, so even an older ledger that already has a pile on one job answers quickly.
+- **New index** (like the index at the back of a book) for "this rig's results", so the per-result lookup reads only that rig's results: **10 ms → 0.2 ms** at 100,000 results.
+- **Same server, same flood, afterwards:** 3,000 refused submissions wrote **2 lines** (one per reason) and the database file didn't grow at all. The job page on an old ledger with a day's pile: 0.1 s and a few KB instead of 1.5 s and 54 MB.
+- **Reward reports:** the "bad submissions" count now counts different refusals, not repeats. The report format and points are unchanged, and reports rebuilt from older ledgers give exactly the same numbers.
+- **Proof.**
+  - 19 new tests, **2,286 total: 2,285 passing, 1 skipped** on the committed tree (the one test that can't work as the all-powerful root user, as designed). Run on Python 3.13 and 3.11 (what CI uses).
+  - One test fires 400 refused submissions at a real server (200 at the very same moment, 200 one after another) and checks that exactly 2 lines were written.
+  - **16 of the new tests fail on the old code.**
+  - I broke the new code 15 ways on purpose (skipped the "already written?" check, ignored the reason, the rig or the job in that check, stopped counting, removed the cap, showed private events, newest first, no index, warning off by one, ...); **all 15 were caught.**
+- **Honest limits:** the repeat count lives in memory (a restart clears the count, not the rule). A rig can still write one line per job and reason (at most 5 per job), once each, so a determined rig could roughly double the ledger once; revoking it stops that. The server's own log (on screen / in your host's logs) still gets one line per refused request; normal log rotation handles that. No coordinator is running anywhere yet, so nothing needs doing on your side.
+
+**What you learned**
+1. **Writes are a cost too.** Last pass was about what it costs to *read*; this one is about what someone can make you *store*. Anything a stranger can make you write down, every time they ask, is a disk that eventually fills.
+2. **Repeats aren't news.** The first refusal tells you something ("this rig sent a wrong result for job X"). The 10,000th identical one tells you only "it's still doing it", and a counter says that in one number.
+3. **One person's spam can land on someone else's page.** The flood was aimed at `wk-a`'s job, so `wk-a`'s public page got slow, not `wk-b`'s. Caps protect the people who didn't cause the problem.
+4. **Hot paths deserve indexes.** A lookup that runs on *every* accepted result has to stay fast at a million results, not just at ten. An index turned a whole-table read into a jump straight to one rig's rows.
