@@ -16,7 +16,8 @@ from fastapi.responses import JSONResponse
 from .config import Settings, get_settings
 from . import (audit_policy, client_address, input_limits, key_rotation, observability, points,
                public_counts, rate_limit, review, rewards, schemas, tasks, vouches, workers)
-from .ledger import MAX_PAGE, PAUSE_VERSION, CoordinatorPaused, HiddenTestRevealed, Ledger
+from .ledger import (MAX_JOB_EVENTS, MAX_PAGE, PAUSE_VERSION, CoordinatorPaused,
+                     HiddenTestRevealed, Ledger)
 from .models import (ChallengeCreate, EnrollmentCreate, JobCreate, JobEnvelope, PauseRequest,
                      ResultSubmission, WorkerRegistration)
 from .security import sha256_text
@@ -36,6 +37,12 @@ PRIVATE_EVENTS = {"audit_scheduled", "audit_match", "audit_mismatch", "audit_not
                   "tiebreak_held_for_review",
                   "auditor_assigned", "auditor_unassigned", "audit_assignment_expired",
                   "test_assigned", "test_unassigned", "test_assignment_expired"}
+
+# `refusal-log-v1`: operator health warns about a rig that has repeated refused
+# submissions this many times since start. One or two repeats are a worker retrying after a
+# dropped reply; hundreds are a broken loop or someone probing.
+REFUSAL_REPEAT_WARN = 100
+REFUSAL_LOG_RULE = "refusal-log-v1"
 
 # How long a worker is asked to wait while the coordinator is paused (`pause-v1`).
 PAUSED_RETRY_AFTER = 60
@@ -462,6 +469,15 @@ def create_app(settings: Settings | None = None,
                             "are live: right after a rig submits, `queued` going up by one "
                             "tells it that result is being re-checked (threat model #14). "
                             "Set it to batch the counts, e.g. 900.")
+        # `refusal-log-v1`: repeats of a refused submission are no longer written to the
+        # audit trail, so this is the only place they show up.
+        repeats = ledger.repeated_refusals()
+        loud = sorted(w for w, n in repeats.items() if n >= REFUSAL_REPEAT_WARN)
+        if loud:
+            warnings.append(f"{len(loud)} rig(s) re-sent a submission that was already refused "
+                            f"{REFUSAL_REPEAT_WARN} or more times since the coordinator started: "
+                            f"{', '.join(loud)}. Usually a worker stuck in a retry loop; could "
+                            "be someone probing. See repeated_refusals; revoke if it keeps on")
         if problems:
             warnings.append(f"{len(problems)} consistency problem(s): see "
                             "consistency_problems")
@@ -487,6 +503,8 @@ def create_app(settings: Settings | None = None,
                 "public_settle_delay_seconds": settings.public_settle_delay_seconds,
                 "public_counts_interval_seconds": settings.public_counts_interval_seconds,
                 "pause": {"rule": PAUSE_VERSION, "paused": pause is not None} | (pause or {}),
+                "repeated_refusals": {"rule": REFUSAL_LOG_RULE, "since_start": repeats,
+                                      "warn_at": REFUSAL_REPEAT_WARN},
                 "consistency_problems": problems, "warnings": warnings}
 
     @app.get("/v1/operator/review")
@@ -683,8 +701,10 @@ def create_app(settings: Settings | None = None,
             raise HTTPException(status_code=404, detail="unknown job")
         public = ("job_id", "task_type", "status", "attempts", "max_attempts", "expires_at",
                   "lease_expires_at", "worker_id")
-        events = [e for e in ledger.events(job_id) if e["event"] not in PRIVATE_EVENTS]
-        return {k: job[k] for k in public} | {"events": events}
+        # `refusal-log-v1`: filtered and capped in the database, oldest first.
+        events, total = ledger.public_job_events(job_id, PRIVATE_EVENTS, MAX_JOB_EVENTS)
+        return {k: job[k] for k in public} | {"events": events, "events_total": total,
+                                              "events_limit": MAX_JOB_EVENTS}
 
     @app.post("/v1/jobs/next", response_model=JobEnvelope)
     def next_job(worker_id: str | None = None,

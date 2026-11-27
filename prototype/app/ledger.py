@@ -54,10 +54,11 @@ from __future__ import annotations
 import json
 import random
 import sqlite3
+import threading
 from collections import Counter
 from contextlib import closing, contextmanager
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterable, Iterator
 
 from . import copy_guard, secret_file, tasks
 from .audit_policy import (
@@ -234,6 +235,28 @@ SCALE_INDEXES = (
 # `ledger-pages-v1`: the most results one ledger page can hold.
 MAX_PAGE = 1000
 
+# `refusal-log-v1` (code audit, thirteenth pass): what one enrolled rig can make the
+# coordinator write. A refused submission (a result for a job someone else already
+# finished, a job leased to another rig, or a receipt that doesn't match the job) used to
+# add a row to the audit trail *every* time. Measured on a real server: 180 bytes per
+# request, so one rig inside the 240-a-minute request limit could add 345,600 rows (about
+# 62 MB) a day, forever, and pile them onto another rig's job: a day of that made the
+# public `GET /v1/jobs/{id}` for that job 54 MB and 1.5 s. Now the same refusal (same job,
+# same rig, same reason) is written once; repeats are only counted in memory for the
+# operator health page.
+REFUSAL_EVENTS = ("submission_conflict", "submission_wrong_worker", "receipt_mismatch")
+
+# `refusal-log-v1`: the most events `GET /v1/jobs/{id}` shows (oldest first). With repeats
+# no longer written, a job has a handful; the cap is a second fence, not the main one.
+MAX_JOB_EVENTS = 200
+
+# `refusal-log-v1`: every accepted result asks for the sending rig's audit record (to pick
+# its audit rate), and that read every result ever accepted (about 10 ms at 100,000, and
+# growing). This index lets it read only that rig's results.
+WORKER_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS submissions_by_worker ON submissions(worker_id, audit_status)",
+)
+
 # Job kinds that go to a randomly chosen worker instead of whoever asks first.
 ASSIGNED_KINDS = ("audit", "tiebreak")
 
@@ -313,6 +336,10 @@ class Ledger:
         self.auditor_pick = auditor_pick
         self.tiebreak_decides = tiebreak_decides
         self.untrusted = untrusted
+        # `refusal-log-v1`: repeats of a refusal already in the audit trail, per rig, since
+        # this process started (memory only, like the request limits).
+        self._repeats: Counter[str] = Counter()
+        self._repeats_lock = threading.Lock()
         if untrusted:
             self.read_only = True
             copy_guard.vet(self.path)
@@ -333,7 +360,7 @@ class Ledger:
                         db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
             # After the migration, so older databases have the column first.
             db.execute("CREATE UNIQUE INDEX IF NOT EXISTS workers_key_hash ON workers(key_hash)")
-            for ddl in SCALE_INDEXES:
+            for ddl in SCALE_INDEXES + WORKER_INDEXES:
                 db.execute(ddl)
 
     # -- plumbing -----------------------------------------------------------------
@@ -389,6 +416,30 @@ class Ledger:
                worker_id: str | None = None, detail: str | None = None) -> None:
         db.execute("INSERT INTO events(job_id, worker_id, event, detail, at) VALUES(?,?,?,?,?)",
                    (job_id, worker_id, event, detail, now))
+
+    def _refusal(self, db: sqlite3.Connection, now: int, event: str, job_id: str,
+                 worker_id: str, detail: str | None = None) -> bool:
+        """`refusal-log-v1`: write a refused submission to the audit trail only the first
+        time this rig is refused on this job for this reason. A repeat says nothing new and
+        is only counted in memory (`repeated_refusals`). Returns True if a row was written.
+        The lookup goes through `events_by_job`, so it reads only this job's few events."""
+        if event not in REFUSAL_EVENTS:
+            raise ValueError(f"not a refusal event: {event!r}")
+        seen = db.execute("SELECT 1 FROM events WHERE job_id=? AND worker_id=? AND event=? "
+                          "AND detail IS ? LIMIT 1", (job_id, worker_id, event, detail)
+                          ).fetchone()
+        if seen is not None:
+            with self._repeats_lock:
+                self._repeats[worker_id] += 1
+            return False
+        self._event(db, now, event, job_id, worker_id, detail)
+        return True
+
+    def repeated_refusals(self) -> dict[str, int]:
+        """Per rig: refused submissions not written because the same refusal (same job,
+        same reason) is already in the audit trail. Since this process started."""
+        with self._repeats_lock:
+            return dict(sorted(self._repeats.items()))
 
     # -- workers and enrollment ------------------------------------------------------
     # Only sha256 hashes of enrollment codes and worker keys are stored. Both are 256-bit
@@ -680,9 +731,14 @@ class Ledger:
 
     def note(self, now: int, event: str, job_id: str | None = None,
              worker_id: str | None = None, detail: str | None = None) -> None:
-        """Append one audit-trail event outside any other change (e.g. a refused receipt)."""
+        """Append one audit-trail event outside any other change (e.g. a refused receipt).
+        Refusals (REFUSAL_EVENTS) are written once per job, rig and reason
+        (`refusal-log-v1`)."""
         with self._tx() as db:
-            self._event(db, now, event, job_id, worker_id, detail)
+            if event in REFUSAL_EVENTS and job_id and worker_id:
+                self._refusal(db, now, event, job_id, worker_id, detail)
+            else:
+                self._event(db, now, event, job_id, worker_id, detail)
 
     def _audit_not_run(self, db: sqlite3.Connection, job_id: str, now: int) -> None:
         """An audit or tie-breaker job ended without a usable result.
@@ -935,14 +991,14 @@ class Ledger:
                                    (job_id,)).fetchone()
                 if prior and prior["worker_id"] == worker_id and prior["result_hash"] == result_hash:
                     return "duplicate", job
-                self._event(db, now, "submission_conflict", job_id, worker_id)
+                self._refusal(db, now, "submission_conflict", job_id, worker_id)
                 return "conflict", job
             if job["status"] == "expired":
                 return "expired", job
             if job["status"] != "leased":
                 return "not_leased", job
             if job["worker_id"] != worker_id:
-                self._event(db, now, "submission_wrong_worker", job_id, worker_id)
+                self._refusal(db, now, "submission_wrong_worker", job_id, worker_id)
                 return "wrong_worker", job
             if not correct:
                 final = job["attempts"] >= job["max_attempts"]
@@ -1440,6 +1496,22 @@ class Ledger:
                 "last_event_at": one("SELECT MAX(at) FROM events"),
             }
         return snapshot
+
+    def public_job_events(self, job_id: str, hidden: Iterable[str],
+                          limit: int = MAX_JOB_EVENTS) -> tuple[list[dict[str, Any]], int]:
+        """`refusal-log-v1`: one job's events for the public `GET /v1/jobs/{id}`, without
+        the `hidden` ones, oldest first, at most `limit`, plus how many there are in all.
+        Filtered and capped inside SQLite through `events_by_job`, so the reply's cost
+        doesn't depend on how much anyone wrote about this job."""
+        hidden = tuple(hidden)
+        marks = ",".join("?" * len(hidden)) or "NULL"
+        where = f"job_id=? AND event NOT IN ({marks})"
+        with closing(self._connect()) as db:
+            rows = db.execute(f"SELECT * FROM events WHERE {where} ORDER BY id LIMIT ?",
+                              (job_id, *hidden, limit)).fetchall()
+            total = db.execute(f"SELECT COUNT(*) FROM events WHERE {where}",
+                               (job_id, *hidden)).fetchone()[0]
+        return [dict(r) for r in rows], int(total)
 
     def events(self, job_id: str | None = None) -> list[dict[str, Any]]:
         with closing(self._connect()) as db:
