@@ -4,6 +4,7 @@ import hmac
 import json
 import logging
 import random
+import re
 import time
 import uuid
 from typing import Any, Callable
@@ -15,7 +16,7 @@ from fastapi.responses import JSONResponse
 from .config import Settings, get_settings
 from . import (audit_policy, client_address, input_limits, key_rotation, observability, points,
                public_counts, rate_limit, review, rewards, schemas, tasks, vouches, workers)
-from .ledger import PAUSE_VERSION, CoordinatorPaused, HiddenTestRevealed, Ledger
+from .ledger import MAX_PAGE, PAUSE_VERSION, CoordinatorPaused, HiddenTestRevealed, Ledger
 from .models import (ChallengeCreate, EnrollmentCreate, JobCreate, JobEnvelope, PauseRequest,
                      ResultSubmission, WorkerRegistration)
 from .security import sha256_text
@@ -61,6 +62,13 @@ class AuthRefused(HTTPException):
     or enrollment code). Counted per client by app/rate_limit.py; enough of them in a row
     and the client is locked out for a while. A *missing* credential is a plain
     HTTPException and isn't counted."""
+
+
+# `ledger-pages-v1`: GET /v1/ledger pages. A cursor is "<accepted_at>:<job_id>", exactly as
+# the previous reply's `next_after` gave it.
+LEDGER_PAGES_RULE = "ledger-pages-v1"
+DEFAULT_PAGE = 100
+LEDGER_CURSOR = re.compile(r"(\d{1,16}):([A-Za-z0-9_-]{1,80})")
 
 
 def create_app(settings: Settings | None = None,
@@ -116,6 +124,21 @@ def create_app(settings: Settings | None = None,
     # `public-counts-v1` (threat model #14): public job counts are batched per window.
     batched_counts = public_counts.BatchedCounts(settings.public_counts_interval_seconds,
                                                  ledger.status_counts)
+    # `ledger-pages-v1`: the public ledger's consistency check reads the whole ledger, so
+    # the public sees it taken once per window too (same windows); the operator, live.
+    def ledger_summary(cutoff: int | None) -> dict[str, Any]:
+        """The parts of the ledger reply that read the whole ledger: point totals (results
+        accepted after `cutoff` count as pending) and the consistency check."""
+        return {"total_simulated_points": ledger.total_points(),
+                "points_by_status": ledger.points_by_status(cutoff),
+                "consistency_problems": ledger.check_consistency()}
+
+    # `ledger-pages-v1`: the public gets that summary taken once per counts window, with
+    # the public settle delay as of the moment it was taken; the operator, live.
+    batched_summary = public_counts.BatchedCounts(
+        settings.public_counts_interval_seconds,
+        lambda: ledger_summary(now() - settings.public_settle_delay_seconds
+                               if settings.public_settle_delay_seconds else None))
     # Threat model #17 follow-up: behind a listed proxy, limits apply to the real client.
     resolver = client_address.ClientResolver(
         client_address.parse_trusted_proxies(settings.trusted_proxies))
@@ -746,7 +769,10 @@ def create_app(settings: Settings | None = None,
         raise HTTPException(status_code=code, detail=detail)
 
     @app.get("/v1/ledger")
-    def read_ledger(x_operator_token: str | None = Header(default=None)) -> dict[str, Any]:
+    def read_ledger(limit: int = Query(default=DEFAULT_PAGE, ge=1, le=MAX_PAGE),
+                    after: str | None = Query(default=None, max_length=120),
+                    order: str = Query(default="oldest", max_length=10),
+                    x_operator_token: str | None = Header(default=None)) -> dict[str, Any]:
         """Public ledger. `public-delay-v1` (threat model #14): a result's settlement bucket
         and confidence show only PUBLIC_SETTLE_DELAY_SECONDS after it was accepted; until
         then it counts as "pending". `public-no-hashes-v1` (threat model #14 follow-up):
@@ -754,7 +780,25 @@ def create_app(settings: Settings | None = None,
         same hash as the job it re-checked. `public-counts-v1` (threat model #14): public job
         counts are taken once per PUBLIC_COUNTS_INTERVAL_SECONDS window, because live
         `queued` rose the instant a result was picked for a re-check. With the operator
-        token the view is live and complete."""
+        token the view is live and complete.
+
+        `ledger-pages-v1` (code audit, twelfth pass): entries come in pages of `limit`
+        (default 100, at most 1000), oldest first or `order=newest`; pass the reply's
+        `next_after` back as `after` for the next page. Before, every reply held every
+        result ever accepted and re-ran the whole consistency check, so one address asking
+        four times a second (inside the request limit) could stall the coordinator for the
+        rigs. The public point totals and consistency check (which read the whole ledger)
+        are now taken once per counts window, like the job counts (`totals_taken_at`)."""
+        if order not in ("oldest", "newest"):
+            raise HTTPException(status_code=422, detail="order must be 'oldest' or 'newest'")
+        cursor = None
+        if after is not None:
+            m = LEDGER_CURSOR.fullmatch(after)
+            if not m or int(m.group(1)) > input_limits.MAX_TIMESTAMP:
+                # Never echo the value back (`input-limits-v1`).
+                raise HTTPException(status_code=422, detail="after must be a next_after "
+                                    "value from an earlier reply")
+            cursor = (int(m.group(1)), m.group(2))
         operator = x_operator_token is not None
         if operator:
             require_operator(x_operator_token)
@@ -769,12 +813,21 @@ def create_app(settings: Settings | None = None,
                                      + ["public-no-hashes-v1"]
                                      + ([public_counts.RULE]
                                         if counts["public_counts_interval_seconds"] else []))
-        return {"entries": ledger.entries(cutoff, with_hashes=operator),
-                "total_simulated_points": ledger.total_points(),
-                "points_by_status": ledger.points_by_status(cutoff),
+        rules = rules if operator else rules + [LEDGER_PAGES_RULE]
+        entries, next_cursor = ledger.entries_page(cutoff, with_hashes=operator, limit=limit,
+                                                   after=cursor,
+                                                   newest_first=order == "newest")
+        if operator:
+            summary, summary_at = ledger_summary(cutoff), t
+        else:
+            summary, summary_at, _ = batched_summary.take(t)
+        return {"entries": entries, "entries_count": ledger.entries_count(),
+                "entries_order": order, "entries_limit": limit,
+                "next_after": f"{next_cursor[0]}:{next_cursor[1]}" if next_cursor else None,
+                **summary, "totals_taken_at": summary_at,
                 "view": view, "public_settle_delay_seconds": delay,
                 "public_rules": rules, "hidden_fields": [] if operator else ["result_hash"],
-                **counts, "consistency_problems": ledger.check_consistency(),
+                **counts,
                 "notice": "Simulated points only; not tokens or money."}
 
     return app

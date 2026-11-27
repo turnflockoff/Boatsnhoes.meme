@@ -127,6 +127,22 @@ def test_sees_queued_work_the_batched_public_counts_do_not_show_yet() -> None:
         assert client.app.state.ledger.status_counts() == {"queued": 1}
 
 
+def test_final_consistency_check_reads_the_live_books() -> None:
+    """`ledger-pages-v1`: the public consistency check is taken once per window, so it could
+    be from before the run. The rehearsal's last check must read the operator's live one."""
+    import sqlite3
+    with local_coordinator() as (client, token, clock):
+        assert client.get("/v1/ledger").json()["consistency_problems"] == []  # snapshot
+        with sqlite3.connect(client.app.state.ledger.path) as db:  # broken on purpose
+            db.execute("INSERT INTO jobs(job_id, task_type, payload, payload_hash, "
+                       "reward_points, expires_at, signature, status, max_attempts, "
+                       "created_at, updated_at) VALUES ('ghost', 'demo:sha256', 'p', 'h', 1, "
+                       "1, 's', 'accepted', 1, 1, 1)")
+        report = Rehearsal(client, token, now=clock, wait=clock.advance).run()
+        check = by_name(report)["ledger_consistent"]
+        assert check["passed"] is False and "ghost" in json.dumps(check["got"])
+
+
 def test_refuses_a_wrong_operator_token() -> None:
     with local_coordinator() as (client, _token, clock):
         report = Rehearsal(client, "x" * 40, now=clock, wait=clock.advance).run()

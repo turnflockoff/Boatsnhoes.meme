@@ -221,6 +221,19 @@ MIGRATIONS = {
 }
 
 
+# `ledger-pages-v1` (code audit, twelfth pass): indexes so the routes anyone can call stay
+# cheap as the ledger grows. Without them a public `GET /v1/jobs/{id}` read every event ever
+# written, and the public ledger had to sort every result to show any of them. Created
+# after the migrations, so a ledger from before a column existed gets the column first.
+SCALE_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS submissions_by_time ON submissions(accepted_at, job_id)",
+    "CREATE INDEX IF NOT EXISTS events_by_job ON events(job_id, id)",
+    "CREATE INDEX IF NOT EXISTS jobs_by_audit_of ON jobs(audit_of)",
+)
+
+# `ledger-pages-v1`: the most results one ledger page can hold.
+MAX_PAGE = 1000
+
 # Job kinds that go to a randomly chosen worker instead of whoever asks first.
 ASSIGNED_KINDS = ("audit", "tiebreak")
 
@@ -320,6 +333,8 @@ class Ledger:
                         db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
             # After the migration, so older databases have the column first.
             db.execute("CREATE UNIQUE INDEX IF NOT EXISTS workers_key_hash ON workers(key_hash)")
+            for ddl in SCALE_INDEXES:
+                db.execute(ddl)
 
     # -- plumbing -----------------------------------------------------------------
     # SQLite side files that hold the same data as the ledger itself.
@@ -1059,6 +1074,47 @@ class Ledger:
             self._event(db, now, event, job_id, detail=f"{status} (tie-breaker {tb['job_id']})")
 
     # -- reporting --------------------------------------------------------------------
+    def entries_page(self, shown_up_to: int | None = None, with_hashes: bool = True,
+                     limit: int = 100, after: tuple[int, str] | None = None,
+                     newest_first: bool = False
+                     ) -> tuple[list[dict[str, Any]], tuple[int, str] | None]:
+        """`ledger-pages-v1`: at most `limit` accepted results in (accepted_at, job_id)
+        order (or the reverse), starting after the row `after` names, and the cursor for
+        the next page (None on the last one). Reads at most `limit + 1` rows through the
+        `submissions_by_time` index, however big the ledger is. Same rows and same
+        withholding as `entries`."""
+        if not 1 <= limit <= MAX_PAGE:
+            raise ValueError(f"limit must be 1-{MAX_PAGE}")
+        op, direction = ("<", "DESC") if newest_first else (">", "ASC")
+        where, args = "", []
+        if after is not None:
+            where = f"WHERE (accepted_at, job_id) {op} (?, ?) "
+            args = [int(after[0]), str(after[1])]
+        with closing(self._connect()) as db:
+            rows = db.execute(
+                "SELECT job_id, worker_id, result_hash, reward_points, accepted_at, "
+                f"verifier_method, confidence FROM submissions {where}"
+                f"ORDER BY accepted_at {direction}, job_id {direction} LIMIT ?",
+                (*args, limit + 1)).fetchall()
+        more = len(rows) > limit
+        out = [self._public_entry(dict(row), shown_up_to, with_hashes) for row in rows[:limit]]
+        cursor = (out[-1]["accepted_at"], out[-1]["job_id"]) if more else None
+        return out, cursor
+
+    def entries_count(self) -> int:
+        with closing(self._connect()) as db:
+            return int(db.execute("SELECT COUNT(*) FROM submissions").fetchone()[0])
+
+    @staticmethod
+    def _public_entry(entry: dict[str, Any], shown_up_to: int | None,
+                      with_hashes: bool) -> dict[str, Any]:
+        visible = shown_up_to is None or entry["accepted_at"] <= shown_up_to
+        if not visible:
+            entry["confidence"] = None
+        if not with_hashes:
+            del entry["result_hash"]
+        return entry | {"settlement_visible": visible}
+
     def entries(self, shown_up_to: int | None = None,
                 with_hashes: bool = True) -> list[dict[str, Any]]:
         """Accepted results. With `shown_up_to` (`public-delay-v1`, threat model #14),
@@ -1074,16 +1130,7 @@ class Ledger:
                 "SELECT job_id, worker_id, result_hash, reward_points, accepted_at, "
                 "verifier_method, confidence FROM submissions ORDER BY accepted_at, job_id"
             ).fetchall()
-        out = []
-        for row in rows:
-            entry = dict(row)
-            visible = shown_up_to is None or entry["accepted_at"] <= shown_up_to
-            if not visible:
-                entry["confidence"] = None
-            if not with_hashes:
-                del entry["result_hash"]
-            out.append(entry | {"settlement_visible": visible})
-        return out
+        return [self._public_entry(dict(row), shown_up_to, with_hashes) for row in rows]
 
     def submission(self, job_id: str) -> dict[str, Any] | None:
         with closing(self._connect()) as db:

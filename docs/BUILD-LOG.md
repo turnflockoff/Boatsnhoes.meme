@@ -1190,3 +1190,30 @@ In all three, `verify` printed **OK** and then starting the worker printed `EVIL
 2. **Check-then-act needs a reservation.** Like a restaurant with 10 seats: if you only count people once they've finished eating, 230 can walk in at once. Handing out a seat at the door (the "slot") and taking it back when they leave keeps it at 10.
 3. **Some bugs only show up for real.** Ordinary tests send one request after another, so they could never see this. The new tests run a real server and fire everything at once.
 4. **Guard what's guessable.** Your operator token is something a person typed, so it's worth guessing; a rig's key is a long random number nobody can guess. Putting the strict rule only where it matters keeps it from slowing down the rigs.
+
+## 2026-11-27 (UTC): A big public ledger could stall the rigs (0.5.63)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions, so this session did the twelfth "code audit" pass. Earlier passes asked "what if someone sends something nasty?" and "what if many things arrive at once?". This one asked: **what happens once the ledger is big, and anyone can ask to read it?**
+
+**Found, shown really happening** (a real coordinator server on this sandbox, old code, a ledger filled with 100,000 finished jobs: roughly two months of two rigs finishing one job a minute)
+1. **The public ledger page sent everything, every time.** `GET /v1/ledger` needs no password, and each reply held every result ever accepted (20 MB) and re-ran the whole "do the books add up?" check. One reply took **0.86 seconds** of the coordinator's time.
+2. **One visitor, staying inside the speed limit, stalled the rigs.** The limit is 240 requests a minute per address. Asking 4 times a second is exactly that, and it's already more work than the coordinator can do. A rig asking for its next job normally waits 4.7 ms; during the burst it waited up to **7.8 seconds**, and only 6 of the replies got out in 15 seconds (the rest piled up).
+3. **Looking up one job read the whole history.** `GET /v1/jobs/{id}` (also public) searched every event ever written to find that job's few. Small now, but it grows forever.
+
+**Shipped (`ledger-pages-v1`)**
+- **Pages.** The ledger now comes 100 results at a time (you can ask for up to 1,000), oldest first or newest first. Each reply has a `next_after` value; send it back as `after` to get the next page. The bookmark is "time accepted + job number", so two results accepted in the same second are never skipped or shown twice.
+- **The big totals once per 15 minutes.** The point totals and the "books add up" check read the whole ledger, so the public page now takes them once per 15-minute window, the same way it already does for job counts (`totals_taken_at` says when). With your operator token they are always live.
+- **Indexes** (like the index at the back of a book) so the database can jump to the right rows instead of reading them all: one for pages, one for a job's history, one for re-check lookups. Older ledgers get them automatically on start.
+- **Same server, same burst, afterwards:** each public reply **9 ms** and 20 KB instead of 0.86 s and 20 MB; the rig's waits didn't change at all (worst 8.3 ms). With 500,000 results a reply still takes only 15 ms.
+- **Proof.**
+  - 40 new tests, **2,267 total: 2,266 passing, 1 skipped** on the committed tree (the one test that can't work as the all-powerful root user, as designed). Run on Python 3.13 and 3.11 (what CI uses).
+  - **35 of the new tests fail on the old code.**
+  - Some tests ask the database itself how it plans to run the public queries and fail if it would read the whole table, so a later change can't quietly bring the slow version back.
+  - I broke the new code 19 ways on purpose (wrong page edge, bookmark ignoring the job number, indexes missing, totals live again, ...); **all 19 were caught.**
+- **Honest limits:** the first visitor in each 15-minute window still triggers one full check (about 0.4 s at 100,000 results). Your operator health page still reads everything (about 1 s at 100,000), but only you can open it. Thousands of different addresses can still flood any server: before the coordinator is public, put it behind a host with DDoS protection. No coordinator is running anywhere yet, so nothing needs doing on your side.
+
+**What you learned**
+1. **Cost per request matters as much as requests per minute.** A speed limit of 240 a minute is safe only if each request is cheap. One 0.86-second request, 4 times a second, is more work than one computer can do.
+2. **Pagination** is how big lists are served everywhere (search results, your email): a page at a time, with a bookmark for "where you left off". The bookmark has to be unique, which is why it includes the job number, not just the time.
+3. **A database index** works like the index in a book: without it, finding one job means reading every page. It costs a little disk space and makes lookups stay fast however big the ledger gets.
+4. **Bugs that only show up later.** With 10 test jobs everything was instant. The problem only appears after months of real work, which is why this pass filled a ledger with 100,000 fake rows on purpose before the rigs ever go live.

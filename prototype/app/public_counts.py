@@ -18,6 +18,7 @@ processes would each take their own snapshot at different moments.
 """
 from __future__ import annotations
 
+import copy
 import threading
 from typing import Any, Callable
 
@@ -25,29 +26,35 @@ RULE = "public-counts-v1"
 
 
 class BatchedCounts:
-    def __init__(self, interval: int, read: Callable[[], dict[str, int]]) -> None:
+    def __init__(self, interval: int, read: Callable[[], Any]) -> None:
         if interval < 0:
             raise ValueError("interval must be 0 (live) or a positive number of seconds")
         self.interval = interval
         self._read = read
         self._lock = threading.Lock()
         self._window: int | None = None
-        self._counts: dict[str, int] = {}
+        self._counts: Any = {}
         self._taken_at = 0
 
-    def view(self, now: int) -> dict[str, Any]:
-        """The counts to show the public at `now`, and when they were taken."""
+    def take(self, now: int) -> tuple[Any, int, int | None]:
+        """This window's reading, when it was taken, and when the next window starts
+        (None when live). Reads at most once per window, however often it is asked
+        (`ledger-pages-v1` also uses this for the public consistency check, which reads
+        the whole ledger)."""
         if not self.interval:
-            return {"jobs": self._read(), "jobs_counted_at": now, "jobs_next_count_at": None,
-                    "public_counts_interval_seconds": 0}
+            return self._read(), now, None
         window = now // self.interval
         with self._lock:
             if self._window != window:
                 # Read before switching windows: if the read fails, nothing is cached.
                 self._counts, self._taken_at, self._window = self._read(), now, window
-            counts, taken_at = dict(self._counts), self._taken_at
-        return {"jobs": counts, "jobs_counted_at": taken_at,
-                "jobs_next_count_at": (window + 1) * self.interval,
+            value, taken_at = copy.deepcopy(self._counts), self._taken_at
+        return value, taken_at, (window + 1) * self.interval
+
+    def view(self, now: int) -> dict[str, Any]:
+        """The counts to show the public at `now`, and when they were taken."""
+        counts, taken_at, next_at = self.take(now)
+        return {"jobs": counts, "jobs_counted_at": taken_at, "jobs_next_count_at": next_at,
                 "public_counts_interval_seconds": self.interval}
 
 

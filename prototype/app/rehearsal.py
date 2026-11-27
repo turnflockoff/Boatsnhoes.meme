@@ -173,7 +173,9 @@ class Rehearsal:
         return str(response.json().get("status")) if response.status_code == 200 else "?"
 
     def total_points(self) -> int:
-        return int(self.request("GET", "/v1/ledger").json()["total_simulated_points"])
+        # Operator view: since `ledger-pages-v1` the public totals are taken once per window.
+        return int(self.request("GET", "/v1/ledger", params={"limit": 1}, headers=self.op
+                                ).json()["total_simulated_points"])
 
     # ---- steps ----------------------------------------------------------------------
 
@@ -181,7 +183,7 @@ class Rehearsal:
         """Refuse to run where rehearsal workers could take someone's queued work."""
         # Operator view: the public job counts are batched (`public-counts-v1`) and could
         # still say 0 minutes after someone queued real work.
-        response = self.request("GET", "/v1/ledger", headers=self.op)
+        response = self.request("GET", "/v1/ledger", params={"limit": 1}, headers=self.op)
         if response.status_code in (401, 403):
             raise RehearsalAbort(f"the operator token was refused ({response.status_code}); "
                                  "check OPERATOR_TOKEN")
@@ -356,7 +358,9 @@ class Rehearsal:
                    "whose deadline has passed.", "refused (expired)", seen, "expired" in seen)
 
         # 9. The books still add up and nothing is left half done.
-        ledger = self.request("GET", "/v1/ledger").json()
+        # Operator view: since `ledger-pages-v1` the public one repeats the check taken at
+        # the start of the counts window, which could be from before this run.
+        ledger = self.request("GET", "/v1/ledger", params={"limit": 1}, headers=self.op).json()
         problems = ledger.get("consistency_problems", [])
         self.check("ledger_consistent", "The coordinator's own consistency checks find no "
                    "problems after all of the above.", [], problems, problems == [])
