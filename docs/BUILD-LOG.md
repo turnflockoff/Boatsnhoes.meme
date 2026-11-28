@@ -1276,3 +1276,33 @@ In all three, `verify` printed **OK** and then starting the worker printed `EVIL
 2. **"Monotonic" means "only goes up".** Computers have two clocks: the wall clock (the date and time, which can be changed) and a monotonic clock (a stopwatch since boot, which can't). Comparing them is how you spot that someone, or something, moved the wall clock.
 3. **Order matters more than the exact time.** For a ledger, being a few minutes off is fine; filing something *before* a line you already drew (a signed, shared period) is not. Holding time still until the clock catches up keeps the order right.
 4. **Fail loudly at start.** Refusing to start with a clear message is better than starting quietly and filing a year of work in the year 2000.
+
+## 2026-11-28 (UTC): A full disk took the whole coordinator down (0.5.66)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions, so this session did the fifteenth "code audit" pass. Last time asked what the server's clock can do to the coordinator; this one asked the same about its **disk**: what happens when the disk under the ledger fills up? On a small box that's easy: logs, backups and one 4 GB model download share that disk.
+
+**Found, shown really happening** (old code, a real coordinator server, its ledger on a real 8 MB ext4 disk made on this sandbox, then filled to the last byte)
+1. **Everything stopped, even reading.** Claims, results, the public ledger, your operator health page and `/health` all failed with "disk I/O error". The reason is a SQLite detail: every request opens its own connection to the ledger, and when the last one closes, SQLite deletes two helper files next to the ledger (`-wal` and `-shm`). The next request has to make them again, and on a full disk it can't, so even a simple read fails.
+2. **The log blamed the wrong thing.** After the failed write, the code tried to "undo" a change SQLite had already undone, and *that* second error ("cannot rollback - no transaction is active") is what ended up in the log. You'd have gone looking for a bug instead of a full disk.
+3. **Rigs lost finished work.** A rig handing in a result got `500` (and every other request a dropped connection). The demo worker only retries when told "slow down" (`429`), so it threw the result away; the job would have been run again later by someone.
+4. **No warning first.** The operator health page said "ok" right up to the last byte.
+
+**Shipped (`storage-full-v1`)**
+- **Reads keep working on a full disk.** The ledger now keeps one idle connection open for as long as the coordinator runs, so the helper files stay. It never reads, writes or holds a lock, so it gets in nobody's way. Same full disk afterwards: `/health` answers 200, your health page answers 200, and writes politely say "try again later".
+- **The real error is the one you see.** The "undo" only runs when there's something to undo, and the first error is always the one passed on.
+- **Room is kept for results.** Under 100 MB free (`DISK_RESERVE_MB`) the coordinator stops taking **new** work: new jobs, hidden tests and enrollment codes get `503` "low on storage, try again later" and nothing is written. Rigs can still claim queued jobs and hand in results, so the queue empties instead of freezing. Free some space and it carries on by itself.
+- **Early warning.** Under 1 GB free (`DISK_WARN_MB`) your health page warns. It also has a new `storage` section: free MB, ledger size, whether new work is being taken, and how many writes failed or were refused since start. The public `/health` says nothing about the disk, so a stranger can't watch whether filling it is working.
+- **A failed save is "try again later", not a crash.** If a write still fails because the disk is full or failing, the rig gets `503` with "come back in 60 s" (nothing half-written), it's counted on your health page, and the log line says so without the error's text (which can contain file paths). Any other database error is still treated as a real error.
+- **The worker keeps its result.** `demo_worker.py` now waits and retries a result after `503` (up to 5 tries), and when asking for work gets `503` it prints the coordinator's reason.
+- **Proof.**
+  - Same real disk, new code: result `503` while full, then `200` for the very same result once space was freed; new jobs refused while low; health 200 throughout; ledger self-check clean.
+  - 41 new tests, **2,348 total: 2,347 passing, 1 skipped** on the committed tree (the one test that can't work as the all-powerful root user, as designed). Run on Python 3.13 and 3.11 (what CI uses).
+  - **20 of the new tests fail on the old code.** Two of them run a coordinator in a separate process that isn't allowed to write past 16 KB in any file (a real "can't write" condition, no special permissions needed, so it runs in CI too): with the idle connection, reads answer 200 and writes 503; without it, even `/health` fails, exactly like the real disk.
+  - I broke the new code 17 ways on purpose (no idle connection, old undo, reserve off by one, each of the three "new work" routes left open, I/O errors not counted, worker not retrying, free space read from the wrong folder, error text logged, every database error turned into 503, ...); **all 17 were caught.**
+- **Honest limits:** if something else (logs, a model download) fills the disk to zero, writes still have to wait until someone frees space. Nothing is lost or half-written and rigs are told to come back, but the coordinator doesn't delete anything for you. Keeping model files on a different disk from the ledger avoids most of it. No coordinator is running anywhere yet, so nothing needs doing on your side (there's a "good to know" line in USER_TODO).
+
+**What you learned**
+1. **"Full" isn't only a write problem.** You'd expect a full disk to stop *saving*. Here it stopped *reading* too, because the database needed to create a small helper file just to look. Small hidden writes are everywhere.
+2. **The first error is the one that matters.** When cleanup code fails after the real failure, its error can replace the real one in the log. Good error handling makes sure the original reason survives.
+3. **Keep a reserve.** A petrol tank's warning light comes on before it's empty. Refusing new work at 100 MB, while still accepting results, keeps the last bit of room for the things that are already paid for in effort.
+4. **"Try again later" is a feature.** A `503` with `Retry-After` tells a rig "not your fault, come back in a minute"; a `500` says "something broke". Picking the right answer lets the worker keep its finished result.

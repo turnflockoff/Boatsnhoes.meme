@@ -158,6 +158,14 @@ This assumes the auditor is honest. The rest of this document is about when that
   inside the jump (shown, not prevented), and a dishonest operator can still set any clock
   they like before writing (#10): this protects honest operators from their clock, not
   readers from the operator.
+- **A full disk stops the coordinator.** Before 0.5.66 a full disk under the ledger took
+  everything down, reads and `/health` included, and finished results were answered with
+  `500` and lost. Since 0.5.66 (`storage-full-v1`, `app/storage.py`) reads keep working,
+  new work (jobs, hidden tests, enrollment codes) is refused under `DISK_RESERVE_MB` so the
+  room left goes to results, failed writes are `503` + `Retry-After` and the worker retries
+  its result. How full the disk is stays operator-only, so a stranger can't watch whether
+  filling it is working. A disk filled by something else can still reach zero; then writes
+  wait (nothing is lost or half-written) until the operator frees space.
 - **The tolerance rule is a guess** until Phase 3 produces real output from two cards.
 
 ## Order of the next fixes
