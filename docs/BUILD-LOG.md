@@ -1424,3 +1424,31 @@ In all three, `verify` printed **OK** and then starting the worker printed `EVIL
 2. **Hiding a thing means hiding its shape too.** We hid the words "audit scheduled", but the gap it left in the numbering was still there, like a blacked-out line in a document that still shows how long the line was.
 3. **Test the attack, not just the fix.** Running the attacker's code on the full data first proves the attack is real; only then does "it finds nothing on the public pages" mean something.
 4. **Fix the exact leak first, then measure the fuzzy one.** The numbers gave a certain answer at any traffic level; the timing gives a probability that shrinks as more rigs join. Both matter, but they need different fixes.
+
+## 2026-11-28 (UTC): A re-check came out in the very second its original was accepted (0.5.71)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions. The last session left one software-only item open on purpose: re-checks could still be spotted by their timing. This session closed it (the twentieth "code audit" pass).
+
+**Found, shown really happening** (old code, an in-process coordinator; no model was run)
+1. **Same second, every time.** A re-check is made in the same step that accepts the result it re-checks. So its public "job created" time was always exactly the second the original's "result accepted" was written, and both times are public. Ordinary jobs only line up with someone's result now and then.
+2. **The deadline gave it away even without the job page.** A re-check gets the same time window as the original (300 s for a normal job), counted from that second. So "deadline minus 300" *was* the second the original was accepted, and the deadline is in the signed job every rig receives.
+3. **It could be taken at once**, so the rig that got it knew it had been made moments earlier.
+
+**Shipped (`recheck-release-v1`, ledger format 2)**
+- **A new re-check is held out of sight.** It's stored with a release time and nothing else public: no "job created", its job page says "unknown job", it isn't in the public counts, no rig can take it, and it can't expire (its life hasn't started).
+- **The wait is random:** a whole number of seconds between 60 and 600 (`RECHECK_DELAY_MIN_SECONDS` / `RECHECK_DELAY_MAX_SECONDS`), picked with the same secure randomness as audits.
+- **A small timer releases it at its own second.** Once a second the coordinator looks for re-checks that are due. Releasing one starts its life there: its creation time, its public "job created", and a new deadline (release time + the same window), signed again. Then a random rig is picked to do it, as before. I first thought of releasing them when a rig next asks for work, and dropped it: the release would then share a second with that rig's lease or result, which is a new tell.
+- **You can see it.** The operator health page shows how many re-checks are waiting, and warns if one is more than a minute past its release time (that means the timer isn't running).
+- **Ledger format 2.** One new column and index. Code from before refuses a format-2 ledger (it would hand held re-checks out at once); upgrading is the usual one locked step.
+- **Proof.**
+  - 14 new tests, **all 14 fail on the old code**. The first shows the leak with the hold switched off; the others cover hiding, release time, signature, randomness, no expiry, the late warning, tie-breakers, ledger copies, the timer starting, surviving an error and stopping.
+  - **A busy-network simulation** (5 rigs, 800 AI jobs over 4 simulated hours, every result re-checked). Hold off: 800 of 800 re-checks were in their original's second, and every re-check shared a second with someone's result, against 16% of ordinary jobs. Hold on: **0 of 800**, and re-checks and ordinary jobs shared a second with someone's result **equally often (14% each)**. A rig trying to guess whose work it got had a median of **72** accepted results to choose from.
+  - I broke the new code 15 ways on purpose (re-check not hidden from claims, from assignment or from expiry, no re-signing, held flag ignored, public counts including it, creation time not moved, public page showing it, a fixed wait, the deadline counted from the wrong second, no timer, the timer dying on an error, tie-breakers not held, the late warning always on, releasing one second early). **All 15 were caught**, two of them only after I added a test for the ledger's own checks.
+  - **2,461 tests in total: 2,460 passing, 1 skipped** on the committed tree (the one test that can't work as the all-powerful root user, as designed). Run on Python 3.13 and 3.11 (what CI uses).
+- **Honest limits:** a result's check now finishes 1 to 10 minutes later. Prompts still repeat, so two rigs working together can still compare them. If you only ever queue work at fixed times, a job that appears in between is a hint. 60-600 s is a first guess; with very few results an hour, the window has few candidates in it. A "good to know" line is in USER_TODO; nothing to do now.
+
+**What you learned**
+1. **Timing is data.** Even with every label hidden, "made in the same second as X" tells people that two things are connected. Hiding a link means hiding *when*, not just *what*.
+2. **Check every field that's derived from the leak.** The obvious leak was the creation time; the quiet one was the deadline, computed from the same second and signed into the job. When you fix a leak, look for anything calculated from it.
+3. **The fix can't ride on someone else's action.** Releasing a re-check "when a rig next asks" would tie it to that rig's request, swapping one tell for another. A separate timer makes the release time belong to nobody.
+4. **Compare against the normal case, not against zero.** The goal wasn't "re-checks never share a second with anything" (ordinary jobs do, 14% of the time). It was "re-checks look exactly like ordinary jobs", and the simulation measured exactly that.
