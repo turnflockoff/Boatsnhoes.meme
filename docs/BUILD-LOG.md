@@ -1673,3 +1673,29 @@ In all three, `verify` printed **OK** and then starting the worker printed `EVIL
 2. **Normalise when you save, compare loosely when you check.** Saving in lower case keeps new data tidy; comparing with `lower()` also covers data written before the rule existed, without rewriting anything.
 3. **Refuse the near-miss, don't guess.** If `bob_smith` arrives while `bob-smith` exists, the code can't know if it's the same Bob. Asking you (with the existing name in the message) is safer than silently merging or silently splitting.
 4. **A safety check in two places is worth testing in both.** Taking the case check out of one place broke no test at first, because the other place covered it. The second place is the one that protects data written by older code.
+
+## 2026-11-28 (UTC): No gaps between published report periods (0.5.80)
+
+**Why this, this hour.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" means it's waiting for your review), and `main` has nothing the drafts branch is missing. Every GPU item left needs the rig or a decision from you, so this session did the twenty-eighth "code audit" pass, on the public logbook (`/reports/`): **does every result end up in exactly one published period?** The logbook already stopped two periods from *overlapping* (a result counted twice). Nobody had checked the opposite: a stretch of time that no period covers.
+
+**Found (old tree, in-process coordinator and `publish_report`)**
+1. **A period could start late and skip results.** Period 1 (`[0, T0+100)`) was posted. Then a signed report for `[T0+300, T0+400)` was posted too, even though one of wk-a's results was accepted at `T0+250`, inside the skipped stretch.
+2. **The first period could skip the start.** A first period beginning at `T0+50` was posted although 5 results were accepted at `T0`.
+3. **Nothing noticed.** Those points appeared in no published report, and `publish_report check` (the one CI runs) passed. So an operator, honest or not, could leave out an awkward stretch, for example one where a friend's rig failed a hidden test, and every public check would still say OK.
+
+**Shipped**
+- `publish_report add` now looks in the new ledger copy for accepted results between the end of the last posted period and the start of this one (or, for the first period, before its start). If there are any, it refuses and says where the period should start. An empty gap (a pause with no work) is allowed, since nobody loses anything.
+- `publish_report check` flags a gap already in the folder, so CI would catch one made by older code or a hand edit.
+- `reports/README.md` and `prototype/README.md` list the new rule.
+
+**Proof**
+- 6 new tests in `tests/test_publish_report.py`; **5 fail on the old code** for the reason they test (the sixth only because the switch it turns off doesn't exist there). One older test changed: posting period 2 before period 1 is now refused by the gap rule before it reaches the "can't go back in time" rule, so that rule got its own test.
+- I broke the new code 12 ways on purpose; **all 12 were caught** (the first try missed one: the hint for the first period named the latest skipped result instead of the earliest; a test now covers it). A boundary test checks that a period starting exactly on a result's second includes it.
+- **2,671 tests: 2,669 passing, 2 skipped** before committing (the root-only test, as designed, and the release test that skips while the working tree has uncommitted changes).
+
+**Honest limits:** this only covers *accepted results*. Rig activity counts (leases, timeouts) in an empty gap aren't points and aren't checked. It can't tell whether the ledger itself is complete; that's what `ledger_copy compare` between periods is for. Nothing has been published yet, so nothing already posted is affected. Nothing ran on a GPU.
+
+**What you learned**
+1. **"No overlaps" and "no gaps" are two different rules.** Stopping double counting doesn't stop leaving things out. A list of periods is only complete if each one starts where the last one ended (or the space between is provably empty).
+2. **A missing thing is the hardest to spot.** Every check here looked at what *was* published, and all of it was correct. The problem was what wasn't there, so the check has to go and look in the bigger copy for anything left out.
+3. **Allow the harmless case.** A gap with no results in it hurts nobody, so it's allowed; refusing it would just make you re-sign a report for no reason.

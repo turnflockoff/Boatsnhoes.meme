@@ -69,8 +69,10 @@ python -m app.publish_report add ~/bnh-private/report.json ~/bnh-private/ledger-
 
 `add` refuses the live ledger (only redacted copies), unsigned or edited reports, a copy that
 doesn't match the report, a period that ended less than 7 days ago (`--min-wait-hours`), a
-period that overlaps or comes before one already posted, a copy that changes already-posted
-history, and anything already published (files here are never replaced). Then commit the new
+period that overlaps or comes before one already posted, a period that would leave a gap
+with results in it (each new period must start where the last one ended, or at least leave
+out no accepted result; the first one must start at or before the first result), a copy that
+changes already-posted history, and anything already published (files here are never replaced). Then commit the new
 folder and `index.json`, open a pull request, and it goes live when merged into `main`.
 CI re-runs `check` on this folder for every change.
 

@@ -165,9 +165,23 @@ def test_periods_go_forward_only(tmp_path: Path) -> None:
     overlap.write_text(json.dumps(signed(s["client"], UNTIL - 10, UNTIL2)))
     with pytest.raises(pub.PublishError, match="can't overlap or go back"):
         pub.publish(overlap, s["c2"], s["dir"], s["key"], LATER)
-    # And an earlier period can't be added after a later one.
+    # Period 2 can't be published first: period 1's results would be in no report
+    # (`reports-gap-v1`).
     other = tmp_path / "other"
+    with pytest.raises(pub.PublishError, match="before this first period starts"):
+        pub.publish(s["r2"], s["c2"], other, s["key"], LATER)
+    assert not other.exists()
+
+
+@pytest.mark.usefixtures("pinned")
+def test_an_earlier_period_cant_follow_a_later_one(tmp_path: Path,
+                                                   monkeypatch: pytest.MonkeyPatch) -> None:
+    """Even in a folder where period 2 got in first (older code had no gap rule)."""
+    s = two_periods(tmp_path)
+    other = tmp_path / "other"
+    monkeypatch.setattr(pub, "_unreported", lambda *a, **k: [])
     pub.publish(s["r2"], s["c2"], other, s["key"], LATER)
+    monkeypatch.undo()
     with pytest.raises(pub.PublishError, match="can't overlap or go back"):
         pub.publish(s["r1"], s["c1"], other, s["key"], LATER)
 
@@ -236,3 +250,86 @@ def test_the_repo_reports_folder_checks_out() -> None:
     """The real folder the site serves. CI runs this, so a broken publish fails the build."""
     assert pub.DEFAULT_DIR.name == "reports"
     assert pub.check_folder(pub.DEFAULT_DIR) == []
+
+
+# `reports-gap-v1`: every accepted result lands in exactly one published period. A gap
+# between periods (or before the first one) would leave results out of every report: the
+# rigs' points for that stretch would silently never be published, and an operator could
+# skip an awkward stretch on purpose without any check noticing.
+
+@pytest.mark.usefixtures("pinned")
+def test_a_gap_with_results_between_periods_is_refused(tmp_path: Path) -> None:
+    s = two_periods(tmp_path)
+    add(s, 1)
+    # Period 2 starts at T0+300, but wk-a's "period two" job was accepted at T0+250.
+    skip = tmp_path / "skip.json"
+    skip.write_text(json.dumps(signed(s["client"], T0 + 300, UNTIL2)))
+    before = snapshot(s["dir"])
+    with pytest.raises(pub.PublishError, match=r"1 accepted result\(s\).*never appear"):
+        pub.publish(skip, s["c2"], s["dir"], s["key"], LATER)
+    assert snapshot(s["dir"]) == before
+    # The message says where the period should start instead.
+    with pytest.raises(pub.PublishError, match=f"start this period at {UNTIL}"):
+        pub.plan(skip, s["c2"], s["dir"], s["key"], LATER)
+
+
+@pytest.mark.usefixtures("pinned")
+def test_results_before_the_first_period_are_refused(tmp_path: Path) -> None:
+    s = two_periods(tmp_path)
+    # Everything in period 1 was accepted at T0; a first period from T0+50 skips all 5.
+    late_start = tmp_path / "late.json"
+    late_start.write_text(json.dumps(signed(s["client"], T0 + 50, UNTIL)))
+    with pytest.raises(pub.PublishError, match=r"5 accepted result\(s\).*never appear"):
+        pub.publish(late_start, s["c1"], s["dir"], s["key"], LATER)
+    with pytest.raises(pub.PublishError, match=f"start the first period at {T0} or earlier"):
+        pub.plan(late_start, s["c1"], s["dir"], s["key"], LATER)
+    # Skipping both stretches: the earliest skipped result (T0) is where it should start.
+    skip_all = tmp_path / "skip-all.json"
+    skip_all.write_text(json.dumps(signed(s["client"], T0 + 300, UNTIL2)))
+    with pytest.raises(pub.PublishError,
+                       match=rf"6 accepted result\(s\).*first period at {T0} or earlier"):
+        pub.plan(skip_all, s["c2"], s["dir"], s["key"], LATER)
+    assert not s["dir"].exists()
+
+
+@pytest.mark.usefixtures("pinned")
+def test_a_gap_with_nothing_in_it_is_fine(tmp_path: Path) -> None:
+    """Nobody loses anything to an empty stretch (e.g. a pause between test runs)."""
+    s = two_periods(tmp_path)
+    add(s, 1)
+    report = tmp_path / "after-pause.json"
+    report.write_text(json.dumps(signed(s["client"], UNTIL + 10, UNTIL2)))
+    entry = pub.publish(report, s["c2"], s["dir"], s["key"], LATER)
+    assert entry["accepted_results"] == 1
+    assert pub.check_folder(s["dir"], s["key"]) == []
+
+
+@pytest.mark.usefixtures("pinned")
+def test_a_period_starting_on_a_result_includes_it(tmp_path: Path) -> None:
+    """Periods include their start second (`since <= accepted_at`), so starting exactly on
+    wk-a's result at T0+250 leaves nothing in the gap; one second later does."""
+    s = two_periods(tmp_path)
+    add(s, 1)
+    on_it = tmp_path / "on-it.json"
+    on_it.write_text(json.dumps(signed(s["client"], T0 + 250, UNTIL2)))
+    assert pub.plan(on_it, s["c2"], s["dir"], s["key"], LATER)["accepted_results"] == 1
+    after = tmp_path / "after.json"
+    after.write_text(json.dumps(signed(s["client"], T0 + 251, UNTIL2)))
+    with pytest.raises(pub.PublishError, match=r"1 accepted result\(s\)"):
+        pub.plan(after, s["c2"], s["dir"], s["key"], LATER)
+
+
+@pytest.mark.usefixtures("pinned")
+def test_check_finds_a_gap_already_published(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+                                             ) -> None:
+    """A folder published by older code (or edited by hand) is caught by CI's `check`."""
+    s = two_periods(tmp_path)
+    add(s, 1)
+    skip = tmp_path / "skip.json"
+    skip.write_text(json.dumps(signed(s["client"], T0 + 300, UNTIL2)))
+    monkeypatch.setattr(pub, "_unreported", lambda *a, **k: [])  # the old behaviour
+    second = pub.publish(skip, s["c2"], s["dir"], s["key"], LATER)
+    monkeypatch.undo()
+    problems = pub.check_folder(s["dir"], s["key"])
+    assert any(p.startswith(f"{second['id']}: 1 accepted result(s)") and "no published period"
+               in p for p in problems), problems

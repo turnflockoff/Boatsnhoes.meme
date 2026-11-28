@@ -21,6 +21,9 @@ copy is still there.
     which past jobs were hidden tests and re-checks, so sharing it later gives rigs less to
     work with (threat model #14);
   * the period doesn't overlap one already published and comes after it;
+  * no accepted result falls in a gap: between the last published period's end and this
+    period's start (or, for the first period, before its start) the copy has no accepted
+    results, so every result lands in exactly one published period (`reports-gap-v1`);
   * the previous published copy and this one pass `ledger_copy compare` (the earlier
     history is unchanged).
 It then writes `reports/<period>/report.json`, `ledger-copy.sqlite3` and `SHA256SUMS`, and
@@ -131,6 +134,26 @@ def _is_copy(path: Path) -> dict[str, Any]:
     return info
 
 
+def _unreported(copy_path: Path, start: int, since: int) -> list[int]:
+    """`accepted_at` of every result in the copy with `start <= accepted_at < since`: the
+    stretch no published period covers (`reports-gap-v1`). Copies hold everything before
+    their `until`, so the newer copy alone shows what a gap would leave out."""
+    if since <= start:
+        return []
+    return [int(r["accepted_at"])
+            for r in Ledger(copy_path, untrusted=True).reward_rows(start, since)]
+
+
+def _gap_problem(times: list[int], start: int, since: int, first: bool) -> str:
+    if first:
+        return (f"{len(times)} accepted result(s) before this first period starts ({since}) "
+                "would never appear in any published report; start the first period at "
+                f"{min(times)} or earlier")
+    return (f"{len(times)} accepted result(s) between the last published period's end "
+            f"({start}) and this period's start ({since}) would never appear in any "
+            f"published report; start this period at {start}")
+
+
 def plan(report_path: Path, copy_path: Path, folder: Path, public_key: str | None,
          now: int, min_wait_hours: int = DEFAULT_MIN_WAIT_HOURS) -> dict[str, Any]:
     """Run every check `add` needs and return the index entry it would write. Writes nothing."""
@@ -199,6 +222,11 @@ def plan(report_path: Path, copy_path: Path, folder: Path, public_key: str | Non
             raise PublishError("the new copy changes history already published in "
                                f"{last['id']}: " + "; ".join(result["problems"][:5]))
         previous = {"id": last["id"], "history_unchanged": True}
+    # `reports-gap-v1`: nothing accepted may fall between two periods (or before the first).
+    start = int(last["until"]) if previous else 0
+    gap = _unreported(copy_path, start, since)
+    if gap:
+        raise PublishError(_gap_problem(gap, start, since, first=not index["periods"]))
 
     return {
         "id": pid, "since": since, "until": until, "published_at": now,
@@ -439,6 +467,15 @@ def check_folder(folder: Path, public_keys: list[str] | str | None = None) -> li
                                 f"signed report says {say(value, 40)}")
         for issue in rewards.verify_report(report, Ledger(copy_path, untrusted=True), key):
             problems.append(f"{pid}: {issue}")
+        start = 0 if previous_until is None else previous_until
+        try:
+            gap = _unreported(copy_path, start, since)
+        except sqlite3.DatabaseError as exc:
+            problems.append(f"{pid}: can't read the copy to look for gaps: {exc}")
+            gap = []
+        if gap:
+            problems.append(f"{pid}: {len(gap)} accepted result(s) from {start} to {since} "
+                            "are in no published period (a gap before this one)")
         if previous_copy is not None:
             try:
                 result = compare_copies(previous_copy, copy_path)
