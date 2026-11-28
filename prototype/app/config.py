@@ -100,6 +100,24 @@ class Settings:
     disk_reserve_mb: int = 100
     # Under this much free space (MB) the operator health page warns. 0 = no early warning.
     disk_warn_mb: int = 1000
+    # `recheck-release-v1` (threat model #5, app/ledger.py release_due): a new re-check
+    # (audit or tie-breaker) is held for a random whole number of seconds between these two
+    # before anyone can see or take it, so it isn't made in the second the result it
+    # re-checks was accepted. Max 0 = handed out at once (the old behaviour). Settings built
+    # in code (tests, the in-process rehearsal) start at 0; the coordinator started
+    # normally (get_settings) holds re-checks 60-600 s unless RECHECK_DELAY_* say otherwise.
+    recheck_delay_min_seconds: int = 0
+    recheck_delay_max_seconds: int = 0
+    # How often the coordinator's release timer looks for held re-checks that are due
+    # (seconds). 0 = no timer (tests call app.state.release_held themselves).
+    recheck_release_tick_seconds: float = 0.0
+
+    def __post_init__(self) -> None:
+        if not 0 <= self.recheck_delay_min_seconds <= self.recheck_delay_max_seconds:
+            raise ValueError("RECHECK_DELAY_MIN_SECONDS must be between 0 and "
+                             "RECHECK_DELAY_MAX_SECONDS")
+        if self.recheck_release_tick_seconds < 0:
+            raise ValueError("RECHECK_RELEASE_TICK_SECONDS can't be negative")
 
     def resolved_signing_key_path(self) -> Path:
         return self.signing_key_path or self.database_path.parent / "coordinator-signing.key"
@@ -204,6 +222,8 @@ def get_settings() -> Settings:
             raise ValueError("SUBMITTER_TOKEN must be at least 24 characters")
         if submitter_token == operator_token:
             raise ValueError("SUBMITTER_TOKEN must be different from OPERATOR_TOKEN")
+    # `recheck-release-v1`: RECHECK_DELAY_MAX_SECONDS=0 alone turns the hold off.
+    recheck_max = _int_env("RECHECK_DELAY_MAX_SECONDS", 600, 0, 86400)
     return Settings(
         database_path=db,
         signing_key_path=default_signing_key_path(),
@@ -238,4 +258,8 @@ def get_settings() -> Settings:
         clock_step_warn_seconds=_int_env("CLOCK_STEP_WARN_SECONDS", 60, 1, 86400),
         disk_reserve_mb=_int_env("DISK_RESERVE_MB", 100, 0, 1024 * 1024),
         disk_warn_mb=_int_env("DISK_WARN_MB", 1000, 0, 1024 * 1024),
+        recheck_delay_min_seconds=_int_env("RECHECK_DELAY_MIN_SECONDS",
+                                           min(60, recheck_max), 0, 86400),
+        recheck_delay_max_seconds=recheck_max,
+        recheck_release_tick_seconds=float(_int_env("RECHECK_RELEASE_TICK_SECONDS", 1, 1, 60)),
     )

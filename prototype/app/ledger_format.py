@@ -43,6 +43,9 @@ The rule, from this version on:
      Changing the layout without raising `FORMAT` fails that test, so the number can't be
      forgotten.
 
+Formats so far: 1 = the layout of 0.5.68-0.5.70; 2 = 0.5.71 (`recheck-release-v1`), which
+adds `jobs.release_at` for re-checks held back until a random later second.
+
 What it can't do: versions from before this rule (0.5.67 and older) don't read the number,
 so they would still open a newer ledger. No coordinator has run for real yet, so no real
 ledger was ever made by one of them: don't start an older version on a ledger.
@@ -60,13 +63,17 @@ from pathlib import Path
 from typing import Any
 
 RULE = "ledger-format-v1"
-FORMAT = 1
+FORMAT = 2
 UPGRADE_EVENT = "ledger_format_upgraded"
 
 # sha256 of `layout()` for each format. A fresh ledger and an upgraded old one must both
 # match the current entry (tests/test_ledger_format.py).
 FINGERPRINTS = {
     1: "5db5468174fcbf47ca91e2af2f862634017bb3e2cfd0086ac9094187616122c1",
+    # `recheck-release-v1` (0.5.71): jobs.release_at and the jobs_held index. A re-check
+    # with release_at set is held: format-1 code would hand it out at once, so it must
+    # not open a format-2 ledger.
+    2: "ea8b0353b13b113fc4a09dc1f4e9a2a20dd2529e3744a5cdcf156556bcdd0e9b",
 }
 
 

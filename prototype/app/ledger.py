@@ -166,7 +166,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     assigned_until INTEGER,
     schema_version TEXT NOT NULL DEFAULT 'bnh-job/0',
     model_sha256 TEXT,
-    target TEXT
+    target TEXT,
+    release_at INTEGER
 );
 CREATE TABLE IF NOT EXISTS job_exclusions (
     job_id TEXT NOT NULL REFERENCES jobs(job_id),
@@ -222,6 +223,8 @@ MIGRATIONS = {
         ("model_sha256", "TEXT"),
         # Aimed hidden tests: 'worker:<id>' or 'tier:<new|suspect|established>'.
         ("target", "TEXT"),
+        # `recheck-release-v1` (ledger format 2): a re-check held back until this time.
+        ("release_at", "INTEGER"),
     ),
 }
 
@@ -266,6 +269,23 @@ PUBLIC_EVENTS_RULE = "public-events-v1"
 WORKER_INDEXES = (
     "CREATE INDEX IF NOT EXISTS submissions_by_worker ON submissions(worker_id, audit_status)",
 )
+
+# `recheck-release-v1` (threat model #5, code audit, twentieth pass): a re-check
+# (audit or tie-breaker) is no longer handed out in the second the result it re-checks
+# was accepted. It is stored *held* (`release_at` set, no public event, nobody can take
+# it) and released after a random wait (app/main.py picks it, RECHECK_DELAY_MIN/MAX_SECONDS):
+# only then is its public `job_created` written, its life (`created_at`) starts, and it
+# is signed again with a deadline counted from the release, so neither its page nor its
+# signed deadline says when the original was accepted. NULL = an ordinary, released job.
+RECHECK_RELEASE_RULE = "recheck-release-v1"
+HELD_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS jobs_held ON jobs(release_at) WHERE release_at IS NOT NULL",
+)
+# Operator health warns when a held re-check is this many seconds past its release time:
+# the release timer in the coordinator isn't running.
+RELEASE_OVERDUE_SECONDS = 60
+# Release the jobs whose time came, re-signed: (job row, release time) -> (deadline, signature).
+Prepare = Callable[[dict[str, Any], int], tuple[int, str]]
 
 # `ledger-clock-v1`: the newest time written anywhere in the ledger.
 LATEST_TIME_SQL = (
@@ -441,7 +461,7 @@ class Ledger:
                         db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
             # After the migration, so older databases have the column first.
             db.execute("CREATE UNIQUE INDEX IF NOT EXISTS workers_key_hash ON workers(key_hash)")
-            for ddl in SCALE_INDEXES + WORKER_INDEXES:
+            for ddl in SCALE_INDEXES + WORKER_INDEXES + HELD_INDEXES:
                 db.execute(ddl)
             if found < ledger_format.FORMAT:
                 if existed:
@@ -678,22 +698,63 @@ class Ledger:
                     max_attempts: int, now: int, job_kind: str, audit_of: str | None = None,
                     expected_result: str | None = None,
                     exclude_workers: tuple[str, ...] = (),
-                    target: str | None = None) -> None:
+                    target: str | None = None, release_at: int | None = None) -> None:
+        """`release_at` (`recheck-release-v1`, re-checks only): store the job held until
+        then, without its public `job_created`; release_due starts its life later."""
+        held = release_at is not None and release_at > now
+        if held and job_kind not in ASSIGNED_KINDS:
+            raise ValueError("only re-checks (audits and tie-breakers) can be held")
         db.execute(
             "INSERT INTO jobs(job_id, task_type, payload, payload_hash, reward_points, "
             "expires_at, signature, status, max_attempts, created_at, updated_at, job_kind, "
-            "audit_of, expected_result, schema_version, model_sha256, target) "
-            "VALUES(?,?,?,?,?,?,?,'queued',?,?,?,?,?,?,?,?,?)",
+            "audit_of, expected_result, schema_version, model_sha256, target, release_at) "
+            "VALUES(?,?,?,?,?,?,?,'queued',?,?,?,?,?,?,?,?,?,?)",
             (fields["job_id"], fields["task_type"], fields["payload"], fields["payload_hash"],
              fields["reward_points"], fields["expires_at"], signature, max_attempts, now, now,
              job_kind, audit_of, expected_result, fields["schema_version"],
-             fields["model_sha256"], target),
+             fields["model_sha256"], target, release_at if held else None),
         )
         for worker_id in exclude_workers:
             db.execute("INSERT INTO job_exclusions(job_id, worker_id) VALUES(?,?)",
                        (fields["job_id"], worker_id))
+        if held:
+            # Private: it says a re-check exists and when it comes out.
+            self._event(db, now, "recheck_held", job_id=fields["job_id"],
+                        detail=f"release_at={int(release_at)}")  # type: ignore[arg-type]
+            return
         # Same public event name for every kind, so the audit trail does not reveal it.
         self._event(db, now, "job_created", job_id=fields["job_id"])
+
+    def next_release(self) -> int | None:
+        """`recheck-release-v1`: the earliest time a held re-check is due, or None.
+        A plain read, so the release timer can look every second without taking the
+        write lock."""
+        with closing(self._connect()) as db:
+            row = db.execute("SELECT MIN(release_at) FROM jobs WHERE release_at IS NOT NULL "
+                             "AND status='queued'").fetchone()
+            return None if row[0] is None else int(row[0])
+
+    def release_due(self, now: int, prepare: Prepare) -> int:
+        """`recheck-release-v1`: release every held re-check whose time has come. Each
+        one's life starts now: `created_at` is now, its public `job_created` is written now,
+        and `prepare(job, now)` gives its new deadline (now + the same window) and the
+        signature over it, so the signed job matches a job made at this moment. Then it is
+        handed to a random rig like any re-check. Returns how many were released."""
+        with self._tx() as db:
+            rows = [dict(r) for r in db.execute(
+                "SELECT * FROM jobs WHERE release_at IS NOT NULL AND release_at<=? "
+                "AND status='queued' ORDER BY release_at, job_id", (now,)).fetchall()]
+            for job in rows:
+                expires_at, signature = prepare(job, now)
+                if expires_at <= now:
+                    raise ValueError("a released re-check must have time left to run")
+                db.execute("UPDATE jobs SET release_at=NULL, created_at=?, updated_at=?, "
+                           "expires_at=?, signature=? WHERE job_id=? AND release_at IS NOT NULL",
+                           (now, now, int(expires_at), signature, job["job_id"]))
+                self._event(db, now, "job_created", job_id=job["job_id"])
+            if rows:
+                self._assign_auditors(db, now)
+            return len(rows)
 
     def replace_signature(self, job_id: str, old_signature: str, new_signature: str,
                           now: int, detail: str) -> bool:
@@ -902,10 +963,11 @@ class Ledger:
             return dict(row) if row else None
 
     def _sweep(self, db: sqlite3.Connection, now: int) -> None:
-        """Expire overdue jobs and recover leases whose holder went silent."""
+        """Expire overdue jobs and recover leases whose holder went silent. A held
+        re-check (`recheck-release-v1`) doesn't expire: its life starts when released."""
         for row in db.execute(
             "SELECT job_id, worker_id FROM jobs WHERE status IN ('queued','leased') "
-            "AND expires_at<=?", (now,)
+            "AND expires_at<=? AND release_at IS NULL", (now,)
         ).fetchall():
             db.execute("UPDATE jobs SET status='expired', lease_expires_at=NULL, updated_at=? "
                        "WHERE job_id=?", (now, row["job_id"]))
@@ -990,6 +1052,7 @@ class Ledger:
             f"j.assigned_until, w.revoked_at "
             f"FROM jobs j LEFT JOIN workers w "
             f"ON w.worker_id=j.assigned_worker WHERE j.status='queued' "
+            f"AND j.release_at IS NULL "
             f"AND (j.job_kind IN ({kinds}) OR j.target IS NOT NULL) "
             f"AND (j.assigned_worker IS NULL "
             f"OR j.assigned_until IS NULL OR j.assigned_until<=? OR w.revoked_at IS NOT NULL) "
@@ -1077,7 +1140,8 @@ class Ledger:
         owner = db.execute("SELECT owner FROM workers WHERE worker_id=?",
                            (worker_id,)).fetchone()
         row = db.execute(
-            "SELECT job_id, task_type, payload FROM jobs j WHERE status='queued' AND NOT EXISTS ("
+            "SELECT job_id, task_type, payload FROM jobs j WHERE status='queued' "
+            "AND j.release_at IS NULL AND NOT EXISTS ("
             "SELECT 1 FROM job_exclusions x LEFT JOIN workers w ON w.worker_id=x.worker_id "
             "WHERE x.job_id=j.job_id AND (x.worker_id=? OR "
             "(w.owner IS NOT NULL AND w.owner=?))) "
@@ -1110,7 +1174,9 @@ class Ledger:
                confidence: str = "exact", result: str | None = None, needs_audit: bool = False,
                audit_job: tuple[dict[str, Any], str] | None = None,
                agree: Agree | None = None,
-               tiebreak_job: tuple[dict[str, Any], str] | None = None) -> tuple[str, dict[str, Any] | None]:
+               tiebreak_job: tuple[dict[str, Any], str] | None = None,
+               audit_release_at: int | None = None,
+               tiebreak_release_at: int | None = None) -> tuple[str, dict[str, Any] | None]:
         """Record a result. Returns (outcome, job) where outcome is one of:
         accepted, duplicate (same accepted result again), conflict, unknown, not_leased,
         wrong_worker, expired, rejected_requeued, rejected_final.
@@ -1123,6 +1189,8 @@ class Ledger:
             is queued for a worker that is neither side of the dispute.
           - accepting a tie-breaker settles the dispute by majority (see _resolve_tiebreak).
           - accepting a challenge job compares it with the operator's expected answer.
+        `audit_release_at` / `tiebreak_release_at` (`recheck-release-v1`): hold the new
+        audit or tie-breaker until then instead of handing it out now (see release_due).
         """
         agree = agree or (lambda a, b: a == b)
         with self._tx() as db:
@@ -1177,13 +1245,15 @@ class Ledger:
             if audit_status == "pending" and audit_job:
                 fields, signature = audit_job
                 self._insert_job(db, fields, signature, job["max_attempts"], now, "audit",
-                                 audit_of=job_id, exclude_workers=(worker_id,))
+                                 audit_of=job_id, exclude_workers=(worker_id,),
+                                 release_at=audit_release_at)
                 self._event(db, now, "audit_scheduled", job_id, detail=fields["job_id"])
             elif kind == "challenge":
                 self._event(db, now, audit_status.replace("-challenge", "_challenge"),
                             job_id, worker_id)
             elif kind == "audit":
-                self._resolve_audit(db, job, result, agree, now, tiebreak_job)
+                self._resolve_audit(db, job, result, agree, now, tiebreak_job,
+                                    tiebreak_release_at)
             elif kind == "tiebreak":
                 self._resolve_tiebreak(db, job, result, agree, now)
             # Hand any audit or tie-breaker just queued to a random worker right away, so
@@ -1194,7 +1264,8 @@ class Ledger:
 
     def _resolve_audit(self, db: sqlite3.Connection, audit: dict[str, Any], result: str | None,
                        agree: Agree, now: int,
-                       tiebreak_job: tuple[dict[str, Any], str] | None = None) -> None:
+                       tiebreak_job: tuple[dict[str, Any], str] | None = None,
+                       release_at: int | None = None) -> None:
         original = db.execute("SELECT * FROM submissions WHERE job_id=?",
                               (audit["audit_of"],)).fetchone()
         if original is None or original["audit_status"] != "pending":
@@ -1213,7 +1284,8 @@ class Ledger:
             fields, signature = tiebreak_job
             self._insert_job(db, fields, signature, audit["max_attempts"], now, "tiebreak",
                              audit_of=original["job_id"],
-                             exclude_workers=(original["worker_id"], audit["worker_id"]))
+                             exclude_workers=(original["worker_id"], audit["worker_id"]),
+                             release_at=release_at)
             self._event(db, now, "tiebreak_scheduled", original["job_id"],
                         detail=fields["job_id"])
 
@@ -1360,7 +1432,7 @@ class Ledger:
         with closing(self._connect()) as db:
             rows = db.execute(
                 "SELECT j.job_id, j.job_kind, j.audit_of, j.task_type, j.status, j.created_at, "
-                "j.assigned_worker, j.target, "
+                "j.assigned_worker, j.target, j.release_at, "
                 "s.worker_id, s.audit_status FROM jobs j LEFT JOIN submissions s USING(job_id) "
                 "WHERE j.job_kind IN ('audit','challenge','tiebreak') ORDER BY j.created_at, j.job_id"
             ).fetchall()
@@ -1581,7 +1653,9 @@ class Ledger:
 
     def status_counts(self) -> dict[str, int]:
         with closing(self._connect()) as db:
-            rows = db.execute("SELECT status, COUNT(*) AS n FROM jobs GROUP BY status").fetchall()
+            # `recheck-release-v1`: a held re-check doesn't exist publicly until released.
+            rows = db.execute("SELECT status, COUNT(*) AS n FROM jobs WHERE release_at IS NULL "
+                              "GROUP BY status").fetchall()
             return {row["status"]: int(row["n"]) for row in rows}
 
     def ping(self) -> None:
@@ -1595,7 +1669,8 @@ class Ledger:
         with closing(self._connect()) as db:
             one = lambda sql, *args: db.execute(sql, args).fetchone()[0]  # noqa: E731
             kinds = ",".join("?" * len(ASSIGNED_KINDS))
-            oldest = one("SELECT MIN(created_at) FROM jobs WHERE status='queued'")
+            oldest = one("SELECT MIN(created_at) FROM jobs WHERE status='queued' "
+                         "AND release_at IS NULL")
             snapshot = {
                 "workers": {
                     "registered": one("SELECT COUNT(*) FROM workers"),
@@ -1605,13 +1680,15 @@ class Ledger:
                     "revoked": one("SELECT COUNT(*) FROM workers WHERE revoked_at IS NOT NULL"),
                 },
                 "queue": {
-                    "queued": one("SELECT COUNT(*) FROM jobs WHERE status='queued'"),
+                    "queued": one("SELECT COUNT(*) FROM jobs WHERE status='queued' "
+                                  "AND release_at IS NULL"),
                     "leased": one("SELECT COUNT(*) FROM jobs WHERE status='leased'"),
                     "oldest_queued_age_seconds": None if oldest is None else now - int(oldest),
                     "overdue_leases": one("SELECT COUNT(*) FROM jobs WHERE status='leased' "
                                           "AND lease_expires_at<=?", now),
                     "past_deadline": one("SELECT COUNT(*) FROM jobs WHERE status IN "
-                                         "('queued','leased') AND expires_at<=?", now),
+                                         "('queued','leased') AND expires_at<=? "
+                                         "AND release_at IS NULL", now),
                 },
                 "audits": {
                     "open": one(f"SELECT COUNT(*) FROM jobs WHERE status IN ('queued','leased') "
@@ -1620,9 +1697,17 @@ class Ledger:
                     "waiting_for_auditor": one(
                         f"SELECT COUNT(*) FROM jobs j LEFT JOIN workers w "
                         f"ON w.worker_id=j.assigned_worker WHERE j.status='queued' "
+                        f"AND j.release_at IS NULL "
                         f"AND j.job_kind IN ({kinds}) AND (j.assigned_worker IS NULL "
                         f"OR j.assigned_until IS NULL OR j.assigned_until<=? "
                         f"OR w.revoked_at IS NOT NULL)", *ASSIGNED_KINDS, now),
+                    # `recheck-release-v1`: re-checks waiting for their random release time
+                    # (counted in `open`), and how many of them are well past it.
+                    "waiting_for_release": one("SELECT COUNT(*) FROM jobs WHERE status='queued' "
+                                "AND release_at IS NOT NULL"),
+                    "release_overdue": one("SELECT COUNT(*) FROM jobs WHERE status='queued' "
+                                           "AND release_at IS NOT NULL AND release_at<=?",
+                                           now - RELEASE_OVERDUE_SECONDS),
                 },
                 # Hidden tests aimed at one rig or a trust tier (operator-only numbers).
                 "aimed_tests": {

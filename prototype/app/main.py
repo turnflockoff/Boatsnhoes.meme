@@ -6,8 +6,10 @@ import logging
 import random
 import re
 import sqlite3
+import threading
 import time
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Callable
 
@@ -20,7 +22,7 @@ from . import (audit_policy, client_address, input_limits, key_rotation, observa
                public_counts, rate_limit, review, rewards, schemas, storage, tasks, vouches,
                workers)
 from .ledger import (MAX_JOB_EVENTS, MAX_PAGE, PAUSE_VERSION, PUBLIC_EVENTS_RULE,
-                     CoordinatorPaused, HiddenTestRevealed, Ledger)
+                     RELEASE_OVERDUE_SECONDS, CoordinatorPaused, HiddenTestRevealed, Ledger)
 from .models import (ChallengeCreate, EnrollmentCreate, JobCreate, JobEnvelope, PauseRequest,
                      ResultSubmission, WorkerRegistration)
 from .ledger_clock import LedgerClock, default_steady
@@ -40,7 +42,9 @@ PRIVATE_EVENTS = {"audit_scheduled", "audit_match", "audit_mismatch", "audit_not
                   "tiebreak_majority", "tiebreak_unresolved", "tiebreak_not_run",
                   "tiebreak_held_for_review",
                   "auditor_assigned", "auditor_unassigned", "audit_assignment_expired",
-                  "test_assigned", "test_unassigned", "test_assignment_expired"}
+                  "test_assigned", "test_unassigned", "test_assignment_expired",
+                  # `recheck-release-v1`: a re-check exists and is waiting to come out.
+                  "recheck_held"}
 
 # `refusal-log-v1`: operator health warns about a rig that has repeated refused
 # submissions this many times since start. One or two repeats are a worker retrying after a
@@ -131,7 +135,34 @@ def create_app(settings: Settings | None = None,
     # `storage-full-v1`: refuse new work under DISK_RESERVE_MB, warn under DISK_WARN_MB.
     disk = storage.StorageGuard(settings.database_path, settings.disk_reserve_mb,
                                 settings.disk_warn_mb, disk_free)
-    app = FastAPI(title="Boats N Hoes Useful-Compute MVP", version="0.5.0")
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> Any:
+        """`recheck-release-v1`: while the coordinator runs, a small timer thread releases
+        held re-checks at their own (random) second, not at the moment some rig happens to
+        call: a release inside a rig's request would share that request's second with its
+        lease or accepted result, a new tell. Errors are logged and retried next tick."""
+        stop = threading.Event()
+        tick = settings.recheck_release_tick_seconds
+
+        def run() -> None:
+            while not stop.wait(tick):
+                try:
+                    app.state.release_held()
+                except Exception as exc:  # noqa: BLE001 - keep the timer alive
+                    log.error("re-check release failed",
+                              extra={"error_type": type(exc).__name__})
+        thread = None
+        if tick > 0:
+            thread = threading.Thread(target=run, name="bnh-recheck-release", daemon=True)
+            thread.start()
+        try:
+            yield
+        finally:
+            stop.set()
+            if thread is not None:
+                thread.join(timeout=max(5.0, 2 * tick))
+
+    app = FastAPI(title="Boats N Hoes Useful-Compute MVP", version="0.5.0", lifespan=lifespan)
     app.state.ledger = ledger
     app.state.storage = disk
     app.state.settings = settings
@@ -302,6 +333,37 @@ def create_app(settings: Settings | None = None,
         except points.PointsError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    def recheck_release_time(t: int) -> int:
+        """`recheck-release-v1`: when a re-check made now comes out. A random whole second
+        between RECHECK_DELAY_MIN_SECONDS and RECHECK_DELAY_MAX_SECONDS from now (the
+        secure rng, so a rig can't predict it); `t` itself when the hold is off."""
+        if settings.recheck_delay_max_seconds <= 0:
+            return t
+        return t + rng.randint(settings.recheck_delay_min_seconds,
+                               settings.recheck_delay_max_seconds)
+
+    def prepare_release(job: dict[str, Any], t: int) -> tuple[int, str]:
+        """A held re-check coming out at `t`: same window as it was made with, counted from
+        `t`, signed again with the current key over the new deadline."""
+        window = int(job["expires_at"]) - int(job["release_at"])
+        fields = {k: job[k] for k in SIGNED_FIELDS} | {"expires_at": t + window}
+        return fields["expires_at"], signer.sign(fields)
+
+    def release_held() -> int:
+        """Release every held re-check that is due (`recheck-release-v1`). The release timer
+        calls this every RECHECK_RELEASE_TICK_SECONDS; tests call it directly."""
+        due = ledger.next_release()
+        if due is None:
+            return 0
+        t = now()
+        if due > t:
+            return 0
+        released = ledger.release_due(t, prepare_release)
+        if released:
+            log.info("re-checks released", extra={"count": released})
+        return released
+    app.state.release_held = release_held
+
     def current_signature(job: dict[str, Any]) -> dict[str, Any]:
         """Return the job with a signature from the current key. A job queued before a
         planned rotation still carries the retired key's signature; re-sign it, but only if
@@ -454,6 +516,11 @@ def create_app(settings: Settings | None = None,
         if snap["queue"]["overdue_leases"]:
             warnings.append(f"{snap['queue']['overdue_leases']} lease(s) past due; they are "
                             "requeued on the next worker request")
+        if snap["audits"]["release_overdue"]:
+            warnings.append(f"{snap['audits']['release_overdue']} re-check(s) more than "
+                            f"{RELEASE_OVERDUE_SECONDS} s past their release time: the "
+                            "coordinator's release timer isn't running "
+                            "(RECHECK_RELEASE_TICK_SECONDS), so they can't be handed out")
         if snap["queue"]["past_deadline"]:
             warnings.append(f"{snap['queue']['past_deadline']} job(s) past their deadline; "
                             "they expire on the next worker request")
@@ -772,7 +839,8 @@ def create_app(settings: Settings | None = None,
     @app.get("/v1/jobs/{job_id}")
     def job_status(job_id: str) -> dict[str, Any]:
         job = ledger.get_job(job_id)
-        if job is None:
+        # `recheck-release-v1`: a held re-check doesn't exist publicly until released.
+        if job is None or job.get("release_at") is not None:
             raise HTTPException(status_code=404, detail="unknown job")
         public = ("job_id", "task_type", "status", "attempts", "max_attempts", "expires_at",
                   "lease_expires_at", "worker_id")
@@ -834,20 +902,28 @@ def create_app(settings: Settings | None = None,
         # Same time window as the original, so the deadline doesn't give the audit away.
         window = job["expires_at"] - job["created_at"]
         audit_job = tiebreak_job = None
+        audit_release = tiebreak_release = None
         if (verdict.ok and verdict.needs_audit and job["job_kind"] == "work"
                 and rng.random() < audit_policy.decide_for(
                     ledger.audit_history(worker_id), settings).rate):
+            # `recheck-release-v1`: held until a random later second; the deadline counts
+            # from then (and is signed again when it is released).
+            audit_release = recheck_release_time(t)
             # Copy the original's model hash: a re-pin since then must not change the job.
             audit_job = new_job_fields(job["task_type"], job["payload"], job["reward_points"],
-                                       t + window, job["model_sha256"])
+                                       audit_release + window, job["model_sha256"])
         # A tie-breaker is prepared for every audit result but only stored on a mismatch.
         if verdict.ok and job["job_kind"] == "audit" and settings.tiebreak:
+            tiebreak_release = recheck_release_time(t)
             tiebreak_job = new_job_fields(job["task_type"], job["payload"],
-                                          job["reward_points"], t + window, job["model_sha256"])
+                                          job["reward_points"], tiebreak_release + window,
+                                          job["model_sha256"])
         outcome, job = ledger.submit(job_id, worker_id, body.result_hash, verdict.ok, t,
                                      verdict.method, verdict.confidence, result=body.result,
                                      needs_audit=verdict.needs_audit, audit_job=audit_job,
-                                     agree=executor.results_agree, tiebreak_job=tiebreak_job)
+                                     agree=executor.results_agree, tiebreak_job=tiebreak_job,
+                                     audit_release_at=audit_release,
+                                     tiebreak_release_at=tiebreak_release)
         log.log(logging.INFO if outcome in ("accepted", "duplicate") else logging.WARNING,
                 "result submitted", extra={"job_id": job_id, "worker_id": worker_id,
                                            "outcome": outcome, "verification": verdict.method})
