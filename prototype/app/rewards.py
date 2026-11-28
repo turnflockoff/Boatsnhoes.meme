@@ -358,12 +358,25 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     # A shared ledger copy is opened read-only so checking it never changes its sha256.
     # Someone else's copy is vetted first (app/copy_guard.py, `copy-open-v1`).
+    from . import ledger_role
     from .ledger_copy import copy_info
     try:
         is_copy = copy_info(args.db) is not None
-        ledger = Ledger(args.db, untrusted=is_copy)
+        # `ledger-role-v1`: a backup (or a ledger a restore moved aside) is only read,
+        # never written: a signature recorded there would never reach the coordinator.
+        role = ledger_role.of_file(args.db)
+        not_live = role not in (None, ledger_role.LIVE)
+        if not_live and args.cmd == "report" and args.sign:
+            raise ledger_role.NotLiveLedger(role, str(args.db))
+        if not_live and not ledger_role.is_ours(role):
+            raise ledger_role.NotLiveLedger(role, str(args.db))
+        ledger = Ledger(args.db, untrusted=is_copy, read_only=not_live)
     except sqlite3.DatabaseError as exc:
         print(f"refusing to read {args.db}: {exc}", file=sys.stderr)
+        return 2
+    except ledger_role.NotLiveLedger as exc:
+        print(f"refusing to sign: {exc}" if args.cmd == "report" and args.sign
+              else f"refusing to read: {exc}", file=sys.stderr)
         return 2
     if args.cmd == "report":
         now = int(time.time())

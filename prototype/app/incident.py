@@ -40,7 +40,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import ledger_clock
+from . import ledger_clock, ledger_role
 from .config import _int_env
 from .ledger import PAUSE_VERSION, Ledger
 from .screen import say_lines
@@ -105,7 +105,11 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    ledger = Ledger(args.db, assign_seconds=assign_seconds)
+    try:
+        ledger = Ledger(args.db, assign_seconds=assign_seconds)
+    except ledger_role.NotLiveLedger as exc:  # `ledger-role-v1`: pausing a backup does nothing
+        print(str(exc), file=sys.stderr)
+        return 2
     try:
         # `ledger-clock-v1`: never earlier than the newest time already in the ledger.
         now = ledger_clock.tool_now(ledger.latest_time())

@@ -37,7 +37,8 @@ It reveals nothing about jobs created after `until`. Share copies with a delay.
 Because each rig remembers the inputs it ran, the export is recorded in the live ledger
 (`ledger_copy_made`), and from then on the coordinator refuses to reuse the input of a
 hidden test from that period, or a near copy of it, as a new hidden test (`test-reuse-v2`,
-app/ledger.py). So always export from the live ledger, not from a backup of it.
+app/ledger.py). So always export from the live ledger: since `ledger-role-v1` (app/ledger_role.py) a
+backup, or a ledger a restore moved aside, is refused, because the record would land there.
 """
 from __future__ import annotations
 
@@ -53,7 +54,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
-from . import copy_guard, ledger_clock
+from . import copy_guard, ledger_clock, ledger_role
 from .ledger import Ledger
 from .screen import MAX_SCREEN_LINE_CHARS, say, say_lines
 
@@ -138,6 +139,20 @@ def _redact(db: sqlite3.Connection, until: int, now: int, salt: bytes) -> dict[s
     return counts
 
 
+def refuse_unless_live(source: Path) -> None:
+    """`ledger-role-v1`: the record of a copy must land in the live ledger, or the
+    coordinator would hand out the period's hidden tests again (`test-reuse-v2`)."""
+    role = ledger_role.of_file(source)
+    if role == ledger_role.BACKUP:
+        raise CopyError("that file is a backup, not the live ledger: the record that this "
+                        "period's hidden tests were shared would land in the backup, and "
+                        "the coordinator would keep using them. Export from the live ledger")
+    try:
+        ledger_role.refuse_unless_live(role, "that file")
+    except ledger_role.NotLiveLedger as exc:
+        raise CopyError(f"{exc}; export from the live ledger") from None
+
+
 def export_copy(source: Path, dest: Path, until: int, now: int,
                 salt: bytes | None = None) -> dict[str, Any]:
     """Write a redacted copy of `source` covering everything before `until` to `dest`."""
@@ -157,6 +172,7 @@ def export_copy(source: Path, dest: Path, until: int, now: int,
     if source_info is not None:
         # Re-exporting a copy would also write the export record into a shared file.
         raise CopyError("that file is already a ledger copy; export from the live ledger")
+    refuse_unless_live(source)
     problems = Ledger(source).check_consistency()
     if problems:
         raise CopyError("ledger fails its own consistency check; fix it before sharing: "
@@ -299,6 +315,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
+        # `ledger-role-v1`: say so before anything else (the clock rule below would
+        # otherwise read the backup's times).
+        refuse_unless_live(args.db)
         # `ledger-clock-v1`: the export is recorded in the live ledger, never with a time
         # earlier than one already there (and `until` must not be after it).
         now = ledger_clock.tool_now(Ledger(args.db, read_only=True).latest_time()) \

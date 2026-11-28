@@ -61,7 +61,7 @@ from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator
 
-from . import copy_guard, ledger_format, run_lock, secret_file, tasks
+from . import copy_guard, ledger_format, ledger_role, run_lock, secret_file, tasks
 from .audit_policy import (
     AUDITOR_PICK_RULES,
     PASSED_STATUSES,
@@ -396,6 +396,10 @@ class Ledger:
             with closing(self._connect()) as db:
                 ledger_format.refuse_if_newer(ledger_format.read(db))
             return
+        # `ledger-role-v1` (app/ledger_role.py): never write into a backup or a ledger a
+        # restore moved aside; a record written there never reaches the coordinator. Read
+        # from the header's plain bytes first, so a refusal leaves no lock or side file.
+        ledger_role.refuse_unless_live(ledger_role.of_file(self.path), "this file")
         self._prepare_private_files()
         # `backup-restore-v1` (app/run_lock.py): held while this ledger is open for writing,
         # so a restore can't swap the file under it (and it can't open one mid-restore).
@@ -404,6 +408,8 @@ class Ledger:
             with closing(self._connect()) as db:
                 # `ledger-format-v1`: never run on a ledger a newer version wrote.
                 ledger_format.refuse_if_newer(ledger_format.read(db))
+                # Again from SQLite itself, before the WAL switch changes any byte.
+                ledger_role.refuse_unless_live(ledger_role.of_db(db), "this file")
                 self._use_wal(db)
                 self._upgrade(db)
         except BaseException:

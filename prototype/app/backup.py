@@ -30,6 +30,12 @@ Commands:
 API, which includes the `-wal`), writes it owner-only (0600) as one self-contained file,
 under a temporary name first, and checks it before giving it its real name.
 
+Every backup `make` writes is marked as one in the SQLite header (`ledger-role-v1`,
+app/ledger_role.py): the coordinator and every tool that records something refuse to
+write into it, so a copy exported or a report signed from it can't go unrecorded, and a
+backup copied over the ledger by hand won't start (use `restore`). `restore` clears the
+mark on the ledger it puts in place and marks the one it moves aside as replaced.
+
 `check` opens a backup without changing it and says whether it is safe to restore:
 owner-only, a real SQLite file, nothing but the ledger's own tables and indexes (no
 views, triggers or extra tables, which would run inside the live coordinator after a
@@ -69,7 +75,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
-from . import copy_guard, ledger_clock, ledger_format, run_lock, secret_file
+from . import copy_guard, ledger_clock, ledger_format, ledger_role, run_lock, secret_file
 from .ledger import COPY_MADE_EVENT, PAUSE_EVENTS, REPORT_SIGNED_EVENT, Ledger
 from .screen import say
 
@@ -188,14 +194,20 @@ def vet(path: Path) -> dict[str, Any]:
             # backup has columns this code doesn't know, and this says why.
             found = ledger_format.read(db)
             ledger_format.refuse_if_newer(found, "the backup")
+            # `ledger-role-v1`: a backup, a ledger a restore moved aside, or an unmarked
+            # (older or hand-made) one may be put back; another program's file may not.
+            role = ledger_role.of_db(db)
+            if not ledger_role.is_ours(role):
+                raise ledger_role.NotLiveLedger(role, "the backup")
             problems = _integrity(db) or _schema_problems(db)
             if problems:
                 raise BackupError("the backup can't be trusted: " + "; ".join(problems))
             info = _summary(db)
             info["ledger_format"] = found
+            info["ledger_role"] = ledger_role.name(role)
     except sqlite3.DatabaseError as exc:
         raise BackupError(f"not a readable ledger backup: {exc}") from None
-    except ledger_format.LedgerTooNew as exc:
+    except (ledger_format.LedgerTooNew, ledger_role.NotLiveLedger) as exc:
         raise BackupError(str(exc)) from None
     info["consistency_problems"] = Ledger(path, read_only=True).check_consistency()
     return info
@@ -230,6 +242,9 @@ def make_backup(source: Path, dest: Path) -> dict[str, Any]:
             src.backup(out)
         with closing(sqlite3.connect(partial, isolation_level=None)) as db:
             db.execute("PRAGMA journal_mode=DELETE")  # one self-contained file, no -wal
+            # `ledger-role-v1`: marked as a backup, so no tool writes a record into it
+            # and the coordinator won't start on it if it is copied into place by hand.
+            ledger_role.mark(db, ledger_role.BACKUP)
         with open(partial, "rb+") as fh:
             os.fsync(fh.fileno())
         info = vet(partial)
@@ -388,6 +403,11 @@ def restore(backup: Path, live: Path, wall: Any = None) -> dict[str, Any]:
         secret_file.create_empty(staged, "the restored ledger")
         with closing(_ro(backup)) as src, closing(sqlite3.connect(staged)) as out:
             src.backup(out)
+            # `ledger-role-v1`: the restored file becomes the live ledger (the backup's
+            # mark, or a replaced ledger's, came along with the pages).
+            out.execute("PRAGMA journal_mode=DELETE")
+            ledger_role.mark(out, ledger_role.LIVE)
+            out.commit()
         # Bring an older backup up to the current layout (adds missing columns/indexes).
         Ledger(staged).close()
         run_lock.lock_path(staged).unlink(missing_ok=True)
@@ -458,6 +478,7 @@ def restore(backup: Path, live: Path, wall: Any = None) -> dict[str, Any]:
             os.replace(live, live.with_name(replaced_name))  # kept, owner-only, never deleted
         os.replace(staged, live)
         _fsync_folder(live.parent)
+        replaced_marked = bool(has_live) and _mark_replaced(live.with_name(replaced_name))
     except sqlite3.DatabaseError as exc:
         raise BackupError(f"restore failed, nothing was changed: {exc}") from None
     finally:
@@ -468,7 +489,21 @@ def restore(backup: Path, live: Path, wall: Any = None) -> dict[str, Any]:
     if plan["pause"] is not None:
         plan["pause"] = json.loads(plan["pause"]["detail"] or "{}").get("reason", "")
     return {"backup": info, **plan, "codes_cancelled": cancelled, "restored_at": now,
-            "replaced": replaced_name}
+            "replaced": replaced_name, "replaced_marked": replaced_marked}
+
+
+def _mark_replaced(path: Path) -> bool:
+    """`ledger-role-v1`: mark the ledger a restore moved aside, so no tool writes into it
+    and nobody starts the coordinator on it by mistake. Done after the restored ledger is
+    in place (a failure here must never leave the ledger missing) and while the restore
+    still holds the lock; only the 4-byte mark in the header changes. False if it
+    couldn't be marked (the restore itself has worked)."""
+    try:
+        with closing(sqlite3.connect(path, timeout=10, isolation_level=None)) as db:
+            ledger_role.mark(db, ledger_role.REPLACED)
+        return ledger_role.of_file(path) == ledger_role.REPLACED
+    except (sqlite3.DatabaseError, OSError):
+        return False
 
 
 # -- command line ---------------------------------------------------------------------
@@ -556,6 +591,12 @@ def main(argv: list[str] | None = None) -> int:
         _print_plan(done, done=True)
         if done["replaced"]:
             print(f"The old ledger was kept as {say(done['replaced'], 160)} (owner-only).")
+            if done["replaced_marked"]:
+                print("It is marked as replaced: tools only read it, and to go back to it "
+                      "use `python -m app.backup restore` with it as the backup.")
+            else:
+                print("WARNING: it couldn't be marked as replaced; never point a tool or the "
+                      "coordinator at it.", file=sys.stderr)
         print("Restored. Start the coordinator again.")
         return 0
     except BackupError as exc:

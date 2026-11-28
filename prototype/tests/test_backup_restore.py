@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from app import backup, run_lock
+from app import backup, ledger_role, run_lock
 from app.config import Settings
 from app.ledger import Ledger
 from app.main import create_app
@@ -119,11 +119,18 @@ def test_a_plain_copy_of_the_running_ledger_misses_recent_work(tmp_path: Path) -
 
 
 def test_the_old_way_of_restoring_let_a_revoked_rig_back_in(story) -> None:
-    """Why `restore` carries revocations forward: a plain swap brought the key back."""
+    """Why `restore` carries revocations forward: a plain swap brought the key back.
+    Since `ledger-role-v1` the swapped-in backup is refused at start (its header says it
+    is a backup); with the mark cleared, as on a backup made before that rule or with
+    `cp`, the old hole is still there, which is why `restore` is the way back."""
     stop(story)
     for side in backup._side_files(story["live"]):
         side.unlink()
     shutil.copy2(story["backup"], story["live"])
+    with pytest.raises(ledger_role.NotLiveLedger, match="app.backup restore"):
+        restart(story)
+    with sqlite3.connect(story["live"]) as db:
+        ledger_role.mark(db, ledger_role.LIVE)
     client = restart(story)
     assert can_log_in(client, "wk-bad", story["bad_key"])
 

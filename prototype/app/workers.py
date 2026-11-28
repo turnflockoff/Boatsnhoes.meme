@@ -27,7 +27,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import ledger_clock
+from . import ledger_clock, ledger_role
 from .ledger import CoordinatorPaused, Ledger
 from .security import sha256_text
 from .screen import say
@@ -72,7 +72,11 @@ def main(argv: list[str] | None = None) -> int:
     if not args.db.exists():
         print(f"database not found: {args.db}", file=sys.stderr)
         return 2
-    ledger = Ledger(args.db)
+    try:
+        ledger = Ledger(args.db)
+    except ledger_role.NotLiveLedger as exc:  # `ledger-role-v1`: a backup, never written
+        print(str(exc), file=sys.stderr)
+        return 2
     if args.cmd == "list":
         now = int(time.time())  # read-only
     else:
