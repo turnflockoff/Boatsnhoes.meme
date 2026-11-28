@@ -1478,3 +1478,35 @@ In all three, `verify` printed **OK** and then starting the worker printed `EVIL
 2. **Fail closed when memory runs out.** When the visitor list is full, the choice is "forget someone" (which could hand a guesser fresh tries) or "make newcomers share" (which slows strangers down). For a password lock-out, slowing strangers is the safe choice.
 3. **Only forget what makes no difference.** The new list doesn't forget "old" visitors, it forgets visitors that look exactly like new ones. That way cleaning up can never be used as a trick to reset a lock-out.
 4. **Measure the cost of the cleanup itself.** The old code did clean up, but the cleanup read the whole list each time, so it got slower exactly when it was under attack.
+
+## 2026-11-28 (UTC): Tools wrote their notes into a backup instead of the live ledger (0.5.73)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review), and `main` has nothing the drafts branch is missing. Every GPU item left needs the rig or one of your decisions, so this session did the twenty-second "code audit" pass. The threat model had one small open line under #11: "a copy made from a backup isn't recorded". This pass asked the wider question: **what happens when any tool is pointed at a backup instead of the live ledger?**
+
+**Why it matters.** Some tools leave a note in the ledger, and the coordinator relies on those notes later. "A copy of this period was shared" means the coordinator must never reuse that period's hidden tests (the rigs remember them). "This period was signed" means nothing may be filed into it afterwards. A revocation means that rig is out. If the note lands in a backup, the coordinator never sees it.
+
+**Found, shown really happening** (old code, an in-process coordinator and the real command-line tools; no model was run)
+1. **A shared copy made from a backup left its hidden tests usable.** The copy was made, its note went into the backup, and the live coordinator accepted the very same hidden test again (`200` instead of `409`). A rig that ran it would recognise it.
+2. **Signing a report from a backup "worked"** and recorded the signature in the backup only.
+3. **Revoking a rig, making an enrollment code or pausing on a backup "worked"** and changed nothing that mattered.
+4. **A backup copied over the ledger by hand started without a word**, and a rig revoked after the backup logged in again. The restore tool from 0.5.67 carries revocations forward, but nothing stopped someone from skipping it with `cp`.
+5. **Even just reading a backup changed it.** An unsigned report opened it for writing, switched its journal mode and left side files, so its fingerprint (sha256) changed.
+
+**Shipped (`ledger-role-v1`)**
+- **A backup now says it's a backup, inside the file.** SQLite has a 4-byte "which program is this file for" field in its header. `backup make` sets it to "backup", and a restore sets it to "replaced" on the old ledger it moves aside. The live ledger stays 0, so every existing ledger is unaffected. No table changes.
+- **Writing refuses anything but the live ledger.** The coordinator and every tool that leaves a note (`ledger_copy export`, `rewards report --sign`, `workers`, `incident pause/resume`) check that field before touching the file, and stop with one line saying what the file is and what to do. It's checked twice: once as raw bytes before any lock or side file is made, and once through SQLite before anything is switched.
+- **Reading still works, and now changes nothing.** An unsigned report, `review`, `vouches`, `incident status` and `backup check` all work on a backup, and the backup's fingerprint stays the same. `backup check` now shows `"ledger_role": "backup"`.
+- **`backup restore` is the way back.** It clears the mark on the ledger it puts in place (so the coordinator starts), and marks the one it moves aside. Going back to that old one is also a restore.
+- **Proof.**
+  - 17 new tests, **15 of them fail on the old code** (the other 2 check edge cases of reading the field, and that shared copies stay unmarked). They replay all five problems above, check every refusal leaves the backup byte-for-byte unchanged with no side files, check an unsigned report on a backup gives exactly the same numbers as the live ledger, and cover marks after a backup, a restore, a restore onto an empty disk, an old unmarked backup, and going back to a replaced ledger.
+  - One older test, which showed the hand-copy hole on purpose, now shows the refusal (and the hole only when the mark is wiped).
+  - Also run as real programs: each tool printed its one-line refusal and exited with 2, and the real web server refused to start on a hand-copied backup.
+  - I broke the new code 16 ways on purpose (each check removed, the wrong mark set, the restore not clearing or not setting marks, the wrong header position, only some roles refused, ...); **all 16 were caught.**
+  - **2,496 tests in total: 2,495 passing, 1 skipped** on the committed tree (the one test that can't work as the all-powerful root user, as designed). Run on Python 3.13 and 3.11 (what CI uses).
+- **Honest limits:** only files made by these tools are marked. A backup made with `cp`, any backup made before today, and a hand copy of the live ledger all look live. The mark tells you what a file *is*; it can't tell two live ledgers on two computers apart. When the coordinator refuses to start, the message is at the bottom of a Python error printout (the same as the "ledger too new" refusal). A "good to know" line is in USER_TODO; nothing to do now.
+
+**What you learned**
+1. **A note is only useful if it lands where it's read.** Several safety rules here are "write it down, check it later". If the writing goes to the wrong file, the rule quietly stops working, with no error anywhere.
+2. **Make the file say what it is.** Instead of trusting people to point tools at the right file, the backup carries its own label, the way a photocopy might be stamped "COPY". Tools read the label, not the file name.
+3. **Reading should never change what you read.** A backup is evidence. Opening it "just to look" must leave it byte-for-byte the same, or you can't prove later it wasn't touched.
+4. **Close the shortcut, not just the official path.** The restore tool was already careful, but `cp` skipped all of it. The fix makes the shortcut fail loudly and points to the careful way.
