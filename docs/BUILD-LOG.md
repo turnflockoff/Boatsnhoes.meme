@@ -1614,3 +1614,31 @@ In all three, `verify` printed **OK** and then starting the worker printed `EVIL
 2. **Error messages leak paths.** Programs complain about files by their full path, and a full path on Linux or Mac usually starts with `/home/<your name>`.
 3. **Run helper commands with a bare environment.** Starting `vulkaninfo` with only `PATH` set means it can't load add-ons from your home folder, so there's less to leak and less that can go wrong.
 4. **Write patterns that every browser can read.** One newer regular-expression feature ("look-behind") makes Safari before 16.4 reject the whole script, which would also break the device check on the same page, so the form avoids it (and a test keeps it that way).
+
+## 2026-11-28 (UTC): AI jobs no worker can run are refused before they're signed (0.5.78)
+
+**Why this, this hour.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" means it's waiting for your review), and `main` has nothing the drafts branch is missing. Every GPU item left needs the rig or a decision from you, so this session did the twenty-sixth "code audit" pass, on the AI job format itself (`llm:generate`, Phase 2): can a job the coordinator accepted and signed still stop a worker? A worker trusts a signed job, so whatever the coordinator lets through reaches every rig.
+
+**Found (old tree, in-process coordinator and the worker's own `run_job` with a fake llama-cli)**
+1. **One job could stop rig after rig.** JSON lets you write a character as `\ud800`. That particular code is only half of a character pair; on its own Python reads it, but it can't be saved to a file. A prompt with one got `200` from `POST /v1/jobs` (and from `/v1/challenges`), was signed, and the worker crashed with `UnicodeEncodeError` while writing the prompt file. The lease runs out, the next rig takes the job and crashes too, until the job runs out of attempts.
+2. **Typos were ignored without a word.** `"max_token": 200` (missing `s`) ran with the default 64 tokens; `"temperature": 0.8`, a setting this task doesn't have, did nothing. The job looked like it asked for more than it did.
+3. **A key written twice was accepted.** `{"prompt": "a", "prompt": "b"}`: Python keeps the last copy, some other programs keep the first, so the job could mean two different questions depending on who reads it.
+4. **The check could crash itself.** A payload nested 4,000 brackets deep, or a 5,000-digit number, raised a Python error other than the task's own "refused" error. The coordinator happened to catch it, but the worker runs the same check first, so a job like that would have stopped it too.
+
+**Shipped**
+- An AI job may only have `model_id`, `prompt`, `max_tokens`, `seed` and `timeout_s`, each once, and the prompt must be valid text. Anything else is refused with `422` and a short reason (key names cut to 40 plain characters, so a hostile key can't fill the logs or the screen).
+- The check now only ever says "refused"; it never crashes. The AI runner also refuses an unwritable prompt itself, so a worker that gets such a job from an older coordinator prints "Could not run job ..." and keeps going.
+- `challenge_pool add` refuses a hidden test the coordinator would refuse (including a payload or expected answer that isn't valid text), because `issue` crosses a test off before sending it and it would be used up for nothing.
+
+**Proof**
+- 42 new tests (`tests/test_llm_payload.py`); **29 fail on the old code** (the other 13 check that good jobs still pass and run). They pass on Python 3.13 and 3.11 (what CI uses).
+- I broke the new code 12 ways on purpose; **all 12 were caught** (the first try missed one: a key name with accented letters slipped past the "plain characters" test, so I added that case).
+- **2,645 tests in total: 2,644 passing, 1 skipped** on the committed tree (the root-only test, as designed). One timing test (`test_guess_slots`) failed once while I was installing Python 3.11 packages at the same moment; it passed three times on its own and in the clean full run.
+
+**Honest limits:** jobs already queued with an extra key would now be refused by updated workers (there's no real ledger yet, so nothing is lost). Control characters and NUL in a prompt are still allowed on purpose (llama-cli reads the prompt from a file, and your screen views already clean them). Nothing ran on a GPU.
+
+**What you learned**
+1. **A signature says who sent it, not that it's safe.** The worker runs anything the coordinator signs, so the coordinator's checks are the rigs' only protection against a bad job, even an honest mistake.
+2. **"Valid JSON" isn't the same as "valid text".** JSON can describe half of a character pair; most files, databases and network messages can't hold one. Check text where it enters, not where it breaks.
+3. **Refuse what you don't recognise.** Ignoring unknown settings feels friendly, but it turns a typo into a job that quietly does something else. A clear "unknown key `max_token`" costs you ten seconds; a silent default costs a wrong result.
+4. **A checker must never crash.** If the code that decides "is this OK?" can throw a surprise error, that error becomes the new way in. Every failure should come out as a plain "no, because ...".

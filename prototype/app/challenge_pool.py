@@ -152,6 +152,11 @@ def check_test(task_type: Any, payload: Any, expected: Any) -> str | None:
         return f"payload must be text, 1-{MAX_PAYLOAD} characters"
     if not isinstance(expected, str) or not 1 <= len(expected) <= MAX_EXPECTED:
         return f"expected_result must be text, 1-{MAX_EXPECTED} characters"
+    for name, value in (("payload", payload), ("expected_result", expected)):
+        if not tasks.is_text(value):
+            # `llm-payload-v2`: the coordinator refuses these (422), but `issue` crosses a
+            # test off before sending it, so the test would be used up for nothing.
+            return f"{name} must be valid text (it has a lone \\ud800-\\udfff surrogate)"
     executor = tasks.get(task_type)
     try:
         executor.validate(payload)

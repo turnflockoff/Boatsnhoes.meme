@@ -102,7 +102,10 @@ def lease_needed(task_type: str, payload: str) -> int:
 
 
 def _sha(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+    # "surrogatepass" changes nothing for real text; it only keeps a lone surrogate (which
+    # `llm-payload-v2` refuses in new jobs) from raising inside the fingerprint, which is
+    # documented as never raising.
+    return hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()
 
 
 class Sha256Task(TaskExecutor):
@@ -122,6 +125,42 @@ class Sha256Task(TaskExecutor):
         return Verdict(ok, "deterministic-recompute", "exact", "" if ok else "wrong answer")
 
 
+PAYLOAD_RULE = "llm-payload-v2"
+
+
+class _RepeatedKey(ValueError):
+    pass
+
+
+def _no_repeated_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """`json.loads` hook: a key written twice is refused. Python keeps the last copy, other
+    readers may keep the first, so `{"prompt": "a", "prompt": "b"}` could be one question
+    to the coordinator and another to whoever reads the job (same rule as `json_file`)."""
+    out: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in out:
+            raise _RepeatedKey(_short(key))
+        out[key] = value
+    return out
+
+
+def _short(text: str, limit: int = 40) -> str:
+    """A key named in an error message: printable ASCII only, cut to `limit`. The message
+    goes back to the submitter and into the operator's logs."""
+    clean = "".join(ch if 32 <= ord(ch) < 127 else "?" for ch in text)
+    return clean if len(clean) <= limit else clean[:limit] + "..."
+
+
+def is_text(value: str) -> bool:
+    """True if `value` can be written as UTF-8: no lone surrogates (U+D800-U+DFFF), which
+    JSON escapes can produce but no file, database or socket text can hold."""
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 @dataclass(frozen=True)
 class InferenceSpec:
     model_id: str
@@ -134,7 +173,8 @@ class InferenceSpec:
 class LlmGenerateTask(TaskExecutor):
     """Small text generation on a pinned GGUF model via llama.cpp.
 
-    Payload (JSON): {"model_id", "prompt", "max_tokens" (1-256), "seed", "timeout_s" (5-300)}.
+    Payload (JSON): {"model_id", "prompt", "max_tokens" (1-256), "seed", "timeout_s" (5-300)},
+    no other keys, each at most once, prompt valid text (`llm-payload-v2`).
     Greedy decoding (temperature 0) with a fixed seed, so honest re-runs on the same
     model + runtime should usually match; Phase 4 audits will rely on that.
     Worker config: LLAMA_CLI (path to llama-cli binary) and MODEL_DIR (folder of model files);
@@ -157,13 +197,28 @@ class LlmGenerateTask(TaskExecutor):
             # A damaged registry refuses jobs with a reason instead of crashing (model-fetch-v1).
             raise TaskError(f"model registry refused: {exc}") from None
 
+    # `llm-payload-v2`: the only keys a payload may have. Anything else used to be ignored
+    # without a word, so a typo (`"max_token": 200`) or a setting this task doesn't have
+    # (`"temperature": 0.8`) ran with the defaults while the job looked like it asked for more.
+    PAYLOAD_KEYS = ("model_id", "prompt", "max_tokens", "seed", "timeout_s")
+
     def validate(self, payload: str) -> InferenceSpec:
+        """Parse and check a payload (`llm-payload-v2`). Raises only TaskError, whatever the
+        payload: the worker runs this first, so anything else here would stop the worker."""
         try:
-            data = json.loads(payload)
-        except json.JSONDecodeError as exc:
-            raise TaskError("payload must be JSON") from exc
+            data = json.loads(payload, object_pairs_hook=_no_repeated_keys)
+        except _RepeatedKey as exc:
+            raise TaskError(f"payload has the key {exc.args[0]!r} twice") from None
+        except (ValueError, TypeError, RecursionError):
+            # JSONDecodeError is a ValueError; so is a 5,000-digit number. RecursionError: a
+            # payload nested thousands of brackets deep.
+            raise TaskError("payload must be JSON") from None
         if not isinstance(data, dict):
             raise TaskError("payload must be a JSON object")
+        unknown = sorted(set(data) - set(self.PAYLOAD_KEYS))
+        if unknown:
+            raise TaskError(f"payload has unknown key {_short(unknown[0])!r} "
+                            f"(allowed: {', '.join(self.PAYLOAD_KEYS)})")
         model_id = data.get("model_id")
         entry = self.registry.get(model_id) if isinstance(model_id, str) else None
         if entry is None:
@@ -173,6 +228,12 @@ class LlmGenerateTask(TaskExecutor):
         prompt = data.get("prompt")
         if not isinstance(prompt, str) or not 1 <= len(prompt) <= 2000:
             raise TaskError("prompt must be 1-2000 characters")
+        if not is_text(prompt):
+            # JSON's "\ud800" escape decodes to half of a character pair, which can't be
+            # written as UTF-8. The coordinator used to accept it and sign the job, and every
+            # worker that took it crashed writing the prompt file (UnicodeEncodeError).
+            raise TaskError("prompt must be valid text (it has half of a character pair, "
+                            "a \\ud800-\\udfff escape on its own)")
         max_tokens, seed = data.get("max_tokens", 64), data.get("seed", 0)
         timeout_s = data.get("timeout_s", self.DEFAULT_TIMEOUT_S)
         for name, value, low, high in (("max_tokens", max_tokens, 1, 256), ("seed", seed, 0, 2**31 - 1),
@@ -192,7 +253,7 @@ class LlmGenerateTask(TaskExecutor):
         without the model registry, so it works on any stored payload."""
         try:
             data = json.loads(payload)
-        except (json.JSONDecodeError, TypeError):
+        except (ValueError, TypeError, RecursionError):
             return payload
         prompt = data.get("prompt") if isinstance(data, dict) else None
         return prompt if isinstance(prompt, str) else payload

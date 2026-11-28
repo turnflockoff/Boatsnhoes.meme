@@ -394,6 +394,15 @@ Tested in software only. Fourth pass of the "code audit" item. Three tools read 
 
 **Limits:** it makes reading these files safe and the page's numbers match the signed files. It doesn't make a report true (the signature, consistency checks and `compare` do that), and a person still has to get the coordinator's key from somewhere they trust.
 
+## Implemented: AI job payloads every worker can run (0.5.78, `llm-payload-v2`)
+
+Tested in software only. Twenty-sixth pass of the "code audit" item: **can a job the coordinator accepted and signed still stop the worker?** The worker trusts a signed job, so anything the coordinator lets through reaches every rig.
+
+- **Shown before the fix** (in-process coordinator and `demo_worker.run_job` with a fake llama-cli): an `llm:generate` payload whose prompt held a lone surrogate (the JSON escape `\ud800` with no partner, which decodes in Python but can't be written as UTF-8) got `200` from `POST /v1/jobs` and `/v1/challenges` and was signed; the worker then crashed with `UnicodeEncodeError` writing the prompt file, so each rig that took the job stopped, until the job ran out of attempts. Unknown keys were ignored without a word (`"max_token": 200` ran with the default 64; `"temperature": 0.8` looked like a setting but did nothing). A key written twice was accepted (Python keeps the last copy; another reader may keep the first). `validate` let `RecursionError` (a payload nested 4,000 deep) and `ValueError` (a 5,000-digit number) out instead of `TaskError`.
+- **The rule** (`tasks.LlmGenerateTask.validate`): only `model_id`, `prompt`, `max_tokens`, `seed`, `timeout_s`, each at most once; the prompt must be valid text; every problem is a `TaskError`, so `422` with a short reason at the coordinator (key names printable ASCII, cut to 40 characters) and "Could not run job ..." at the worker, which skips the job instead of crashing. `llm_runner.run` also refuses an unwritable prompt itself (`RunError`). `challenge_pool add` refuses a payload or expected answer that isn't valid text, for every task type, because `issue` crosses a test off before sending it. The input fingerprint never raises on such text either.
+- **Proof:** `tests/test_llm_payload.py` (42 tests, Python 3.13 and 3.11); 29 fail on the old code. 12 deliberate breakages of the new code, all caught.
+- **Limits:** jobs already queued with an extra key are now refused by updated workers (the lease runs out and the job ends `failed`); no ledger with real jobs exists yet. Control characters and NUL in a prompt are still allowed (llama-cli reads them from the file; the operator's screen views already clean them). `demo:sha256` payloads were already safe: the API refuses lone surrogates in plain text fields.
+
 ## Implemented: hidden data removed from Meme Lab gallery pictures (0.5.75, `meme-gallery-v1`)
 
 Tested in software only. Twenty-third pass of the "code audit" item: **what does a picture from a stranger carry when it goes public?** The Meme Lab form takes a picture straight from someone's phone. Approved ones go into `assets/memes/`, which is public on the site and on GitHub (and stays in git history).
