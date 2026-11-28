@@ -177,6 +177,15 @@ This assumes the auditor is honest. The rest of this document is about when that
   signature records and a pause forward, cancels every unused code, keeps the replaced
   ledger and is written down. Work accepted after the backup is still lost (the tool
   counts it per rig), and with the old ledger gone too nothing can be carried forward.
+- **Older code on a newer ledger skips newer rules.** Before 0.5.68 nothing in the ledger
+  said which version wrote it: older commits of this repo opened a ledger written by today's
+  code and gave an aimed hidden test (#1, #8) to the wrong rig, took new work during a
+  pause, and let a restore run under a coordinator that took no "in use" lock; today's code
+  did the same to a ledger with a future column; and two programs upgrading at once crashed.
+  Since 0.5.68 (`ledger-format-v1`, `app/ledger_format.py`) the format number is in the
+  file header, every program refuses a newer ledger before changing it, and the upgrade is
+  one locked, recorded step. Versions 0.5.67 and older can't read the number, so they must
+  never be started on a ledger; going back means restoring a backup from before the upgrade.
 - **The tolerance rule is a guess** until Phase 3 produces real output from two cards.
 
 ## Order of the next fixes

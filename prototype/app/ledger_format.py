@@ -6,11 +6,12 @@ a bug, put the old one back"), which is the first thing anyone does after a bad 
 
 Shown on this sandbox (docs/BUILD-LOG.md, 0.5.68), with a ledger written by today's code:
 
-  * **Older code ignored newer rules, silently.** The 0.5.20 coordinator opened it without a
-    word and handed a hidden test aimed at rig A to rig B, and both 0.5.20 and 0.5.25
-    accepted new work during an incident pause. The 0.5.65 coordinator doesn't take the
-    "in use" lock (`backup-restore-v1`), so a restore ran while it was still running. Each
-    old version just doesn't know the newer column, event or lock exists.
+  * **Older code ignored newer rules, silently.** The coordinator from before aimed hidden
+    tests (commit 974ff33) opened it without a word, handed a hidden test aimed at rig A to
+    rig B and took new work during an incident pause; the one from before the pause
+    (3a9bef3) took new work during the pause too. The 0.5.65 code doesn't take the "in use"
+    lock (`backup-restore-v1`), so a restore ran while it was still running. Each old
+    version just doesn't know the newer column, event or lock exists.
   * **Today's code did the same to a newer ledger.** A ledger with an extra rule from a
     future version (a column today's code has never heard of) opened as if nothing were
     there. Nothing in the file said which version wrote it.
@@ -18,7 +19,9 @@ Shown on this sandbox (docs/BUILD-LOG.md, 0.5.68), with a ledger written by toda
     processes at the same moment (the coordinator and an operator tool after an upgrade):
     7 of 80 opens stopped with "duplicate column name". Each looked for missing columns, then
     both added the same one. The upgrade wasn't one step either: stopped halfway, it left a
-    ledger with some new columns and not others.
+    ledger with some new columns and not others. And a restored ledger (left in SQLite's
+    older journal mode) opened by three programs at once: 1 in 60 opens stopped with
+    "database is locked" while switching it to WAL mode.
 
 The rule, from this version on:
 

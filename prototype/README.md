@@ -394,6 +394,24 @@ Tested in software only. Fourth pass of the "code audit" item. Three tools read 
 
 **Limits:** it makes reading these files safe and the page's numbers match the signed files. It doesn't make a report true (the signature, consistency checks and `compare` do that), and a person still has to get the coordinator's key from somewhere they trust.
 
+## Implemented: which version may open the ledger (0.5.68, `ledger-format-v1`)
+
+Tested in software only, on this sandbox (no coordinator runs anywhere yet). Seventeenth pass of the "code audit" item: **what happens when the ledger and the code come from different versions?** That happens on every upgrade and every rollback.
+
+- **Shown before the fix** (a ledger written by today's code, opened by older commits of this repo):
+  - **Older code skipped newer rules, silently.** The coordinator from before aimed hidden tests (`974ff33`) gave a hidden test aimed at `wk-a` to `wk-b` and created a job during an incident pause; the one from before the pause (`3a9bef3`) created a job during the pause; the 0.5.65 code (`314d30b`) takes no "in use" lock, so `backup restore --yes` ran while it had the ledger open.
+  - **Today's code did the same to a future ledger** (an unknown column, a higher number in the header): opened without a word.
+  - **Two programs upgrading at once crashed:** a Phase 1 ledger opened by two processes at the same moment, 7 of 80 opens raised `duplicate column name` (each checked for missing columns, then both added the same one, outside any transaction).
+  - **A restored ledger could fail to open:** it's left in SQLite's older journal mode, and with three programs starting together 1 of 60 opens raised `database is locked` on the switch to WAL (SQLite answers at once instead of waiting).
+- **The format number:** `ledger_format.FORMAT` (now 1) is stored in the file header (`PRAGMA user_version`; 0 = from before this rule).
+- **Newer ledgers are refused** with `LedgerTooNew` (which formats, and that the way back is restoring a pre-upgrade backup) by the coordinator, every operator tool, read-only checks, shared ledger copies (`untrusted`) and `app.backup check`/`restore`, before a byte changes (not even the WAL switch).
+- **One-step upgrade:** `Ledger._upgrade` runs the schema, the column migrations, the indexes and the new number in one `BEGIN IMMEDIATE` transaction and reads the number again under the lock. A second program waits, then finds nothing to do; any error rolls everything back and releases the run lock. An existing ledger gets a `ledger_format_upgraded` event (from, to, rule, the server clock for people) at the newest time already in the ledger, so the clock rule holds. A brand-new ledger gets no event.
+- **The WAL switch waits** and tries again for up to 10 s on `database is locked`.
+- **Frozen layout:** `FINGERPRINTS` holds a sha256 of every table's columns and every index for each format. A test compares a fresh ledger with the current one, so a layout change without a new number fails CI with instructions. An upgraded Phase 1 ledger has exactly the fresh layout.
+- **`python -m app.ledger_format check --db <ledger>`** (read-only): format, `can_open`, `will_upgrade`, `layout_matches`, past upgrades; exit 1 for a newer ledger. Operator health shows `ledger_format`; `app.backup check` prints it.
+- **Proof:** `tests/test_ledger_format.py` (25 tests, Python 3.13 and 3.11), including step-by-step replays of the old "duplicate column name" and future-ledger cases and a real three-process upgrade race. After the fix: 0 of 120 opens failed (two programs, Phase 1 ledger), 0 of 90 (three programs, restored ledger). 16 deliberate breakages all caught.
+- **Limits:** 0.5.67 and older don't read the number, so they would still open a newer ledger: never start an old version on a ledger. Going back means restoring a backup from before the upgrade; work since then is lost.
+
 ## Implemented: backing up and restoring the ledger (0.5.67, `backup-restore-v1`)
 
 Tested in software only, on this sandbox (no coordinator runs anywhere yet). Sixteenth pass of the "code audit" item: **what happens when the ledger is restored from a backup?** Disks die and mistakes happen, so one day an older copy of the ledger will be put back. Until now there was no backup tool at all.
