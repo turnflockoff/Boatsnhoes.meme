@@ -1306,3 +1306,34 @@ In all three, `verify` printed **OK** and then starting the worker printed `EVIL
 2. **The first error is the one that matters.** When cleanup code fails after the real failure, its error can replace the real one in the log. Good error handling makes sure the original reason survives.
 3. **Keep a reserve.** A petrol tank's warning light comes on before it's empty. Refusing new work at 100 MB, while still accepting results, keeps the last bit of room for the things that are already paid for in effort.
 4. **"Try again later" is a feature.** A `503` with `Retry-After` tells a rig "not your fault, come back in a minute"; a `500` says "something broke". Picking the right answer lets the worker keep its finished result.
+
+## 2026-11-28 (UTC): Putting an old copy of the ledger back undid security decisions (0.5.67)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions, so this session did the sixteenth "code audit" pass. The last two asked what the server's clock and disk can do to the coordinator. This one asked: **what happens when the ledger is restored from a backup?** Disks die and people make mistakes, so one day an older copy of the ledger *will* be put back. Until now there was no backup tool at all, so I tried the ways a person would naturally do it.
+
+**Found, shown really happening** (old code, on this sandbox)
+1. **A plain copy of the running ledger was empty.** `cp ledger.sqlite3 backup.sqlite3` while the coordinator ran gave a file with **no rigs and no jobs** in it, and it opened without any error. SQLite writes new things to a side file (`-wal`) first and only folds them into the main file later; `cp` only took the main file.
+2. **SQLite's own backup command made a copy anyone on the machine could read.** The ledger holds the answer to every hidden test.
+3. **The obvious restore after a crash broke the ledger.** A crash leaves the `-wal` side file behind. Copying the backup over the ledger and starting again made SQLite replay that old side file into the backup: "database disk image is malformed".
+4. **Even a correct restore undid your decisions.** On a real coordinator (in-process): a rig revoked after the backup **logged in again**; an enrollment code already used after the backup **registered a second rig**; the notes that said "these hidden tests were shared in a ledger copy" and "this period was signed" were gone (so a revealed test could be reused, and new work filed inside a signed period); and a pause for an incident was lifted.
+
+**Shipped (`backup-restore-v1`)**
+- **`python -m app.backup make --out <file>`**: a consistent snapshot while the coordinator keeps running (SQLite's backup API, which includes the side file), owner-only from the first byte, one self-contained file, checked before it gets its real name. It never overwrites anything.
+- **`python -m app.backup check <file>`**: is this backup safe to put back? Owner-only, not damaged, and nothing in it but the ledger's own tables. A hidden trigger or view is refused: after a restore it would run *inside* your coordinator (a trigger could, say, copy hidden-test answers somewhere public).
+- **`python -m app.backup restore <file>`**: first a dry run that changes nothing and lists what would be lost (results per rig, rigs that must enroll again, signed reports that count work the backup doesn't have). With `--yes` it:
+  - only runs when **nothing else has the ledger open**. The coordinator and every operator tool now hold a shared "I'm using this" lock; the restore needs the exclusive one, and nothing can open the ledger while it runs;
+  - folds the old ledger's side file into it first, so nothing stale gets replayed;
+  - **carries forward what must never be undone**: revocations, the "shared copy" and "signed" notes (with their original times) and a pause;
+  - **cancels every enrollment code that was still unused** in the backup (some were used after it; you make new ones);
+  - writes down that a restore happened (which backup, what was carried, what was lost) and **keeps the old ledger** next to it, owner-only.
+- **Proof.**
+  - Same story on the new code: the revoked rig is refused (`403`), the used code is refused, the restore was refused while the coordinator was running.
+  - 33 new tests, **2,382 total: 2,381 passing, 1 skipped** on the committed tree (the one test that can't work as the all-powerful root user, as designed). Run on Python 3.13 and 3.11 (what CI uses). Four of the new tests replay the old ways failing (empty `cp`, readable SQLite backup, "malformed" after a crash, revoked rig back in); one runs a real crash in a separate process.
+  - I broke the new code 17 ways on purpose (backup readable by others, left with a side file, plain file copy, tamper check off, revocations / notes / pause not carried, codes not cancelled, old side file not folded in, no lock in the coordinator or the restore, clock rule ignored, old ledger deleted, restore not written down, ...); **all 17 were caught.**
+- **Honest limits:** work accepted after the backup is gone from the restored ledger. The tool tells you how much, per rig, and keeps the replaced ledger so you can look. Rigs that joined after the backup have to enroll again. If the old ledger is gone too (a dead disk), nothing can be carried forward: the tool warns, cancels unused codes, and you'd revoke any bad rig again and check `reports/` for periods you already signed. The "in use" lock works on one Linux or Mac machine, not on Windows or a network drive. No coordinator is running anywhere yet, so nothing needs doing on your side (there's a "good to know" line in USER_TODO).
+
+**What you learned**
+1. **A database is more than one file.** SQLite keeps recent changes in a side file (`-wal`). Copy only the main file and you copy the past; leave an old side file next to a different main file and you get a broken database. Use the database's own backup method.
+2. **A backup is as secret as the original.** It holds every hidden-test answer and key fingerprint, so it needs the same "only me" permissions, and encryption before it leaves the machine.
+3. **Rolling back data can roll back decisions.** "Revoked", "already used", "already published" and "paused" are promises you made to the outside world. Restoring old data must not quietly take them back, so the restore copies them forward.
+4. **Don't change a file someone else has open.** The "in use" lock is how the restore knows the coordinator is really stopped, instead of trusting that it is.

@@ -166,6 +166,17 @@ This assumes the auditor is honest. The rest of this document is about when that
   its result. How full the disk is stays operator-only, so a stranger can't watch whether
   filling it is working. A disk filled by something else can still reach zero; then writes
   wait (nothing is lost or half-written) until the operator frees space.
+- **Restoring a backup undoes decisions.** Before 0.5.67 there was no backup tool: a
+  `cp` of the running ledger missed everything still in the `-wal` file, SQLite's own
+  backup was readable by every user, copying a backup over the ledger after a crash
+  replayed the crash's `-wal` into it (malformed), and even a correct restore let a revoked
+  rig log in again, let a used enrollment code work twice, forgot revealed hidden tests
+  (#11) and signed periods, and lifted a pause. Since 0.5.67 (`backup-restore-v1`,
+  `app/backup.py`, `app/run_lock.py`) backups are consistent, owner-only and checked;
+  a restore runs only while nothing has the ledger open, carries revocations, copy and
+  signature records and a pause forward, cancels every unused code, keeps the replaced
+  ledger and is written down. Work accepted after the backup is still lost (the tool
+  counts it per rig), and with the old ledger gone too nothing can be carried forward.
 - **The tolerance rule is a guess** until Phase 3 produces real output from two cards.
 
 ## Order of the next fixes
