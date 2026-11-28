@@ -128,7 +128,7 @@
       <h2>Send in your best.</h2>
       <p class="lead">Every meme is looked at by a person before it's posted, so it can take a while, and not everything gets in. Posted memes appear in the gallery below and on GitHub, credited with the name you give.</p>
       <ul class="ticks">
-        <li>One picture, up to 8 MB (PNG, JPEG, GIF or WebP).</li>
+        <li>One picture, under 7.5 MB (PNG, JPEG, GIF or WebP). The form checks this before anything is sent.</li>
         <li>Photos can carry hidden details, like the location where they were taken. Those are removed before a meme is posted, and memes made with the maker above never have them.</li>
         <li>Your email is optional and only used if we need to ask you something about your meme.</li>
         <li>No coins, points or prizes for memes. Just glory.</li>
@@ -137,7 +137,8 @@
     <form class="form" name="memes" method="POST" action="/meme-thanks" enctype="multipart/form-data" data-netlify="true" netlify-honeypot="bot-field">
       <input type="hidden" name="form-name" value="memes">
       <p class="hide"><label>Leave this empty <input name="bot-field" tabindex="-1" autocomplete="off"></label></p>
-      <label>Your meme <input id="submit-file" type="file" name="meme" accept="image/png,image/jpeg,image/gif,image/webp" required></label>
+      <label>Your meme <input id="submit-file" type="file" name="meme" accept="image/png,image/jpeg,image/gif,image/webp" required aria-describedby="submit-status"></label>
+      <p class="fine" id="submit-status" role="status" aria-live="polite" style="margin:0"></p>
       <label>Describe it for people who can't see it <textarea name="description" rows="3" maxlength="300" required placeholder="The boat at sea, top text: ..."></textarea></label>
       <div class="row2">
         <label>Credit as (optional) <input name="credit" type="text" maxlength="60" autocomplete="nickname"></label>

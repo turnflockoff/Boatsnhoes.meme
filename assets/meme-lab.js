@@ -132,8 +132,13 @@
     draw();
   }
 
+  // Resolves to null (never throws) when the browser can't make the picture, e.g. a
+  // canvas it considers "tainted" (SecurityError) or one too big for its memory.
   function toBlob() {
-    return new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+    return new Promise((resolve) => {
+      try { canvas.toBlob((b) => resolve(b && b.size ? b : null), 'image/png'); }
+      catch (e) { resolve(null); }
+    });
   }
 
   document.querySelectorAll('[data-template]').forEach((b) =>
@@ -156,6 +161,54 @@
     reader.readAsDataURL(file);
   });
 
+  // The submission form: Netlify refuses a whole form post over 8 MB, which would lose
+  // what the visitor typed, so the picture is checked here before anything is sent.
+  // This is a convenience, not a gate: the owner's review and `app.meme_gallery add`
+  // check every file again before anything is posted.
+  const SUBMIT_MAX_BYTES = 7.5 * 1024 * 1024; // keep in step with the "under 7.5 MB" line on the page
+  const submitFile = $('submit-file'), submitStatus = $('submit-status');
+  function looksLikePicture(b) {
+    const at = (i, text) => [...text].every((c, k) => b[i + k] === c.charCodeAt(0));
+    return (b.length >= 8 && b[0] === 0x89 && at(1, 'PNG\r\n\x1a\n'))
+      || (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff)
+      || (b.length >= 6 && (at(0, 'GIF87a') || at(0, 'GIF89a')))
+      || (b.length >= 12 && at(0, 'RIFF') && at(8, 'WEBP'));
+  }
+  async function checkSubmission() {
+    if (!submitFile) return true;
+    const file = submitFile.files && submitFile.files[0];
+    let problem = '';
+    if (file) {
+      if (file.size > SUBMIT_MAX_BYTES) {
+        problem = `That picture is ${(file.size / 1048576).toFixed(1)} MB. Please send one under 7.5 MB.`;
+      } else {
+        let head = new Uint8Array(0);
+        try { head = new Uint8Array(await file.slice(0, 16).arrayBuffer()); } catch (e) { /* unreadable */ }
+        if (!looksLikePicture(head)) problem = 'That file isn\'t a PNG, JPEG, GIF or WebP picture.';
+      }
+    }
+    // Only the newest choice counts: a slow read of an older file must not overwrite it.
+    if (file !== (submitFile.files && submitFile.files[0])) return false;
+    submitFile.setCustomValidity(problem);
+    if (submitStatus) submitStatus.textContent = problem;
+    return !problem;
+  }
+  if (submitFile) {
+    submitFile.addEventListener('change', () => { checkSubmission(); });
+    // If the visitor presses Send before the check above has finished, wait for it.
+    // (Browsers without requestSubmit still get the check through "change".)
+    const form = submitFile.form;
+    let checked = false;
+    if (form && form.requestSubmit) form.addEventListener('submit', async (ev) => {
+      if (checked) return;
+      ev.preventDefault();
+      if (await checkSubmission()) {
+        checked = true; // requestSubmit validates and fires "submit" right away
+        try { form.requestSubmit(); } finally { checked = false; }
+      } else submitFile.reportValidity();
+    });
+  }
+
   $('meme-download').addEventListener('click', async () => {
     const blob = await toBlob();
     if (!blob) { status.textContent = 'Your browser could not make the picture.'; return; }
@@ -170,10 +223,12 @@
   $('meme-use').addEventListener('click', async () => {
     const input = $('submit-file');
     const blob = await toBlob();
+    if (!blob) { status.textContent = 'Your browser could not make the picture.'; return; }
     try {
       const dt = new DataTransfer();
       dt.items.add(new File([blob], 'bnh-meme.png', { type: 'image/png' }));
       input.files = dt.files;
+      await checkSubmission(); // setting .files doesn't fire "change"
       status.textContent = 'Added to the submission form below.';
       $('submit').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
       input.focus({ preventScroll: true });

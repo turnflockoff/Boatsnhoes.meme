@@ -1554,3 +1554,34 @@ In all three, `verify` printed **OK** and then starting the worker printed `EVIL
 1. **A photo is a picture plus a hidden note.** Phones write where and when it was taken, and which phone, into the file itself. You can't see it, but anyone who downloads the file can read it.
 2. **"Ignored" data is still data.** Browsers stop reading a JPEG at its end marker, so whatever is glued on after it (a video, a zip) is invisible on the page but fully there in the download.
 3. **Keep a list of what's allowed, not of what's bad.** The tool keeps the few parts needed to draw a picture and drops everything else, so new kinds of hidden data are dropped too without anyone having to know about them.
+
+## 2026-11-28 (UTC): The Meme Lab form now checks a picture before sending it (0.5.76)
+
+**Why this, this hour.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" means it's waiting for your review), and `main` has nothing the drafts branch is missing. Every GPU item left needs the rig or a decision from you, so this session did the twenty-fourth "code audit" pass, on the other half of last hour's work: what the Meme Lab submission form actually sends.
+
+**Found (old tree, real Chromium, the form's post caught before it left the browser)**
+1. **A 9 MB picture was sent anyway.** The page said "up to 8 MB", but nothing checked. Netlify refuses a form post over 8 MB, so the visitor would get an error page and lose the description and credit they typed.
+2. **A PDF was sent too.** The file picker's "pictures only" list is just a hint; anyone can switch it to "All files". A PDF renamed `.png` also went through.
+3. **"Send it in" could attach a broken file.** When the browser can't make the picture, it hands back nothing, and the old code turned that "nothing" into a 4-byte file containing the word `null`, then said "Added to the submission form below."
+4. **A picture the browser refuses to export** (a "tainted" canvas) threw an error nobody saw and left the visitor with no message.
+
+**Shipped**
+- The form checks the chosen file when it's picked, right after "Send it in", and again when Send is pressed (if the check is still running, Send waits for it): **under 7.5 MB** (room for the text fields under Netlify's 8 MB) and the **first bytes really are a PNG, JPEG, GIF or WebP**. Anything else blocks sending with the browser's own form message, and a new status line under the field says what's wrong (screen readers read it out).
+- A picture the browser can't make is never attached; the visitor gets "Your browser could not make the picture." instead, for Download and Send it in alike.
+- The page now says "under 7.5 MB … The form checks this before anything is sent."
+- This is a convenience, not the gate: your review and `python -m app.meme_gallery add` still check every file before it's posted.
+
+**Proof**
+- 14 runs in real Chromium after the fix: the 9 MB file, the PDF, the renamed PDF, the empty file and a too-big file sent the instant it was picked were all stopped (nothing posted); a real JPEG, GIF, WebP and PNG, a normal "Send it in", and swapping a too-big file for a small one were posted; the failed and refused pictures gave the message and attached nothing; no browser errors. The worst case the maker can produce (a random-noise photo in the tall format) is 4.6 MB, well under the limit.
+- 7 new tests (`tests/test_meme_form.py`), **6 fail on the old code**. One runs the page's own picture check under Node against 14 sample files.
+- I broke the new code 12 ways on purpose; **11 were caught**. The 12th removed a length check that the next check already covers, so nothing changed.
+- `/meme-lab` at 390, 768 and 1440 px: no sideways scroll, no browser errors; strict HTML parse, site check and accessibility check pass.
+- **2,588 tests in total: 2,587 passing, 1 skipped** (the root-only test, as designed).
+
+**Honest limits:** browsers without `requestSubmit` (Safari before 16) still get the check when the file is picked, just not the "wait for it" on Send. The page can't know Netlify's exact limit (8,000,000 or 8,388,608 bytes), so it stays under both. Nothing was sent to the real Netlify form from here.
+
+**What you learned**
+1. **A file picker's filter is a suggestion.** `accept="image/png,…"` only sets what the picker shows first. The page has to look at the file itself, and the server side (your review and the gallery tool) has to look again.
+2. **Check the file's first bytes, not its name.** Every picture format starts with a fixed "signature" (PNG files start with `‰PNG`, JPEGs with `FF D8 FF`). A renamed PDF keeps its `%PDF` start, so it's caught.
+3. **"Nothing" can turn into something.** Wrapping a missing value in a file made the text `null`, a real file that looked fine to the form. Check for "nothing" before using a value.
+4. **Fail before the upload, not after.** Stopping a too-big file in the browser saves the visitor's typing and a wasted 9 MB upload.
