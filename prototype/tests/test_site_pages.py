@@ -72,7 +72,7 @@ def _text(rel: str, meta: bool = True) -> str:
 # Hype and money claims the project rules forbid. Each pattern is matched case-insensitively
 # against visible text, meta descriptions and share cards.
 FORBIDDEN = [
-    r"\bto the moon\b", r"\bmoon(?:ing|shot)?\b", r"\blambo\b", r"\b\d{2,}x\b", r"\b\d+,?000%",
+    r"\bto the moon\b", r"\bmoon(?:ing|shot)?\b", r"\blambo\b", r"(?<!Ryzen 5 )\b\d{2,}x\b", r"\b\d+,?000%",
     r"\bguarantee(?:d|s)?\b", r"\brisk[- ]free\b", r"\bget rich\b", r"\bpassive income\b",
     r"\bROI\b", r"\bprice target\b", r"\bearn (?:up to )?\$\d", r"\bbuy now\b", r"\bpresale (?:is )?(?:open|live)\b",
     r"\bairdrop (?:is )?(?:live|open)\b", r"\bclaim your\b",
@@ -105,7 +105,7 @@ def test_claim_guard_catches_hype(sample):
 @pytest.mark.parametrize("sample", [
     "No price, profit or payout talk.", "Not an investment", "a 10-second browser check",
     "at least 2 signers", "Nothing is for sale.", "There's no presale, private round, whitelist or airdrop.",
-    "Pages that ask you to \"connect\", \"sync\", \"validate\" or \"claim\"", "1440 px and 390 px", "Do testers earn $BNH?",
+    "Pages that ask you to \"connect\", \"sync\", \"validate\" or \"claim\"", "1440 px and 390 px", "Do testers earn $BNH?", "Ryzen 5 5600X",
 ])
 def test_claim_guard_allows_honest_text(sample):
     assert _forbidden_hits(sample) == []
