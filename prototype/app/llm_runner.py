@@ -125,11 +125,17 @@ def run(binary: str, model_path: Path, prompt: str, *, max_tokens: int, seed: in
         timeout_s: float, config: RunnerConfig,
         env: Mapping[str, str] | None = None) -> str:
     """Run one generation and return its raw stdout (decoded, not trimmed)."""
+    try:
+        prompt_bytes = prompt.encode("utf-8")
+    except UnicodeEncodeError:
+        # A lone surrogate (`llm-payload-v2`): refused at job creation since 0.5.78, but a
+        # job queued by an older coordinator must not stop the worker either.
+        raise RunError("prompt is not valid text (lone surrogate)") from None
     with tempfile.TemporaryDirectory(prefix="bnh-llm-") as tmp:  # created 0700
         prompt_file = Path(tmp) / "prompt.txt"
         fd = os.open(prompt_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "wb") as fh:
-            fh.write(prompt.encode("utf-8"))
+            fh.write(prompt_bytes)
         cmd = build_command(binary, model_path, prompt_file, max_tokens=max_tokens, seed=seed,
                             config=config)
         try:

@@ -11,7 +11,7 @@ import pytest
 
 from app.config import Settings
 from app.main import create_app
-from tests.auth_helpers import WorkerClient, enroll
+from tests.auth_helpers import WorkerClient, enroll, let_lease_run_out
 from tests.test_audits import (
     OP,
     OPERATOR,
@@ -121,7 +121,7 @@ def test_audit_given_back_goes_to_someone_else(tmp_path: Path) -> None:
     original = run_llm_job(client, "wk-a", "The Salty Hoe")
     first = assigned(ledger, original)
     assert claim(client, first).status_code == 200
-    clock.t += 31  # lease runs out: the audit goes back in the queue
+    let_lease_run_out(ledger, clock, first)  # the audit goes back in the queue
     second = other(ws, "wk-a", first)
     assert claim(client, second).status_code == 200
     assert assigned(ledger, original) == second

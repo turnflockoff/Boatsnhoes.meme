@@ -1,13 +1,22 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, StringConstraints, model_validator
+
+# `input-limits-v1`: worker names and capability names are plain ASCII, so a name can't
+# hide a newline, a NUL, a right-to-left override or HTML in logs, reports or pages.
+WORKER_ID_PATTERN = r"^[A-Za-z0-9._:-]{3,80}$"
+Capability = Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9:._-]{0,63}$")]
+MAX_CAPABILITIES = 16
+# Same bound as app/input_limits.MAX_TIMESTAMP (2^53): any real date fits, SQLite can store it.
+MAX_TIMESTAMP = 2 ** 53
 
 
 class WorkerRegistration(BaseModel):
-    worker_id: str = Field(min_length=3, max_length=80)
-    capabilities: list[str] = Field(default_factory=lambda: ["demo:sha256"])
+    worker_id: str = Field(pattern=WORKER_ID_PATTERN)
+    capabilities: list[Capability] = Field(default_factory=lambda: ["demo:sha256"],
+                                           max_length=MAX_CAPABILITIES)
     # One-time code from the operator. Needed for a new worker; an existing worker
     # updates its capabilities by sending its key instead.
     enrollment_code: str | None = Field(default=None, min_length=16, max_length=200)
@@ -45,7 +54,7 @@ class ChallengeCreate(JobCreate):
                      new, suspect or established), worked out when it is handed out
     Workers can't tell an aimed test from normal work either."""
     expected_result: str = Field(min_length=1, max_length=8192)
-    target_worker: str | None = Field(default=None, min_length=3, max_length=80)
+    target_worker: str | None = Field(default=None, pattern=WORKER_ID_PATTERN)
     target_tier: Literal["new", "suspect", "established"] | None = None
 
     @model_validator(mode="after")
@@ -80,8 +89,8 @@ class ResultSubmission(BaseModel):
     worker_id: str | None = Field(default=None, min_length=3, max_length=80)
     result: str = Field(min_length=1, max_length=8192)
     result_hash: str = Field(pattern="^[0-9a-f]{64}$")
-    started_at: int
-    completed_at: int
+    started_at: int = Field(ge=0, le=MAX_TIMESTAMP)
+    completed_at: int = Field(ge=0, le=MAX_TIMESTAMP)
     # Versioned receipt (see app/schemas.py). Optional here so an outdated worker gets a
     # clear "unsupported receipt_version" message instead of a bare validation error.
     receipt_version: str | None = Field(default=None, max_length=32)

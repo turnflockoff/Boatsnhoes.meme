@@ -37,7 +37,8 @@ It reveals nothing about jobs created after `until`. Share copies with a delay.
 Because each rig remembers the inputs it ran, the export is recorded in the live ledger
 (`ledger_copy_made`), and from then on the coordinator refuses to reuse the input of a
 hidden test from that period, or a near copy of it, as a new hidden test (`test-reuse-v2`,
-app/ledger.py). So always export from the live ledger, not from a backup of it.
+app/ledger.py). So always export from the live ledger: since `ledger-role-v1` (app/ledger_role.py) a
+backup, or a ledger a restore moved aside, is refused, because the record would land there.
 """
 from __future__ import annotations
 
@@ -53,7 +54,9 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
+from . import copy_guard, ledger_clock, ledger_role
 from .ledger import Ledger
+from .screen import MAX_SCREEN_LINE_CHARS, say, say_lines
 
 COPY_FORMAT = "bnh-ledger-copy/1"
 OPEN_STATES = ("queued", "leased")
@@ -112,12 +115,16 @@ def _redact(db: sqlite3.Connection, until: int, now: int, salt: bytes) -> dict[s
         "UNION SELECT worker_id FROM events WHERE worker_id IS NOT NULL)", (until,))
     db.execute("UPDATE workers SET key_hash = NULL, capabilities = '[]', last_seen_at = NULL")
     db.execute("UPDATE workers SET revoked_at = NULL WHERE revoked_at >= ?", (until,))
+    # `owner-name-v1`: owners that differ only in letter case are one owner (the ledger's
+    # own comparisons ignore case), so they get one label here too.
+    # Relabelled row by row, so a real owner that happens to be called `owner-1` can't be
+    # merged with whoever was given that label first.
     owners: dict[str, str] = {}
-    for row in db.execute("SELECT owner FROM workers WHERE owner IS NOT NULL "
-                          "ORDER BY registered_at, worker_id").fetchall():
-        owners.setdefault(row[0], f"owner-{len(owners) + 1}")
-    for real, label in owners.items():
-        db.execute("UPDATE workers SET owner = ? WHERE owner = ?", (label, real))
+    rows = db.execute("SELECT worker_id, lower(owner) FROM workers WHERE owner IS NOT NULL "
+                      "ORDER BY registered_at, worker_id").fetchall()
+    for worker_id, real in rows:
+        label = owners.setdefault(real, f"owner-{len(owners) + 1}")
+        db.execute("UPDATE workers SET owner = ? WHERE worker_id = ?", (label, worker_id))
 
     for (job_id, payload_hash) in db.execute("SELECT job_id, payload_hash FROM jobs").fetchall():
         masked = hmac.new(salt, payload_hash.encode("utf-8"), hashlib.sha256).hexdigest()
@@ -136,6 +143,20 @@ def _redact(db: sqlite3.Connection, until: int, now: int, salt: bytes) -> dict[s
     return counts
 
 
+def refuse_unless_live(source: Path) -> None:
+    """`ledger-role-v1`: the record of a copy must land in the live ledger, or the
+    coordinator would hand out the period's hidden tests again (`test-reuse-v2`)."""
+    role = ledger_role.of_file(source)
+    if role == ledger_role.BACKUP:
+        raise CopyError("that file is a backup, not the live ledger: the record that this "
+                        "period's hidden tests were shared would land in the backup, and "
+                        "the coordinator would keep using them. Export from the live ledger")
+    try:
+        ledger_role.refuse_unless_live(role, "that file")
+    except ledger_role.NotLiveLedger as exc:
+        raise CopyError(f"{exc}; export from the live ledger") from None
+
+
 def export_copy(source: Path, dest: Path, until: int, now: int,
                 salt: bytes | None = None) -> dict[str, Any]:
     """Write a redacted copy of `source` covering everything before `until` to `dest`."""
@@ -148,9 +169,14 @@ def export_copy(source: Path, dest: Path, until: int, now: int,
         raise CopyError("the copy must be a different file from the ledger")
     if dest.exists():
         raise CopyError(f"{dest} already exists; pick a new file name")
-    if copy_info(source) is not None:
+    try:
+        source_info = copy_info(source)
+    except sqlite3.DatabaseError as exc:
+        raise CopyError(f"not a readable ledger: {exc}") from None
+    if source_info is not None:
         # Re-exporting a copy would also write the export record into a shared file.
         raise CopyError("that file is already a ledger copy; export from the live ledger")
+    refuse_unless_live(source)
     problems = Ledger(source).check_consistency()
     if problems:
         raise CopyError("ledger fails its own consistency check; fix it before sharing: "
@@ -176,7 +202,11 @@ def export_copy(source: Path, dest: Path, until: int, now: int,
                 raise
             db.execute("VACUUM")  # drop free pages so nothing deleted can be recovered
         # Redaction must not break any invariant the report relies on.
-        after = Ledger(partial, read_only=True).check_consistency()
+        # Vetted like a stranger's copy would be, so every honest export opens cleanly.
+        try:
+            after = Ledger(partial, untrusted=True).check_consistency()
+        except copy_guard.UnsafeCopyError as exc:
+            raise CopyError(f"redacted copy fails the copy check: {exc}") from None
         if after:
             raise CopyError("redacted copy fails the consistency check: " + "; ".join(after[:3]))
         partial.replace(dest)
@@ -198,18 +228,16 @@ def export_copy(source: Path, dest: Path, until: int, now: int,
 
 
 def copy_info(path: Path) -> dict[str, Any] | None:
-    """The copy's header, or None if `path` is a normal (unredacted) ledger."""
+    """The copy's header, or None if `path` is a normal (unredacted) ledger.
+
+    A copy may come from anyone, so it is vetted before it is believed (app/copy_guard.py,
+    `copy-open-v1`): plain ledger tables only, intact, one `copy_info` row. Raises
+    copy_guard.UnsafeCopyError (a sqlite3.DatabaseError) otherwise. Opening is read-only
+    and immutable, so it changes no bytes; a live WAL ledger still answers None."""
     path = Path(path)
-    if not path.exists():
-        raise FileNotFoundError(path)
-    # A plain read: it changes no bytes, and unlike mode=ro it also works on a live WAL ledger.
-    with closing(sqlite3.connect(path)) as db:
-        has = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='copy_info'"
-                         ).fetchone()
-        if not has:
-            return None
-        row = db.execute("SELECT format, until, created_at, note FROM copy_info").fetchone()
-    return {"format": row[0], "until": row[1], "created_at": row[2], "note": row[3]}
+    if not copy_guard.has_copy_info(path):
+        return None
+    return copy_guard.vet(path)
 
 
 def _compare_cli(older: Path, newer: Path, out: Path | None) -> int:
@@ -221,25 +249,28 @@ def _compare_cli(older: Path, newer: Path, out: Path | None) -> int:
     try:
         result = compare_copies(older, newer)
     except CompareError as exc:
-        print(str(exc), file=sys.stderr)
+        print(say(str(exc), MAX_SCREEN_LINE_CHARS), file=sys.stderr)
         return 2
+    # Both copies may come from someone else, and every name in a problem line (rigs, jobs,
+    # events) is read from them, so all of it is printed safely (`operator-screen-v1`). The
+    # --out JSON keeps the exact text.
     o, n, c = result["older"], result["newer"], result["compared"]
-    print(f"older: {o['file']} until={o['until']} sha256={o['sha256']}")
-    print(f"newer: {n['file']} until={n['until']} sha256={n['sha256']}")
-    print(f"compared {c['jobs']} jobs, {c['results']} results, {c['rigs']} rigs, "
-          f"{c['events']} events from the older copy")
+    lines = [f"older: {o['file']} until={o['until']} sha256={o['sha256']}",
+             f"newer: {n['file']} until={n['until']} sha256={n['sha256']}",
+             f"compared {c['jobs']} jobs, {c['results']} results, {c['rigs']} rigs, "
+             f"{c['events']} events from the older copy"]
     if result["ok"]:
-        print("OK: the newer copy keeps the older copy's history unchanged "
-              "(nothing edited, deleted or back-dated)")
+        lines.append("OK: the newer copy keeps the older copy's history unchanged "
+                     "(nothing edited, deleted or back-dated)")
     else:
-        print(f"PROBLEM: {result['problem_count']} difference(s) in history that was "
-              "already shared:")
-        for line in result["problems"]:
-            print(f"  - {line}")
+        lines.append(f"PROBLEM: {result['problem_count']} difference(s) in history that was "
+                     "already shared:")
+        lines += [f"  - {line}" for line in result["problems"]]
         hidden = result["problem_count"] - len(result["problems"])
         if hidden:
-            print(f"  ... and {hidden} more")
-    print(result["note"])
+            lines.append(f"  ... and {hidden} more")
+    lines.append(result["note"])
+    sys.stdout.write(say_lines(lines))
     if out is not None:
         tmp = out.with_name(out.name + ".partial")
         tmp.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
@@ -272,18 +303,31 @@ def main(argv: list[str] | None = None) -> int:
         if not args.copy.exists():
             print(f"file not found: {args.copy}", file=sys.stderr)
             return 2
-        meta = copy_info(args.copy)
+        try:
+            meta = copy_info(args.copy)
+        except sqlite3.DatabaseError as exc:  # includes copy_guard.UnsafeCopyError
+            print(say(f"refusing to read {args.copy.name}: {exc}", MAX_SCREEN_LINE_CHARS),
+                  file=sys.stderr)
+            return 2
         if meta is None:
             print("not a ledger copy (this looks like a full, unredacted ledger)")
             return 1
-        print(f"format={meta['format']} until={meta['until']} created_at={meta['created_at']}")
-        print(f"sha256={_file_sha256(args.copy)}")
-        print(meta["note"])
+        # The header was written by whoever made the copy (`operator-screen-v1`).
+        sys.stdout.write(say_lines([
+            f"format={meta['format']} until={meta['until']} created_at={meta['created_at']}",
+            f"sha256={_file_sha256(args.copy)}", meta["note"]]))
         return 0
 
     try:
-        out = export_copy(args.db, args.out, args.until, int(time.time()))
-    except CopyError as exc:
+        # `ledger-role-v1`: say so before anything else (the clock rule below would
+        # otherwise read the backup's times).
+        refuse_unless_live(args.db)
+        # `ledger-clock-v1`: the export is recorded in the live ledger, never with a time
+        # earlier than one already there (and `until` must not be after it).
+        now = ledger_clock.tool_now(Ledger(args.db, read_only=True).latest_time()) \
+            if args.db.exists() else int(time.time())
+        out = export_copy(args.db, args.out, args.until, now)
+    except (CopyError, ledger_clock.ClockBehindError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
     print(f"wrote {args.out} until={out['until']} jobs={out['jobs']} "

@@ -54,12 +54,14 @@ from __future__ import annotations
 import json
 import random
 import sqlite3
+import threading
+import time
 from collections import Counter
 from contextlib import closing, contextmanager
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterable, Iterator
 
-from . import tasks
+from . import copy_guard, ledger_format, ledger_role, owners, run_lock, secret_file, tasks
 from .audit_policy import (
     AUDITOR_PICK_RULES,
     PASSED_STATUSES,
@@ -91,6 +93,9 @@ MAX_PAUSE_REASON = 200
 # "name a ship" with seed 8 just as well. Rewording is still not caught.
 TEST_REUSE_RULE = "test-reuse-v2"
 COPY_MADE_EVENT = "ledger_copy_made"
+# `ledger-clock-v1` (app/ledger_clock.py): a reward report was signed; its time is at or
+# after the report's `until`, so nothing is written into a signed period afterwards.
+REPORT_SIGNED_EVENT = "reward_report_signed"
 
 
 class HiddenTestRevealed(ValueError):
@@ -161,7 +166,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     assigned_until INTEGER,
     schema_version TEXT NOT NULL DEFAULT 'bnh-job/0',
     model_sha256 TEXT,
-    target TEXT
+    target TEXT,
+    release_at INTEGER
 );
 CREATE TABLE IF NOT EXISTS job_exclusions (
     job_id TEXT NOT NULL REFERENCES jobs(job_id),
@@ -217,9 +223,81 @@ MIGRATIONS = {
         ("model_sha256", "TEXT"),
         # Aimed hidden tests: 'worker:<id>' or 'tier:<new|suspect|established>'.
         ("target", "TEXT"),
+        # `recheck-release-v1` (ledger format 2): a re-check held back until this time.
+        ("release_at", "INTEGER"),
     ),
 }
 
+
+# `ledger-pages-v1` (code audit, twelfth pass): indexes so the routes anyone can call stay
+# cheap as the ledger grows. Without them a public `GET /v1/jobs/{id}` read every event ever
+# written, and the public ledger had to sort every result to show any of them. Created
+# after the migrations, so a ledger from before a column existed gets the column first.
+SCALE_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS submissions_by_time ON submissions(accepted_at, job_id)",
+    "CREATE INDEX IF NOT EXISTS events_by_job ON events(job_id, id)",
+    "CREATE INDEX IF NOT EXISTS jobs_by_audit_of ON jobs(audit_of)",
+)
+
+# `ledger-pages-v1`: the most results one ledger page can hold.
+MAX_PAGE = 1000
+
+# `refusal-log-v1` (code audit, thirteenth pass): what one enrolled rig can make the
+# coordinator write. A refused submission (a result for a job someone else already
+# finished, a job leased to another rig, or a receipt that doesn't match the job) used to
+# add a row to the audit trail *every* time. Measured on a real server: 180 bytes per
+# request, so one rig inside the 240-a-minute request limit could add 345,600 rows (about
+# 62 MB) a day, forever, and pile them onto another rig's job: a day of that made the
+# public `GET /v1/jobs/{id}` for that job 54 MB and 1.5 s. Now the same refusal (same job,
+# same rig, same reason) is written once; repeats are only counted in memory for the
+# operator health page.
+REFUSAL_EVENTS = ("submission_conflict", "submission_wrong_worker", "receipt_mismatch")
+
+# `refusal-log-v1`: the most events `GET /v1/jobs/{id}` shows (oldest first). With repeats
+# no longer written, a job has a handful; the cap is a second fence, not the main one.
+MAX_JOB_EVENTS = 200
+
+# `public-events-v1` (code audit, nineteenth pass): the only event fields the public job
+# page shows. Not `id`: it counts up across the whole ledger, which tied a re-check to the
+# job it re-checks for anyone looking (see public_job_events).
+PUBLIC_EVENT_COLUMNS = ("job_id", "worker_id", "event", "detail", "at")
+PUBLIC_EVENTS_RULE = "public-events-v1"
+
+# `refusal-log-v1`: every accepted result asks for the sending rig's audit record (to pick
+# its audit rate), and that read every result ever accepted (about 10 ms at 100,000, and
+# growing). This index lets it read only that rig's results.
+WORKER_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS submissions_by_worker ON submissions(worker_id, audit_status)",
+)
+
+# `recheck-release-v1` (threat model #5, code audit, twentieth pass): a re-check
+# (audit or tie-breaker) is no longer handed out in the second the result it re-checks
+# was accepted. It is stored *held* (`release_at` set, no public event, nobody can take
+# it) and released after a random wait (app/main.py picks it, RECHECK_DELAY_MIN/MAX_SECONDS):
+# only then is its public `job_created` written, its life (`created_at`) starts, and it
+# is signed again with a deadline counted from the release, so neither its page nor its
+# signed deadline says when the original was accepted. NULL = an ordinary, released job.
+RECHECK_RELEASE_RULE = "recheck-release-v1"
+HELD_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS jobs_held ON jobs(release_at) WHERE release_at IS NOT NULL",
+)
+# Operator health warns when a held re-check is this many seconds past its release time:
+# the release timer in the coordinator isn't running.
+RELEASE_OVERDUE_SECONDS = 60
+# Release the jobs whose time came, re-signed: (job row, release time) -> (deadline, signature).
+Prepare = Callable[[dict[str, Any], int], tuple[int, str]]
+
+# `ledger-clock-v1`: the newest time written anywhere in the ledger.
+LATEST_TIME_SQL = (
+    "SELECT MAX(m) FROM (SELECT MAX(at) AS m FROM events "
+    "UNION ALL SELECT MAX(updated_at) FROM jobs "
+    "UNION ALL SELECT MAX(created_at) FROM jobs "
+    "UNION ALL SELECT MAX(accepted_at) FROM submissions "
+    "UNION ALL SELECT MAX(registered_at) FROM workers "
+    "UNION ALL SELECT MAX(last_seen_at) FROM workers "
+    "UNION ALL SELECT MAX(revoked_at) FROM workers "
+    "UNION ALL SELECT MAX(created_at) FROM enrollments "
+    "UNION ALL SELECT MAX(used_at) FROM enrollments)")
 
 # Job kinds that go to a randomly chosen worker instead of whoever asks first.
 ASSIGNED_KINDS = ("audit", "tiebreak")
@@ -263,13 +341,18 @@ class Ledger:
                  active_seconds: int = 300, assign_seconds: int = 120,
                  read_only: bool = False,
                  tier_of: Callable[[dict[str, int]], str] | None = None,
-                 auditor_pick: str = "uniform", tiebreak_decides: str = "always"):
+                 auditor_pick: str = "uniform", tiebreak_decides: str = "always",
+                 untrusted: bool = False):
         """`rng` picks auditors; the default uses the OS's secure randomness so workers
         can't predict who gets an audit. A worker counts as active for `active_seconds`
         after it last asked for a job, sent a result, or enrolled. An assigned worker has
         `assign_seconds` to claim its audit before someone else gets it.
         `read_only` opens an existing file without changing a single byte (no WAL switch,
         no migrations), for checking a shared ledger copy whose sha256 was published.
+        `untrusted` (implies `read_only`) is for a copy someone else made: the file is
+        vetted once (app/copy_guard.py, `copy-open-v1`: plain tables only, intact, size
+        limits) and every connection is immutable and hardened. Raises
+        copy_guard.UnsafeCopyError if the file isn't a plain ledger copy.
         `tier_of` maps a worker's audit_history() counts to its trust tier (see
         app/audit_policy.py); without it, hidden tests aimed at a tier find nobody.
         `auditor_pick` is "uniform" (any eligible worker) or "trusted-first" (audits and
@@ -294,14 +377,88 @@ class Ledger:
         self.tier_of = tier_of
         self.auditor_pick = auditor_pick
         self.tiebreak_decides = tiebreak_decides
+        self.untrusted = untrusted
+        # `refusal-log-v1`: repeats of a refusal already in the audit trail, per rig, since
+        # this process started (memory only, like the request limits).
+        self._repeats: Counter[str] = Counter()
+        self._repeats_lock = threading.Lock()
+        if untrusted:
+            self.read_only = True
+            copy_guard.vet(self.path)
+            with closing(self._connect()) as db:
+                ledger_format.refuse_if_newer(ledger_format.read(db), "this ledger copy")
+            return
         if read_only:
             if not self.path.exists():
                 raise FileNotFoundError(self.path)
+            # `ledger-format-v1`: checking a newer ledger with older code would read it
+            # without the rules that version added.
+            with closing(self._connect()) as db:
+                ledger_format.refuse_if_newer(ledger_format.read(db))
             return
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with closing(self._connect()) as db:
-            db.execute("PRAGMA journal_mode=WAL")
-            db.executescript(SCHEMA)
+        # `ledger-role-v1` (app/ledger_role.py): never write into a backup or a ledger a
+        # restore moved aside; a record written there never reaches the coordinator. Read
+        # from the header's plain bytes first, so a refusal leaves no lock or side file.
+        ledger_role.refuse_unless_live(ledger_role.of_file(self.path), "this file")
+        self._prepare_private_files()
+        # `backup-restore-v1` (app/run_lock.py): held while this ledger is open for writing,
+        # so a restore can't swap the file under it (and it can't open one mid-restore).
+        self._run_lock: run_lock.RunLock | None = run_lock.shared(self.path)
+        try:
+            with closing(self._connect()) as db:
+                # `ledger-format-v1`: never run on a ledger a newer version wrote.
+                ledger_format.refuse_if_newer(ledger_format.read(db))
+                # Again from SQLite itself, before the WAL switch changes any byte.
+                ledger_role.refuse_unless_live(ledger_role.of_db(db), "this file")
+                self._use_wal(db)
+                self._upgrade(db)
+        except BaseException:
+            self.close()
+            raise
+        # `storage-full-v1` (app/storage.py): one idle connection held open for the life of
+        # the ledger. SQLite deletes the -wal and -shm side files when its last connection
+        # closes, and every request here opens and closes its own; on a full disk they then
+        # couldn't be created again and even reads (health included) failed with "disk I/O
+        # error". Never used for queries and never holds a transaction, so it blocks nothing.
+        self._keeper: sqlite3.Connection | None = sqlite3.connect(
+            self.path, timeout=10, isolation_level=None, check_same_thread=False)
+        self._keeper.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchall()
+
+    # `ledger-format-v1`: the statements that make a fresh ledger, one at a time, so they
+    # can run inside a transaction (executescript would commit first).
+    _SCHEMA_STATEMENTS = tuple(s.strip() for s in SCHEMA.split(";") if s.strip())
+
+    @staticmethod
+    def _use_wal(db: sqlite3.Connection, wait_seconds: float = 10.0) -> None:
+        """Switch the ledger to WAL mode. A ledger in the older journal mode (every
+        restored one: `backup restore` leaves it so) needs a moment alone for the switch,
+        and SQLite answers "database is locked" at once instead of waiting when another
+        program is switching it too (seen: 1 in 60 opens with three programs starting
+        together after a restore). So wait and try again, like any other lock."""
+        deadline = time.monotonic() + wait_seconds
+        while True:
+            try:
+                db.execute("PRAGMA journal_mode=WAL").fetchall()
+                return
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc) or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.02)
+
+    def _upgrade(self, db: sqlite3.Connection) -> None:
+        """Bring the ledger up to `ledger_format.FORMAT` in one transaction (see
+        app/ledger_format.py). The write lock is taken first and everything is looked at
+        again under it, so two programs opening an old ledger at once don't both add the
+        same column; a crash part-way leaves the ledger as it was. Nothing is written when
+        the ledger is already current."""
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            found = ledger_format.read(db)  # again: someone may have upgraded meanwhile
+            ledger_format.refuse_if_newer(found)
+            existed = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND "
+                                 "name='jobs'").fetchone() is not None
+            for statement in self._SCHEMA_STATEMENTS:
+                db.execute(statement)
             # Migrate older (Phase 1-3) databases in place.
             for table, columns in MIGRATIONS.items():
                 have = {r["name"] for r in db.execute(f"PRAGMA table_info({table})").fetchall()}
@@ -310,10 +467,70 @@ class Ledger:
                         db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
             # After the migration, so older databases have the column first.
             db.execute("CREATE UNIQUE INDEX IF NOT EXISTS workers_key_hash ON workers(key_hash)")
+            for ddl in SCALE_INDEXES + WORKER_INDEXES + HELD_INDEXES:
+                db.execute(ddl)
+            if found < ledger_format.FORMAT:
+                if existed:
+                    # At the newest time already written, so the ledger's clock never moves
+                    # (`ledger-clock-v1`); the server clock's reading is for people.
+                    at = db.execute(LATEST_TIME_SQL).fetchone()[0] or 0
+                    self._event(db, int(at), ledger_format.UPGRADE_EVENT, detail=json.dumps({
+                        "rule": ledger_format.RULE, "from": found,
+                        "to": ledger_format.FORMAT, "server_clock": int(time.time())},
+                        sort_keys=True))
+                db.execute(f"PRAGMA user_version = {int(ledger_format.FORMAT)}")
+            db.execute("COMMIT")
+        except BaseException:
+            if db.in_transaction:
+                try:
+                    db.execute("ROLLBACK")
+                except sqlite3.Error:
+                    pass
+            raise
+
+    def close(self) -> None:
+        """Let go of the idle connection (the side files go once nothing else has the
+        ledger open) and of the run lock (`backup-restore-v1`). The ledger still works
+        afterwards, just without those protections."""
+        keeper, self._keeper = getattr(self, "_keeper", None), None
+        if keeper is not None:
+            keeper.close()
+        lock, self._run_lock = getattr(self, "_run_lock", None), None
+        if lock is not None:
+            lock.release()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:  # noqa: BLE001 - never raise from a finalizer
+            pass
 
     # -- plumbing -----------------------------------------------------------------
+    # SQLite side files that hold the same data as the ledger itself.
+    SIDE_FILES = ("-wal", "-shm", "-journal")
+
+    def _prepare_private_files(self) -> None:
+        """`secret-file-v1`: the ledger holds every hidden test's expected answer, job
+        inputs and key hashes. SQLite on its own creates it readable by every user on the
+        machine (0644 under the usual umask). Create the folder (0700) and an empty file
+        (0600) first, so SQLite and its -wal/-shm files inherit owner-only permissions,
+        and refuse to start on an existing ledger, side file or folder that other users
+        can read or change (the message says which `chmod` fixes it)."""
+        secret_file.make_private_folder(self.path.parent, "the ledger")
+        secret_file.create_empty(self.path, "the ledger")
+        for name in ("",) + self.SIDE_FILES:
+            side = self.path.with_name(self.path.name + name)
+            try:
+                secret_file.check_path(side, "the ledger" if not name else
+                                       f"the ledger's {name[1:]} file", secret=True,
+                                       folder=False)
+            except FileNotFoundError:
+                continue
+
     def _connect(self) -> sqlite3.Connection:
-        if self.read_only:
+        if self.untrusted:
+            db = copy_guard.connect(self.path)
+        elif self.read_only:
             db = sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True,
                                  timeout=10, isolation_level=None)
         else:
@@ -331,7 +548,15 @@ class Ledger:
             yield db
             db.execute("COMMIT")
         except BaseException:
-            db.execute("ROLLBACK")
+            # `storage-full-v1`: after a failed COMMIT (disk full) or BEGIN (locked, I/O
+            # error) SQLite has already undone the transaction, and a second ROLLBACK raised
+            # "cannot rollback - no transaction is active", hiding the real error. Undo only
+            # what is still open, and always re-raise the original error.
+            if db.in_transaction:
+                try:
+                    db.execute("ROLLBACK")
+                except sqlite3.Error:
+                    pass
             raise
         finally:
             db.close()
@@ -342,12 +567,45 @@ class Ledger:
         db.execute("INSERT INTO events(job_id, worker_id, event, detail, at) VALUES(?,?,?,?,?)",
                    (job_id, worker_id, event, detail, now))
 
+    def _refusal(self, db: sqlite3.Connection, now: int, event: str, job_id: str,
+                 worker_id: str, detail: str | None = None) -> bool:
+        """`refusal-log-v1`: write a refused submission to the audit trail only the first
+        time this rig is refused on this job for this reason. A repeat says nothing new and
+        is only counted in memory (`repeated_refusals`). Returns True if a row was written.
+        The lookup goes through `events_by_job`, so it reads only this job's few events."""
+        if event not in REFUSAL_EVENTS:
+            raise ValueError(f"not a refusal event: {event!r}")
+        seen = db.execute("SELECT 1 FROM events WHERE job_id=? AND worker_id=? AND event=? "
+                          "AND detail IS ? LIMIT 1", (job_id, worker_id, event, detail)
+                          ).fetchone()
+        if seen is not None:
+            with self._repeats_lock:
+                self._repeats[worker_id] += 1
+            return False
+        self._event(db, now, event, job_id, worker_id, detail)
+        return True
+
+    def repeated_refusals(self) -> dict[str, int]:
+        """Per rig: refused submissions not written because the same refusal (same job,
+        same reason) is already in the audit trail. Since this process started."""
+        with self._repeats_lock:
+            return dict(sorted(self._repeats.items()))
+
     # -- workers and enrollment ------------------------------------------------------
     # Only sha256 hashes of enrollment codes and worker keys are stored. Both are 256-bit
     # random tokens, so a fast hash is enough: there is nothing to brute-force.
     def create_enrollment(self, code_hash: str, owner: str, now: int, expires_at: int) -> None:
+        """`owner-name-v1`: `owner` is saved in lower case, and refused (OwnerLookalike) if it
+        matches a different existing label once `.`, `_` and `-` are dropped. Checked inside
+        the same transaction, so two codes made at once can't both slip past."""
+        owner = owners.canonical(owner)
         with self._tx() as db:
             self._refuse_if_paused(db)
+            for (existing,) in db.execute(
+                    "SELECT DISTINCT lower(owner) FROM workers WHERE owner IS NOT NULL "
+                    "UNION SELECT lower(owner) FROM enrollments"):
+                if existing != owner and owners.owner_key(existing) == owners.owner_key(owner):
+                    raise owners.OwnerLookalike("owner", existing)
             db.execute("INSERT INTO enrollments(code_hash, owner, created_at, expires_at) "
                        "VALUES(?,?,?,?)", (code_hash, owner, now, expires_at))
             self._event(db, now, "enrollment_created", detail=f"owner={owner}")
@@ -370,6 +628,12 @@ class Ledger:
                 return "revoked", None
             if worker is not None and worker["key_hash"] is not None:
                 return "taken", None  # an enrollment code can't take over a keyed worker
+            if worker is None:
+                # `owner-name-v1`: a new id that reads as an existing rig's is refused.
+                key = owners.worker_key(worker_id)
+                for (existing,) in db.execute("SELECT worker_id FROM workers"):
+                    if owners.worker_key(existing) == key:
+                        raise owners.OwnerLookalike("worker", existing)
             owner = code["owner"]
             if worker is None:
                 db.execute("INSERT INTO workers(worker_id, capabilities, registered_at, "
@@ -455,22 +719,63 @@ class Ledger:
                     max_attempts: int, now: int, job_kind: str, audit_of: str | None = None,
                     expected_result: str | None = None,
                     exclude_workers: tuple[str, ...] = (),
-                    target: str | None = None) -> None:
+                    target: str | None = None, release_at: int | None = None) -> None:
+        """`release_at` (`recheck-release-v1`, re-checks only): store the job held until
+        then, without its public `job_created`; release_due starts its life later."""
+        held = release_at is not None and release_at > now
+        if held and job_kind not in ASSIGNED_KINDS:
+            raise ValueError("only re-checks (audits and tie-breakers) can be held")
         db.execute(
             "INSERT INTO jobs(job_id, task_type, payload, payload_hash, reward_points, "
             "expires_at, signature, status, max_attempts, created_at, updated_at, job_kind, "
-            "audit_of, expected_result, schema_version, model_sha256, target) "
-            "VALUES(?,?,?,?,?,?,?,'queued',?,?,?,?,?,?,?,?,?)",
+            "audit_of, expected_result, schema_version, model_sha256, target, release_at) "
+            "VALUES(?,?,?,?,?,?,?,'queued',?,?,?,?,?,?,?,?,?,?)",
             (fields["job_id"], fields["task_type"], fields["payload"], fields["payload_hash"],
              fields["reward_points"], fields["expires_at"], signature, max_attempts, now, now,
              job_kind, audit_of, expected_result, fields["schema_version"],
-             fields["model_sha256"], target),
+             fields["model_sha256"], target, release_at if held else None),
         )
         for worker_id in exclude_workers:
             db.execute("INSERT INTO job_exclusions(job_id, worker_id) VALUES(?,?)",
                        (fields["job_id"], worker_id))
+        if held:
+            # Private: it says a re-check exists and when it comes out.
+            self._event(db, now, "recheck_held", job_id=fields["job_id"],
+                        detail=f"release_at={int(release_at)}")  # type: ignore[arg-type]
+            return
         # Same public event name for every kind, so the audit trail does not reveal it.
         self._event(db, now, "job_created", job_id=fields["job_id"])
+
+    def next_release(self) -> int | None:
+        """`recheck-release-v1`: the earliest time a held re-check is due, or None.
+        A plain read, so the release timer can look every second without taking the
+        write lock."""
+        with closing(self._connect()) as db:
+            row = db.execute("SELECT MIN(release_at) FROM jobs WHERE release_at IS NOT NULL "
+                             "AND status='queued'").fetchone()
+            return None if row[0] is None else int(row[0])
+
+    def release_due(self, now: int, prepare: Prepare) -> int:
+        """`recheck-release-v1`: release every held re-check whose time has come. Each
+        one's life starts now: `created_at` is now, its public `job_created` is written now,
+        and `prepare(job, now)` gives its new deadline (now + the same window) and the
+        signature over it, so the signed job matches a job made at this moment. Then it is
+        handed to a random rig like any re-check. Returns how many were released."""
+        with self._tx() as db:
+            rows = [dict(r) for r in db.execute(
+                "SELECT * FROM jobs WHERE release_at IS NOT NULL AND release_at<=? "
+                "AND status='queued' ORDER BY release_at, job_id", (now,)).fetchall()]
+            for job in rows:
+                expires_at, signature = prepare(job, now)
+                if expires_at <= now:
+                    raise ValueError("a released re-check must have time left to run")
+                db.execute("UPDATE jobs SET release_at=NULL, created_at=?, updated_at=?, "
+                           "expires_at=?, signature=? WHERE job_id=? AND release_at IS NOT NULL",
+                           (now, now, int(expires_at), signature, job["job_id"]))
+                self._event(db, now, "job_created", job_id=job["job_id"])
+            if rows:
+                self._assign_auditors(db, now)
+            return len(rows)
 
     def replace_signature(self, job_id: str, old_signature: str, new_signature: str,
                           now: int, detail: str) -> bool:
@@ -608,6 +913,21 @@ class Ledger:
             self._event(db, now, COPY_MADE_EVENT,
                         detail=json.dumps({"until": int(until), "sha256": file_sha256}))
 
+    def record_signed_report(self, now: int, since: int, until: int, report_sha256: str) -> None:
+        """Note that a reward report for [since, until) was signed (`ledger-clock-v1`).
+        Its time (at or after `until`) is then a recorded time, so the coordinator never
+        writes anything into the signed period afterwards, even if the clock is set back."""
+        with self._tx() as db:
+            self._event(db, now, REPORT_SIGNED_EVENT, detail=json.dumps(
+                {"since": int(since), "until": int(until), "report_sha256": report_sha256}))
+
+    def latest_time(self) -> int | None:
+        """The newest time written anywhere in the ledger (`ledger-clock-v1`): events, job
+        updates, accepted results, rigs seen, enrollment codes. None for an empty ledger."""
+        with closing(self._connect()) as db:
+            row = db.execute(LATEST_TIME_SQL).fetchone()
+        return None if row[0] is None else int(row[0])
+
     def revealed_until(self) -> int | None:
         """End of the latest period covered by a ledger copy made from this ledger."""
         with closing(self._connect()) as db:
@@ -632,9 +952,14 @@ class Ledger:
 
     def note(self, now: int, event: str, job_id: str | None = None,
              worker_id: str | None = None, detail: str | None = None) -> None:
-        """Append one audit-trail event outside any other change (e.g. a refused receipt)."""
+        """Append one audit-trail event outside any other change (e.g. a refused receipt).
+        Refusals (REFUSAL_EVENTS) are written once per job, rig and reason
+        (`refusal-log-v1`)."""
         with self._tx() as db:
-            self._event(db, now, event, job_id, worker_id, detail)
+            if event in REFUSAL_EVENTS and job_id and worker_id:
+                self._refusal(db, now, event, job_id, worker_id, detail)
+            else:
+                self._event(db, now, event, job_id, worker_id, detail)
 
     def _audit_not_run(self, db: sqlite3.Connection, job_id: str, now: int) -> None:
         """An audit or tie-breaker job ended without a usable result.
@@ -659,10 +984,11 @@ class Ledger:
             return dict(row) if row else None
 
     def _sweep(self, db: sqlite3.Connection, now: int) -> None:
-        """Expire overdue jobs and recover leases whose holder went silent."""
+        """Expire overdue jobs and recover leases whose holder went silent. A held
+        re-check (`recheck-release-v1`) doesn't expire: its life starts when released."""
         for row in db.execute(
             "SELECT job_id, worker_id FROM jobs WHERE status IN ('queued','leased') "
-            "AND expires_at<=?", (now,)
+            "AND expires_at<=? AND release_at IS NULL", (now,)
         ).fetchall():
             db.execute("UPDATE jobs SET status='expired', lease_expires_at=NULL, updated_at=? "
                        "WHERE job_id=?", (now, row["job_id"]))
@@ -694,7 +1020,7 @@ class Ledger:
             "AND w.last_seen_at IS NOT NULL AND w.last_seen_at>? AND NOT EXISTS ("
             "SELECT 1 FROM job_exclusions x LEFT JOIN workers xw ON xw.worker_id=x.worker_id "
             "WHERE x.job_id=? AND (x.worker_id=w.worker_id OR "
-            "(xw.owner IS NOT NULL AND xw.owner=w.owner))) ORDER BY w.worker_id",
+            "(xw.owner IS NOT NULL AND lower(xw.owner)=lower(w.owner)))) ORDER BY w.worker_id",
             (now - self.active_seconds, job_id)).fetchall()
         return [r["worker_id"] for r in rows]
 
@@ -747,6 +1073,7 @@ class Ledger:
             f"j.assigned_until, w.revoked_at "
             f"FROM jobs j LEFT JOIN workers w "
             f"ON w.worker_id=j.assigned_worker WHERE j.status='queued' "
+            f"AND j.release_at IS NULL "
             f"AND (j.job_kind IN ({kinds}) OR j.target IS NOT NULL) "
             f"AND (j.assigned_worker IS NULL "
             f"OR j.assigned_until IS NULL OR j.assigned_until<=? OR w.revoked_at IS NOT NULL) "
@@ -807,21 +1134,26 @@ class Ledger:
             "SELECT 1 FROM events WHERE job_id=? AND worker_id=? AND event='job_leased' "
             "AND id>? LIMIT 1", (job_id, worker_id, assigned_id)).fetchone() is not None
 
-    def claim_next(self, worker_id: str, lease_seconds: int, now: int) -> dict[str, Any] | None:
+    def claim_next(self, worker_id: str, lease_seconds: int, now: int,
+                   lease_for: Callable[[str, str], int] | None = None) -> dict[str, Any] | None:
         """Atomically lease the oldest queued job `worker_id` may take, or return None.
         Work and challenge jobs are first-come; audits, tie-breakers and aimed hidden tests
         only go to the worker they were assigned to (see _assign_auditors).
+        `lease_for(task_type, payload)` (`lease-fit-v1`, app/tasks.lease_needed) gives the
+        seconds this job's lease must last; the lease is the longer of that and
+        `lease_seconds`, and never past the job's own deadline.
         Raises CoordinatorPaused while paused; the worker still counts as seen, so rigs
         that keep asking during a pause stay active for audit picks after it."""
         with self._tx() as db:
             pause = self._pause_row(db)
             db.execute("UPDATE workers SET last_seen_at=? WHERE worker_id=?", (now, worker_id))
             if pause is None:
-                return self._claim(db, worker_id, lease_seconds, now)
+                return self._claim(db, worker_id, lease_seconds, now, lease_for)
         raise CoordinatorPaused(int(pause["at"]))
 
     def _claim(self, db: sqlite3.Connection, worker_id: str, lease_seconds: int,
-               now: int) -> dict[str, Any] | None:
+               now: int, lease_for: Callable[[str, str], int] | None = None
+               ) -> dict[str, Any] | None:
         self._sweep(db, now)
         self._assign_auditors(db, now)
         # An excluded worker's owner is excluded too, so one person's rigs never
@@ -829,10 +1161,11 @@ class Ledger:
         owner = db.execute("SELECT owner FROM workers WHERE worker_id=?",
                            (worker_id,)).fetchone()
         row = db.execute(
-            "SELECT job_id FROM jobs j WHERE status='queued' AND NOT EXISTS ("
+            "SELECT job_id, task_type, payload FROM jobs j WHERE status='queued' "
+            "AND j.release_at IS NULL AND NOT EXISTS ("
             "SELECT 1 FROM job_exclusions x LEFT JOIN workers w ON w.worker_id=x.worker_id "
             "WHERE x.job_id=j.job_id AND (x.worker_id=? OR "
-            "(w.owner IS NOT NULL AND w.owner=?))) "
+            "(w.owner IS NOT NULL AND lower(w.owner)=lower(?)))) "
             f"AND ((j.job_kind NOT IN ({','.join('?' * len(ASSIGNED_KINDS))}) "
             "AND j.target IS NULL) OR j.assigned_worker=?) "
             "ORDER BY created_at, job_id LIMIT 1",
@@ -840,6 +1173,8 @@ class Ledger:
         ).fetchone()
         if row is None:
             return None
+        if lease_for is not None:
+            lease_seconds = max(lease_seconds, int(lease_for(row["task_type"], row["payload"])))
         lease_until = min(now + lease_seconds, self._job_deadline(db, row["job_id"]))
         db.execute(
             "UPDATE jobs SET status='leased', worker_id=?, lease_expires_at=?, "
@@ -860,7 +1195,9 @@ class Ledger:
                confidence: str = "exact", result: str | None = None, needs_audit: bool = False,
                audit_job: tuple[dict[str, Any], str] | None = None,
                agree: Agree | None = None,
-               tiebreak_job: tuple[dict[str, Any], str] | None = None) -> tuple[str, dict[str, Any] | None]:
+               tiebreak_job: tuple[dict[str, Any], str] | None = None,
+               audit_release_at: int | None = None,
+               tiebreak_release_at: int | None = None) -> tuple[str, dict[str, Any] | None]:
         """Record a result. Returns (outcome, job) where outcome is one of:
         accepted, duplicate (same accepted result again), conflict, unknown, not_leased,
         wrong_worker, expired, rejected_requeued, rejected_final.
@@ -873,6 +1210,8 @@ class Ledger:
             is queued for a worker that is neither side of the dispute.
           - accepting a tie-breaker settles the dispute by majority (see _resolve_tiebreak).
           - accepting a challenge job compares it with the operator's expected answer.
+        `audit_release_at` / `tiebreak_release_at` (`recheck-release-v1`): hold the new
+        audit or tie-breaker until then instead of handing it out now (see release_due).
         """
         agree = agree or (lambda a, b: a == b)
         with self._tx() as db:
@@ -887,14 +1226,14 @@ class Ledger:
                                    (job_id,)).fetchone()
                 if prior and prior["worker_id"] == worker_id and prior["result_hash"] == result_hash:
                     return "duplicate", job
-                self._event(db, now, "submission_conflict", job_id, worker_id)
+                self._refusal(db, now, "submission_conflict", job_id, worker_id)
                 return "conflict", job
             if job["status"] == "expired":
                 return "expired", job
             if job["status"] != "leased":
                 return "not_leased", job
             if job["worker_id"] != worker_id:
-                self._event(db, now, "submission_wrong_worker", job_id, worker_id)
+                self._refusal(db, now, "submission_wrong_worker", job_id, worker_id)
                 return "wrong_worker", job
             if not correct:
                 final = job["attempts"] >= job["max_attempts"]
@@ -927,13 +1266,15 @@ class Ledger:
             if audit_status == "pending" and audit_job:
                 fields, signature = audit_job
                 self._insert_job(db, fields, signature, job["max_attempts"], now, "audit",
-                                 audit_of=job_id, exclude_workers=(worker_id,))
+                                 audit_of=job_id, exclude_workers=(worker_id,),
+                                 release_at=audit_release_at)
                 self._event(db, now, "audit_scheduled", job_id, detail=fields["job_id"])
             elif kind == "challenge":
                 self._event(db, now, audit_status.replace("-challenge", "_challenge"),
                             job_id, worker_id)
             elif kind == "audit":
-                self._resolve_audit(db, job, result, agree, now, tiebreak_job)
+                self._resolve_audit(db, job, result, agree, now, tiebreak_job,
+                                    tiebreak_release_at)
             elif kind == "tiebreak":
                 self._resolve_tiebreak(db, job, result, agree, now)
             # Hand any audit or tie-breaker just queued to a random worker right away, so
@@ -944,7 +1285,8 @@ class Ledger:
 
     def _resolve_audit(self, db: sqlite3.Connection, audit: dict[str, Any], result: str | None,
                        agree: Agree, now: int,
-                       tiebreak_job: tuple[dict[str, Any], str] | None = None) -> None:
+                       tiebreak_job: tuple[dict[str, Any], str] | None = None,
+                       release_at: int | None = None) -> None:
         original = db.execute("SELECT * FROM submissions WHERE job_id=?",
                               (audit["audit_of"],)).fetchone()
         if original is None or original["audit_status"] != "pending":
@@ -963,7 +1305,8 @@ class Ledger:
             fields, signature = tiebreak_job
             self._insert_job(db, fields, signature, audit["max_attempts"], now, "tiebreak",
                              audit_of=original["job_id"],
-                             exclude_workers=(original["worker_id"], audit["worker_id"]))
+                             exclude_workers=(original["worker_id"], audit["worker_id"]),
+                             release_at=release_at)
             self._event(db, now, "tiebreak_scheduled", original["job_id"],
                         detail=fields["job_id"])
 
@@ -1026,6 +1369,47 @@ class Ledger:
             self._event(db, now, event, job_id, detail=f"{status} (tie-breaker {tb['job_id']})")
 
     # -- reporting --------------------------------------------------------------------
+    def entries_page(self, shown_up_to: int | None = None, with_hashes: bool = True,
+                     limit: int = 100, after: tuple[int, str] | None = None,
+                     newest_first: bool = False
+                     ) -> tuple[list[dict[str, Any]], tuple[int, str] | None]:
+        """`ledger-pages-v1`: at most `limit` accepted results in (accepted_at, job_id)
+        order (or the reverse), starting after the row `after` names, and the cursor for
+        the next page (None on the last one). Reads at most `limit + 1` rows through the
+        `submissions_by_time` index, however big the ledger is. Same rows and same
+        withholding as `entries`."""
+        if not 1 <= limit <= MAX_PAGE:
+            raise ValueError(f"limit must be 1-{MAX_PAGE}")
+        op, direction = ("<", "DESC") if newest_first else (">", "ASC")
+        where, args = "", []
+        if after is not None:
+            where = f"WHERE (accepted_at, job_id) {op} (?, ?) "
+            args = [int(after[0]), str(after[1])]
+        with closing(self._connect()) as db:
+            rows = db.execute(
+                "SELECT job_id, worker_id, result_hash, reward_points, accepted_at, "
+                f"verifier_method, confidence FROM submissions {where}"
+                f"ORDER BY accepted_at {direction}, job_id {direction} LIMIT ?",
+                (*args, limit + 1)).fetchall()
+        more = len(rows) > limit
+        out = [self._public_entry(dict(row), shown_up_to, with_hashes) for row in rows[:limit]]
+        cursor = (out[-1]["accepted_at"], out[-1]["job_id"]) if more else None
+        return out, cursor
+
+    def entries_count(self) -> int:
+        with closing(self._connect()) as db:
+            return int(db.execute("SELECT COUNT(*) FROM submissions").fetchone()[0])
+
+    @staticmethod
+    def _public_entry(entry: dict[str, Any], shown_up_to: int | None,
+                      with_hashes: bool) -> dict[str, Any]:
+        visible = shown_up_to is None or entry["accepted_at"] <= shown_up_to
+        if not visible:
+            entry["confidence"] = None
+        if not with_hashes:
+            del entry["result_hash"]
+        return entry | {"settlement_visible": visible}
+
     def entries(self, shown_up_to: int | None = None,
                 with_hashes: bool = True) -> list[dict[str, Any]]:
         """Accepted results. With `shown_up_to` (`public-delay-v1`, threat model #14),
@@ -1041,16 +1425,7 @@ class Ledger:
                 "SELECT job_id, worker_id, result_hash, reward_points, accepted_at, "
                 "verifier_method, confidence FROM submissions ORDER BY accepted_at, job_id"
             ).fetchall()
-        out = []
-        for row in rows:
-            entry = dict(row)
-            visible = shown_up_to is None or entry["accepted_at"] <= shown_up_to
-            if not visible:
-                entry["confidence"] = None
-            if not with_hashes:
-                del entry["result_hash"]
-            out.append(entry | {"settlement_visible": visible})
-        return out
+        return [self._public_entry(dict(row), shown_up_to, with_hashes) for row in rows]
 
     def submission(self, job_id: str) -> dict[str, Any] | None:
         with closing(self._connect()) as db:
@@ -1078,7 +1453,7 @@ class Ledger:
         with closing(self._connect()) as db:
             rows = db.execute(
                 "SELECT j.job_id, j.job_kind, j.audit_of, j.task_type, j.status, j.created_at, "
-                "j.assigned_worker, j.target, "
+                "j.assigned_worker, j.target, j.release_at, "
                 "s.worker_id, s.audit_status FROM jobs j LEFT JOIN submissions s USING(job_id) "
                 "WHERE j.job_kind IN ('audit','challenge','tiebreak') ORDER BY j.created_at, j.job_id"
             ).fetchall()
@@ -1109,6 +1484,60 @@ class Ledger:
                     (root, root)).fetchall()
                 groups.append({"root": root, "jobs": [dict(r) for r in jobs]})
         return groups
+
+    def agreement_groups(self) -> list[dict[str, Any]]:
+        """Raw rows for the vouch check (app/vouches.py, `vouch-check-v1`, threat model #3).
+        Read-only. One group per work job, listing the results in it (the original, its
+        audit, its tie-breaker) that ended up `confirmed`, i.e. agreed with each other.
+        Holds no payloads or answers, but names who audited whom: operator-only."""
+        with closing(self._connect()) as db:
+            rows = db.execute(
+                "SELECT CASE WHEN j.job_kind IN ('audit','tiebreak') THEN j.audit_of "
+                "ELSE j.job_id END AS root, j.job_id, j.job_kind, j.task_type, s.worker_id, "
+                "s.reward_points, s.accepted_at FROM submissions s JOIN jobs j USING(job_id) "
+                "WHERE s.audit_status='confirmed' AND j.job_kind IN ('work','audit','tiebreak') "
+                "ORDER BY root, s.accepted_at, j.job_id").fetchall()
+        groups: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            group = groups.setdefault(row["root"], {"root": row["root"],
+                                                    "task_type": row["task_type"],
+                                                    "agreed": []})
+            group["agreed"].append({k: row[k] for k in ("job_id", "job_kind", "worker_id",
+                                                        "reward_points", "accepted_at")})
+        return list(groups.values())
+
+    def open_aimed_tests(self, now: int) -> dict[str, int]:
+        """Per worker: hidden tests aimed at it by name (`target_worker`) that it can still
+        take (queued or leased, before their deadline). Used by the vouch check so the
+        operator doesn't aim a second test at a rig that already has one waiting.
+        Tier-aimed tests aren't counted: the rig they land on is picked at hand-out."""
+        with closing(self._connect()) as db:
+            rows = db.execute(
+                # Group by the target itself: `jobs` has its own worker_id column (who
+                # leased it), and an alias with that name would group by that instead.
+                "SELECT target, COUNT(*) AS n FROM jobs "
+                "WHERE job_kind='challenge' AND target LIKE 'worker:%' "
+                "AND status IN ('queued','leased') AND expires_at>? "
+                "GROUP BY target", (now,)).fetchall()
+        return {r["target"].removeprefix("worker:"): int(r["n"]) for r in rows}
+
+    def check_record(self) -> dict[str, dict[str, Any]]:
+        """Per worker: owner label, revoked or not, strikes, when the first result that
+        became a strike was submitted, and how many hidden known-answer tests it passed."""
+        strikes = ",".join("?" * len(STRIKE_STATUSES))
+        with closing(self._connect()) as db:
+            rows = db.execute(
+                f"SELECT w.worker_id, w.owner, w.revoked_at, "
+                f"COALESCE(SUM(s.audit_status IN ({strikes})), 0) AS strikes, "
+                f"MIN(CASE WHEN s.audit_status IN ({strikes}) THEN s.accepted_at END) AS first_at, "
+                f"COALESCE(SUM(s.audit_status='passed-challenge'), 0) AS passed "
+                f"FROM workers w LEFT JOIN submissions s ON s.worker_id=w.worker_id "
+                f"GROUP BY w.worker_id ORDER BY w.worker_id",
+                (*STRIKE_STATUSES, *STRIKE_STATUSES)).fetchall()
+        return {r["worker_id"]: {"owner": r["owner"], "revoked": r["revoked_at"] is not None,
+                                 "strikes": int(r["strikes"]),
+                                 "first_struck_result_at": r["first_at"],
+                                 "hidden_tests_passed": int(r["passed"])} for r in rows}
 
     def worker_trust(self, worker_id: str) -> dict[str, Any]:
         """Operator view: how a worker's results held up under audits and challenges."""
@@ -1245,7 +1674,9 @@ class Ledger:
 
     def status_counts(self) -> dict[str, int]:
         with closing(self._connect()) as db:
-            rows = db.execute("SELECT status, COUNT(*) AS n FROM jobs GROUP BY status").fetchall()
+            # `recheck-release-v1`: a held re-check doesn't exist publicly until released.
+            rows = db.execute("SELECT status, COUNT(*) AS n FROM jobs WHERE release_at IS NULL "
+                              "GROUP BY status").fetchall()
             return {row["status"]: int(row["n"]) for row in rows}
 
     def ping(self) -> None:
@@ -1259,7 +1690,8 @@ class Ledger:
         with closing(self._connect()) as db:
             one = lambda sql, *args: db.execute(sql, args).fetchone()[0]  # noqa: E731
             kinds = ",".join("?" * len(ASSIGNED_KINDS))
-            oldest = one("SELECT MIN(created_at) FROM jobs WHERE status='queued'")
+            oldest = one("SELECT MIN(created_at) FROM jobs WHERE status='queued' "
+                         "AND release_at IS NULL")
             snapshot = {
                 "workers": {
                     "registered": one("SELECT COUNT(*) FROM workers"),
@@ -1269,13 +1701,15 @@ class Ledger:
                     "revoked": one("SELECT COUNT(*) FROM workers WHERE revoked_at IS NOT NULL"),
                 },
                 "queue": {
-                    "queued": one("SELECT COUNT(*) FROM jobs WHERE status='queued'"),
+                    "queued": one("SELECT COUNT(*) FROM jobs WHERE status='queued' "
+                                  "AND release_at IS NULL"),
                     "leased": one("SELECT COUNT(*) FROM jobs WHERE status='leased'"),
                     "oldest_queued_age_seconds": None if oldest is None else now - int(oldest),
                     "overdue_leases": one("SELECT COUNT(*) FROM jobs WHERE status='leased' "
                                           "AND lease_expires_at<=?", now),
                     "past_deadline": one("SELECT COUNT(*) FROM jobs WHERE status IN "
-                                         "('queued','leased') AND expires_at<=?", now),
+                                         "('queued','leased') AND expires_at<=? "
+                                         "AND release_at IS NULL", now),
                 },
                 "audits": {
                     "open": one(f"SELECT COUNT(*) FROM jobs WHERE status IN ('queued','leased') "
@@ -1284,9 +1718,17 @@ class Ledger:
                     "waiting_for_auditor": one(
                         f"SELECT COUNT(*) FROM jobs j LEFT JOIN workers w "
                         f"ON w.worker_id=j.assigned_worker WHERE j.status='queued' "
+                        f"AND j.release_at IS NULL "
                         f"AND j.job_kind IN ({kinds}) AND (j.assigned_worker IS NULL "
                         f"OR j.assigned_until IS NULL OR j.assigned_until<=? "
                         f"OR w.revoked_at IS NOT NULL)", *ASSIGNED_KINDS, now),
+                    # `recheck-release-v1`: re-checks waiting for their random release time
+                    # (counted in `open`), and how many of them are well past it.
+                    "waiting_for_release": one("SELECT COUNT(*) FROM jobs WHERE status='queued' "
+                                "AND release_at IS NOT NULL"),
+                    "release_overdue": one("SELECT COUNT(*) FROM jobs WHERE status='queued' "
+                                           "AND release_at IS NOT NULL AND release_at<=?",
+                                           now - RELEASE_OVERDUE_SECONDS),
                 },
                 # Hidden tests aimed at one rig or a trust tier (operator-only numbers).
                 "aimed_tests": {
@@ -1304,8 +1746,33 @@ class Ledger:
                     "GROUP BY event ORDER BY event", (now - window_seconds, now)).fetchall()},
                 "recent_window_seconds": window_seconds,
                 "last_event_at": one("SELECT MAX(at) FROM events"),
+                # `ledger-format-v1`: which format this ledger is (operator-only).
+                "ledger_format": ledger_format.read(db),
             }
         return snapshot
+
+    def public_job_events(self, job_id: str, hidden: Iterable[str],
+                          limit: int = MAX_JOB_EVENTS) -> tuple[list[dict[str, Any]], int]:
+        """`refusal-log-v1`: one job's events for the public `GET /v1/jobs/{id}`, without
+        the `hidden` ones, oldest first, at most `limit`, plus how many there are in all.
+        Filtered and capped inside SQLite through `events_by_job`, so the reply's cost
+        doesn't depend on how much anyone wrote about this job.
+
+        `public-events-v1` (code audit, nineteenth pass): only PUBLIC_EVENT_COLUMNS, never
+        the event's `id`. Ids count up across the whole ledger, so they let anyone line up
+        events of different jobs exactly: a re-check's `job_created` came one id after
+        the original's `result_accepted` (same transaction), and a gap in one job's ids
+        showed where a private event had been written. Order is still the real order."""
+        hidden = tuple(hidden)
+        marks = ",".join("?" * len(hidden)) or "NULL"
+        where = f"job_id=? AND event NOT IN ({marks})"
+        cols = ", ".join(PUBLIC_EVENT_COLUMNS)
+        with closing(self._connect()) as db:
+            rows = db.execute(f"SELECT {cols} FROM events WHERE {where} ORDER BY id LIMIT ?",
+                              (job_id, *hidden, limit)).fetchall()
+            total = db.execute(f"SELECT COUNT(*) FROM events WHERE {where}",
+                               (job_id, *hidden)).fetchone()[0]
+        return [dict(r) for r in rows], int(total)
 
     def events(self, job_id: str | None = None) -> list[dict[str, Any]]:
         with closing(self._connect()) as db:
@@ -1354,7 +1821,8 @@ class Ledger:
             for r in q("SELECT DISTINCT j.job_id FROM jobs j JOIN job_exclusions x USING(job_id) "
                        "JOIN workers ex ON ex.worker_id=x.worker_id "
                        "JOIN workers w ON w.worker_id=j.worker_id "
-                       "WHERE ex.owner IS NOT NULL AND ex.owner=w.owner AND w.worker_id!=ex.worker_id"):
+                       "WHERE ex.owner IS NOT NULL AND lower(ex.owner)=lower(w.owner) "
+                       "AND w.worker_id!=ex.worker_id"):
                 problems.append(f"job given to a worker with the same owner as an excluded "
                                 f"worker {r['job_id']}")
             for r in q("SELECT s.job_id FROM submissions s JOIN jobs j USING(job_id) "

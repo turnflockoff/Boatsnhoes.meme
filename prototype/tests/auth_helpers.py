@@ -12,6 +12,7 @@ a token header itself; test_rate_limits.py tests who may queue jobs without this
 from __future__ import annotations
 
 import random
+from contextlib import closing
 from typing import Any, Sequence
 
 from fastapi.testclient import TestClient
@@ -100,3 +101,14 @@ def receipt(client: TestClient, job_id: str) -> dict[str, Any]:
                 "job_schema_version": schemas.JOB_SCHEMA_VERSION,
                 "payload_hash": "0" * 64, "model_sha256": None}
     return schemas.receipt_fields(job, job["model_sha256"])
+
+
+def let_lease_run_out(ledger: Any, clock: Any, worker_id: str) -> None:
+    """Move `clock.t` just past the end of `worker_id`'s current lease. Since `lease-fit-v1`
+    an `llm:generate` lease lasts the job's own time limit plus a grace period, not just
+    LEASE_SECONDS, so tests that let a lease run out ask the ledger when it ends."""
+    with closing(ledger._connect()) as db:
+        (until,) = db.execute("SELECT MAX(lease_expires_at) FROM jobs WHERE worker_id=? "
+                              "AND status='leased'", (worker_id,)).fetchone()
+    assert until is not None, f"{worker_id} holds no lease"
+    clock.t = int(until) + 1

@@ -124,7 +124,7 @@ def test_model_job_pins_the_model_hash_and_worker_checks_its_own_pin(
     # The worker's registry was pinned to a different file: refuse before running anything.
     other = tmp_path / "other.gguf"
     other.write_bytes(b"different weights")
-    model_registry.pin(MODEL_ID, other)
+    model_registry.pin(MODEL_ID, other, replace=True)
     with pytest.raises(ManifestError, match="model pin mismatch"):
         check_manifest(job, pub, now=T0)
     # The worker never pinned the model at all.
@@ -144,7 +144,7 @@ def test_audit_reruns_keep_the_original_model_hash_after_a_repin(
     # The operator re-pins the registry before the audit runs.
     other = tmp_path / "newer.gguf"
     other.write_bytes(b"newer weights")
-    model_registry.pin(MODEL_ID, other)
+    model_registry.pin(MODEL_ID, other, replace=True)
     assert submit(client, original, "The Salty Hoe").status_code == 200
     audit = client.post("/v1/jobs/next", params={"worker_id": "wk-b"}).json()
     assert audit["payload"] == original["payload"]
@@ -205,6 +205,7 @@ def test_receipt_helper_hashes_the_payload_it_was_given() -> None:
 
 def test_jobs_from_before_versioning_are_marked_legacy_and_refused(tmp_path: Path) -> None:
     path = tmp_path / "old.sqlite3"
+    path.touch(mode=0o600)  # owner-only, as the coordinator keeps it (secret-file-v1)
     with sqlite3.connect(path) as db:
         db.executescript("""
             CREATE TABLE jobs (job_id TEXT PRIMARY KEY, task_type TEXT NOT NULL,

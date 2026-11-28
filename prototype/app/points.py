@@ -26,7 +26,7 @@ NO_TABLE_RULE = "creator-chooses"
 MAX_POINTS = 1000
 DEFAULT_POINTS = 1  # used when there is no table and the request leaves the number out
 
-_ENTRY = re.compile(r"^([a-z0-9]+:[a-z0-9_-]+)=(\d{1,4})$")
+_ENTRY = re.compile(r"^([a-z0-9]+:[a-z0-9_-]+)=(\d{1,4})\Z")
 
 
 class PointsError(ValueError):

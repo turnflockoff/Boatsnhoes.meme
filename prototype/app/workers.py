@@ -27,10 +27,12 @@ import sys
 import time
 from pathlib import Path
 
+from . import ledger_clock, ledger_role, owners
 from .ledger import CoordinatorPaused, Ledger
 from .security import sha256_text
+from .screen import say
 
-OWNER_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+OWNER_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}\Z")
 MIN_TTL, MAX_TTL = 60, 7 * 86400
 
 
@@ -50,6 +52,8 @@ def issue_code(ledger: Ledger, owner: str, ttl_seconds: int, now: int) -> tuple[
     if not MIN_TTL <= ttl_seconds <= MAX_TTL:
         raise ValueError(f"ttl must be between {MIN_TTL} and {MAX_TTL} seconds")
     code = new_enrollment_code()
+    # Saved as `owners.canonical(owner)`; raises owners.OwnerLookalike (a ValueError) if it
+    # reads as a different existing owner (`owner-name-v1`).
     ledger.create_enrollment(sha256_text(code), owner, now, now + ttl_seconds)
     return code, now + ttl_seconds
 
@@ -70,8 +74,20 @@ def main(argv: list[str] | None = None) -> int:
     if not args.db.exists():
         print(f"database not found: {args.db}", file=sys.stderr)
         return 2
-    ledger = Ledger(args.db)
-    now = int(time.time())
+    try:
+        ledger = Ledger(args.db)
+    except ledger_role.NotLiveLedger as exc:  # `ledger-role-v1`: a backup, never written
+        print(str(exc), file=sys.stderr)
+        return 2
+    if args.cmd == "list":
+        now = int(time.time())  # read-only
+    else:
+        try:
+            # `ledger-clock-v1`: never earlier than the newest time already in the ledger.
+            now = ledger_clock.tool_now(ledger.latest_time())
+        except (ledger_clock.ClockBehindError, ValueError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
     if args.cmd == "enroll":
         try:
             code, expires_at = issue_code(ledger, args.owner, args.ttl, now)
@@ -83,7 +99,7 @@ def main(argv: list[str] | None = None) -> int:
                   "`python -m app.incident resume`", file=sys.stderr)
             return 3
         print(code)
-        print(f"owner={args.owner} expires_at={expires_at} (single use; share it privately)",
+        print(f"owner={owners.canonical(args.owner)} expires_at={expires_at} (single use; share it privately)",
               file=sys.stderr)
         return 0
     if args.cmd == "revoke":
@@ -96,7 +112,9 @@ def main(argv: list[str] | None = None) -> int:
     for w in ledger.list_workers():
         state = "revoked" if w["revoked_at"] is not None else (
             "active" if w["has_key"] else "no key (re-enroll)")
-        print(f"{w['worker_id']}\towner={w['owner'] or '-'}\t{state}")
+        # Names are checked on the way in since 0.5.52, but an older ledger can hold
+        # anything, so they are printed safely (`operator-screen-v1`).
+        print(f"{say(w['worker_id'])}\towner={say(w['owner'] or '-')}\t{state}")
     return 0
 
 

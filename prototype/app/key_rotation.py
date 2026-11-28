@@ -53,6 +53,7 @@ from typing import Any
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from . import secret_file
 from .signing import ManifestSigner, SigningKeyError, fingerprint, parse_public_key, \
     verify_manifest
 
@@ -235,11 +236,8 @@ def check_current_key(key_path: Path, current_public_key: str) -> list[dict[str,
 def _write_private_key(path: Path, key: Ed25519PrivateKey) -> None:
     pem = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
                             serialization.NoEncryption())
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "wb") as fh:
-        fh.write(pem)
-        fh.flush()
-        os.fsync(fh.fileno())
+    # Owner-only, never replacing a file or following a planted link (`secret-file-v1`).
+    secret_file.write_new(path, pem, "signing key", folder=False)
 
 
 def _write_history(path: Path, rotations: list[dict[str, Any]]) -> None:

@@ -64,9 +64,9 @@ MAX_COMPARE_BYTES = 4 * 1024 * 1024   # keep at most this much stdout to compare
 MAX_HASH_FILE_BYTES = 64 * 1024**3    # don't hash argument files bigger than this
 STOP_GRACE_SECONDS = 5.0
 REFUSED_PROGRAMS = {"sudo", "su", "doas", "pkexec", "runuser"}
-_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\Z")
 _SECRET_NAME = re.compile(r"TOKEN|SECRET|PASS|KEY|CREDENTIAL|AUTH|COOKIE", re.IGNORECASE)
-_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}\Z")
 
 
 class RunRefused(ValueError):

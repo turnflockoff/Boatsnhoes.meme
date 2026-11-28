@@ -41,6 +41,7 @@ from typing import Any, Callable
 
 from . import tasks
 from .ledger import SETTLEMENT, Ledger
+from .screen import say_lines
 
 REVIEW_VERSION = "review-queue-v1"
 STAGES = ("needs_review", "waiting", "decided_by_majority")
@@ -179,9 +180,12 @@ def review_queue(ledger: Ledger, now: int) -> dict[str, Any]:
 
 
 def _short(text: str | None, limit: int = 160) -> str:
+    """One line of at most `limit` characters. Answers come from rigs and inputs from the
+    submitter, so anything a terminal could act on (ESC codes, invisible marks) is shown as
+    `?` (`operator-screen-v1`); the JSON view and the API keep the exact text."""
     if text is None:
         return "(not available)"
-    one_line = " ".join(text.split())
+    one_line = "".join(ch if ch.isprintable() else "?" for ch in " ".join(text.split()))
     return one_line if len(one_line) <= limit else one_line[: limit - 1] + "…"
 
 
@@ -208,7 +212,7 @@ def render_text(queue: dict[str, Any], show_all: bool = False) -> str:
                          f"[agrees with: {agrees}]")
         lines.append(f"  next: {case['next_step']}")
     lines += ["", queue["note"]]
-    return "\n".join(lines) + "\n"
+    return say_lines(lines)
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -8,7 +8,6 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-import time
 from pathlib import Path
 
 import pytest
@@ -268,6 +267,7 @@ def test_consistency_check_flags_same_owner_audit(pinned, tmp_path: Path) -> Non
 
 def test_pre_auth_database_is_migrated_and_old_workers_must_enroll(tmp_path: Path) -> None:
     path = tmp_path / "db.sqlite3"
+    path.touch(mode=0o600)  # owner-only, as the coordinator keeps it (secret-file-v1)
     db = sqlite3.connect(path)
     db.executescript("CREATE TABLE workers (worker_id TEXT PRIMARY KEY, "
                      "capabilities TEXT NOT NULL, registered_at INTEGER NOT NULL);"
@@ -284,14 +284,15 @@ def test_pre_auth_database_is_migrated_and_old_workers_must_enroll(tmp_path: Pat
     assert claim(client, r.json()["worker_key"]).status_code == 200
 
 
-def test_operator_cli_enrolls_lists_and_revokes(tmp_path: Path, capsys) -> None:
+def test_operator_cli_enrolls_lists_and_revokes(tmp_path: Path, capsys, monkeypatch) -> None:
     path = tmp_path / "db.sqlite3"
     Ledger(path)
+    client, clock, _ = make(tmp_path)  # same database file
+    # The CLI reads the server clock; keep it on the app's clock (`ledger-clock-v1`).
+    monkeypatch.setattr(workers.time, "time", lambda: float(clock.t))
     assert workers.main(["--db", str(path), "enroll", "--owner", "alice"]) == 0
     code = capsys.readouterr().out.strip()
     assert code.startswith("bnhe_")
-    client, clock, _ = make(tmp_path)  # same database file
-    clock.t = time.time()  # the CLI uses the real clock
     key = register(client, "rig-1", code).json()["worker_key"]
     assert workers.main(["--db", str(path), "list"]) == 0
     listing = capsys.readouterr().out

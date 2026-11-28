@@ -75,9 +75,37 @@ class TaskExecutor:
         it. Never raises: it is also used on old rows whose payload may not validate today."""
         return payload
 
+    def run_limit_seconds(self, payload: str) -> int:
+        """`lease-fit-v1`: the longest an honest worker may spend on this job after claiming
+        it (checking files, running, stopping the program), not counting the network.
+        0 means the task is near-instant and the plain LEASE_SECONDS lease is enough.
+        Never raises: it is also used when a stored job is handed out."""
+        return 0
+
+
+# `lease-fit-v1`: a lease must outlast the job's own time limit. Before this, every lease was
+# LEASE_SECONDS (default 60) while an `llm:generate` job may run for up to 300 s, so an honest
+# run that took longer than the lease was thrown away, counted against the rig as a lease
+# timeout, and after MAX_ATTEMPTS rigs the job failed.
+LEASE_RULE = "lease-fit-v1"
+LEASE_GRACE_SECONDS = 30            # claim reply, signature check, submit and one retry
+MODEL_CHECK_SECONDS_PER_GIB = 30    # worker re-hashes the model file (~34 MB/s, a slow disk)
+
+
+def lease_needed(task_type: str, payload: str) -> int:
+    """Seconds a lease on this job must last: the task's run limit plus LEASE_GRACE_SECONDS,
+    or 0 for near-instant tasks (and unknown types). The coordinator leases for
+    max(LEASE_SECONDS, this), and refuses a new job whose ttl_seconds is shorter."""
+    executor = EXECUTORS.get(task_type)
+    limit = executor.run_limit_seconds(payload) if executor is not None else 0
+    return limit + LEASE_GRACE_SECONDS if limit > 0 else 0
+
 
 def _sha(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+    # "surrogatepass" changes nothing for real text; it only keeps a lone surrogate (which
+    # `llm-payload-v2` refuses in new jobs) from raising inside the fingerprint, which is
+    # documented as never raising.
+    return hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()
 
 
 class Sha256Task(TaskExecutor):
@@ -97,6 +125,42 @@ class Sha256Task(TaskExecutor):
         return Verdict(ok, "deterministic-recompute", "exact", "" if ok else "wrong answer")
 
 
+PAYLOAD_RULE = "llm-payload-v2"
+
+
+class _RepeatedKey(ValueError):
+    pass
+
+
+def _no_repeated_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """`json.loads` hook: a key written twice is refused. Python keeps the last copy, other
+    readers may keep the first, so `{"prompt": "a", "prompt": "b"}` could be one question
+    to the coordinator and another to whoever reads the job (same rule as `json_file`)."""
+    out: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in out:
+            raise _RepeatedKey(_short(key))
+        out[key] = value
+    return out
+
+
+def _short(text: str, limit: int = 40) -> str:
+    """A key named in an error message: printable ASCII only, cut to `limit`. The message
+    goes back to the submitter and into the operator's logs."""
+    clean = "".join(ch if 32 <= ord(ch) < 127 else "?" for ch in text)
+    return clean if len(clean) <= limit else clean[:limit] + "..."
+
+
+def is_text(value: str) -> bool:
+    """True if `value` can be written as UTF-8: no lone surrogates (U+D800-U+DFFF), which
+    JSON escapes can produce but no file, database or socket text can hold."""
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 @dataclass(frozen=True)
 class InferenceSpec:
     model_id: str
@@ -109,7 +173,8 @@ class InferenceSpec:
 class LlmGenerateTask(TaskExecutor):
     """Small text generation on a pinned GGUF model via llama.cpp.
 
-    Payload (JSON): {"model_id", "prompt", "max_tokens" (1-256), "seed", "timeout_s" (5-300)}.
+    Payload (JSON): {"model_id", "prompt", "max_tokens" (1-256), "seed", "timeout_s" (5-300)},
+    no other keys, each at most once, prompt valid text (`llm-payload-v2`).
     Greedy decoding (temperature 0) with a fixed seed, so honest re-runs on the same
     model + runtime should usually match; Phase 4 audits will rely on that.
     Worker config: LLAMA_CLI (path to llama-cli binary) and MODEL_DIR (folder of model files);
@@ -117,21 +182,43 @@ class LlmGenerateTask(TaskExecutor):
     """
     task_type = "llm:generate"
     MAX_OUTPUT_CHARS = 4000
+    MIN_TIMEOUT_S, DEFAULT_TIMEOUT_S, MAX_TIMEOUT_S = 5, 60, 300
 
     def __init__(self, registry: dict[str, model_registry.ModelEntry] | None = None):
         self._registry = registry
 
     @property
     def registry(self) -> dict[str, model_registry.ModelEntry]:
-        return self._registry if self._registry is not None else model_registry.load()
+        if self._registry is not None:
+            return self._registry
+        try:
+            return model_registry.load()
+        except model_registry.RegistryError as exc:
+            # A damaged registry refuses jobs with a reason instead of crashing (model-fetch-v1).
+            raise TaskError(f"model registry refused: {exc}") from None
+
+    # `llm-payload-v2`: the only keys a payload may have. Anything else used to be ignored
+    # without a word, so a typo (`"max_token": 200`) or a setting this task doesn't have
+    # (`"temperature": 0.8`) ran with the defaults while the job looked like it asked for more.
+    PAYLOAD_KEYS = ("model_id", "prompt", "max_tokens", "seed", "timeout_s")
 
     def validate(self, payload: str) -> InferenceSpec:
+        """Parse and check a payload (`llm-payload-v2`). Raises only TaskError, whatever the
+        payload: the worker runs this first, so anything else here would stop the worker."""
         try:
-            data = json.loads(payload)
-        except json.JSONDecodeError as exc:
-            raise TaskError("payload must be JSON") from exc
+            data = json.loads(payload, object_pairs_hook=_no_repeated_keys)
+        except _RepeatedKey as exc:
+            raise TaskError(f"payload has the key {exc.args[0]!r} twice") from None
+        except (ValueError, TypeError, RecursionError):
+            # JSONDecodeError is a ValueError; so is a 5,000-digit number. RecursionError: a
+            # payload nested thousands of brackets deep.
+            raise TaskError("payload must be JSON") from None
         if not isinstance(data, dict):
             raise TaskError("payload must be a JSON object")
+        unknown = sorted(set(data) - set(self.PAYLOAD_KEYS))
+        if unknown:
+            raise TaskError(f"payload has unknown key {_short(unknown[0])!r} "
+                            f"(allowed: {', '.join(self.PAYLOAD_KEYS)})")
         model_id = data.get("model_id")
         entry = self.registry.get(model_id) if isinstance(model_id, str) else None
         if entry is None:
@@ -141,9 +228,17 @@ class LlmGenerateTask(TaskExecutor):
         prompt = data.get("prompt")
         if not isinstance(prompt, str) or not 1 <= len(prompt) <= 2000:
             raise TaskError("prompt must be 1-2000 characters")
-        max_tokens, seed, timeout_s = data.get("max_tokens", 64), data.get("seed", 0), data.get("timeout_s", 60)
+        if not is_text(prompt):
+            # JSON's "\ud800" escape decodes to half of a character pair, which can't be
+            # written as UTF-8. The coordinator used to accept it and sign the job, and every
+            # worker that took it crashed writing the prompt file (UnicodeEncodeError).
+            raise TaskError("prompt must be valid text (it has half of a character pair, "
+                            "a \\ud800-\\udfff escape on its own)")
+        max_tokens, seed = data.get("max_tokens", 64), data.get("seed", 0)
+        timeout_s = data.get("timeout_s", self.DEFAULT_TIMEOUT_S)
         for name, value, low, high in (("max_tokens", max_tokens, 1, 256), ("seed", seed, 0, 2**31 - 1),
-                                       ("timeout_s", timeout_s, 5, 300)):
+                                       ("timeout_s", timeout_s, self.MIN_TIMEOUT_S,
+                                        self.MAX_TIMEOUT_S)):
             if not isinstance(value, int) or isinstance(value, bool) or not low <= value <= high:
                 raise TaskError(f"{name} must be an integer between {low} and {high}")
         return InferenceSpec(model_id, prompt, max_tokens, seed, timeout_s)
@@ -158,10 +253,36 @@ class LlmGenerateTask(TaskExecutor):
         without the model registry, so it works on any stored payload."""
         try:
             data = json.loads(payload)
-        except (json.JSONDecodeError, TypeError):
+        except (ValueError, TypeError, RecursionError):
             return payload
         prompt = data.get("prompt") if isinstance(data, dict) else None
         return prompt if isinstance(prompt, str) else payload
+
+    def run_limit_seconds(self, payload: str) -> int:
+        """`lease-fit-v1`: the job's own `timeout_s` (llama-cli is stopped after it) plus time
+        for the worker to re-hash the pinned model file before running it
+        (MODEL_CHECK_SECONDS_PER_GIB of its pinned size, rounded up). A payload that doesn't
+        parse gets the longest timeout, so a doubt makes the lease longer, never shorter."""
+        try:
+            data = json.loads(payload)
+        except (ValueError, TypeError, RecursionError):
+            data = None
+        if not isinstance(data, dict):
+            return self.MAX_TIMEOUT_S
+        timeout_s = data.get("timeout_s", self.DEFAULT_TIMEOUT_S)
+        if not isinstance(timeout_s, int) or isinstance(timeout_s, bool) \
+                or not self.MIN_TIMEOUT_S <= timeout_s <= self.MAX_TIMEOUT_S:
+            timeout_s = self.MAX_TIMEOUT_S
+        size = 0
+        model_id = data.get("model_id")
+        if isinstance(model_id, str):
+            try:
+                entry = self.registry.get(model_id)
+            except TaskError:  # a damaged registry: the job can't run anyway
+                entry = None
+            size = (entry.size_bytes or 0) if entry is not None else 0
+        check = -(-size * MODEL_CHECK_SECONDS_PER_GIB // 2**30)  # ceiling division
+        return timeout_s + check
 
     def _binary(self) -> str | None:
         configured = os.getenv("LLAMA_CLI")
@@ -177,7 +298,10 @@ class LlmGenerateTask(TaskExecutor):
             llm_runner.config_from_env()
         except llm_runner.RunError as exc:
             return False, str(exc)
-        pinned = [m for m in self.registry.values() if m.pinned]
+        try:
+            pinned = [m for m in self.registry.values() if m.pinned]
+        except TaskError as exc:
+            return False, str(exc)
         if not pinned:
             return False, "no pinned models in the registry"
         present = [m for m in pinned if self._model_path(m).is_file()]

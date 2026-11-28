@@ -52,8 +52,10 @@ from typing import Any
 import httpx
 
 from app import schemas
+from app.operator_client import OperatorClient, check_operator_url
 from app.security import sha256_text
 from app.signing import fingerprint, parse_public_key
+from app.worker_guard import JOB_ID_PATTERN, say
 
 REHEARSAL_VERSION = "bnh-rehearsal/1"
 TASK = "demo:sha256"
@@ -117,9 +119,9 @@ class Rehearsal:
         try:
             body = response.json()
             if isinstance(body, dict) and "detail" in body:
-                detail = str(body["detail"])[:200]
+                detail = say(str(body["detail"]))
         except ValueError:
-            detail = response.text[:200]
+            detail = say(response.text)
         return self.check(name, what, expected, response.status_code,
                           response.status_code == expected and extra_ok, detail)
 
@@ -128,8 +130,11 @@ class Rehearsal:
                                 json={"task_type": TASK, "payload": payload, "ttl_seconds": ttl})
         if response.status_code != 200:
             raise RehearsalAbort(f"could not queue a job ({response.status_code}: "
-                                 f"{response.text[:200]})")
+                                 f"{say(response.text)})")
         job = response.json()
+        if not (isinstance(job, dict) and isinstance(job.get("job_id"), str)
+                and JOB_ID_PATTERN.fullmatch(job["job_id"])):
+            raise RehearsalAbort("the coordinator queued a job but sent no usable job id")
         self.jobs[job["job_id"]] = job
         return str(job["job_id"])
 
@@ -168,7 +173,9 @@ class Rehearsal:
         return str(response.json().get("status")) if response.status_code == 200 else "?"
 
     def total_points(self) -> int:
-        return int(self.request("GET", "/v1/ledger").json()["total_simulated_points"])
+        # Operator view: since `ledger-pages-v1` the public totals are taken once per window.
+        return int(self.request("GET", "/v1/ledger", params={"limit": 1}, headers=self.op
+                                ).json()["total_simulated_points"])
 
     # ---- steps ----------------------------------------------------------------------
 
@@ -176,7 +183,7 @@ class Rehearsal:
         """Refuse to run where rehearsal workers could take someone's queued work."""
         # Operator view: the public job counts are batched (`public-counts-v1`) and could
         # still say 0 minutes after someone queued real work.
-        response = self.request("GET", "/v1/ledger", headers=self.op)
+        response = self.request("GET", "/v1/ledger", params={"limit": 1}, headers=self.op)
         if response.status_code in (401, 403):
             raise RehearsalAbort(f"the operator token was refused ({response.status_code}); "
                                  "check OPERATOR_TOKEN")
@@ -351,7 +358,9 @@ class Rehearsal:
                    "whose deadline has passed.", "refused (expired)", seen, "expired" in seen)
 
         # 9. The books still add up and nothing is left half done.
-        ledger = self.request("GET", "/v1/ledger").json()
+        # Operator view: since `ledger-pages-v1` the public one repeats the check taken at
+        # the start of the counts window, which could be from before this run.
+        ledger = self.request("GET", "/v1/ledger", params={"limit": 1}, headers=self.op).json()
         problems = ledger.get("consistency_problems", [])
         self.check("ledger_consistent", "The coordinator's own consistency checks find no "
                    "problems after all of the above.", [], problems, problems == [])
@@ -378,9 +387,17 @@ class Rehearsal:
             self.run_checks()
         except RehearsalAbort as exc:
             aborted = str(exc)
+        except httpx.HTTPError as exc:  # incl. a reply over the limits (`operator-client-v1`)
+            aborted = f"lost contact with the coordinator ({say(str(exc)) or type(exc).__name__})"
+        except (KeyError, TypeError, ValueError, AttributeError, IndexError) as exc:
+            aborted = f"the coordinator's reply had an unexpected shape ({type(exc).__name__})"
         finally:
             if self.keys:
-                self.cleanup()
+                try:
+                    self.cleanup()
+                except (httpx.HTTPError, ValueError) as exc:
+                    aborted = aborted or (f"lost contact while revoking the rehearsal workers "
+                                          f"({type(exc).__name__}); revoke them by hand")
         passed = sum(1 for c in self.checks if c["passed"])
         return {
             "rehearsal_version": REHEARSAL_VERSION,
@@ -444,10 +461,11 @@ def summary(report: dict[str, Any]) -> str:
     lines = [f"Rehearsal {report['run_id']}: {report['passed']} of {total} checks passed."]
     for c in report["checks"]:
         if not c["passed"]:
-            lines.append(f"  FAILED {c['name']}: expected {c['expected']!r}, got {c['got']!r}"
-                         + (f" ({c['detail']})" if c["detail"] else ""))
+            lines.append(f"  FAILED {c['name']}: expected {say(repr(c['expected']))}, "
+                         f"got {say(repr(c['got']))}"
+                         + (f" ({say(c['detail'])})" if c["detail"] else ""))
     if report["aborted"]:
-        lines.append(f"  STOPPED: {report['aborted']}")
+        lines.append(f"  STOPPED: {say(report['aborted'], 400)}")
     lines.append("This tests the coordinator's rules only; it says nothing about the GPUs.")
     return "\n".join(lines)
 
@@ -465,7 +483,11 @@ def main(argv: list[str] | None = None) -> int:
     where = parser.add_mutually_exclusive_group(required=True)
     where.add_argument("--local", action="store_true",
                        help="run against a throwaway in-process coordinator")
-    where.add_argument("--url", help="a running coordinator, e.g. http://127.0.0.1:8000")
+    where.add_argument("--url", help="a running coordinator: https://..., or "
+                       "http://127.0.0.1:8000 on this machine")
+    parser.add_argument("--allow-plain-http", action="store_true",
+                        help="allow http:// to another machine (a test lab you control); the "
+                             "operator token then travels unencrypted")
     parser.add_argument("--allow-writes", action="store_true",
                         help="needed with --url: the rehearsal enrolls workers and queues jobs")
     parser.add_argument("--out", type=Path, required=True, help="report file (never overwritten)")
@@ -488,7 +510,12 @@ def main(argv: list[str] | None = None) -> int:
             print("Refusing: set OPERATOR_TOKEN in the environment (not on the command line).",
                   file=sys.stderr)
             return 2
-        with httpx.Client(base_url=args.url, timeout=15) as client:
+        try:
+            check_operator_url(args.url, args.allow_plain_http)
+        except ValueError as exc:
+            print(f"Refusing: {exc}", file=sys.stderr)
+            return 2
+        with OperatorClient(args.url, allow_plain_http=args.allow_plain_http) as client:
             report = Rehearsal(client, token).run()
         report["coordinator"] = args.url
     report.setdefault("coordinator", "in-process (temporary database)")

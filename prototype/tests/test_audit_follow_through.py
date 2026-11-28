@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from app.config import get_settings
-from tests.auth_helpers import OP
+from tests.auth_helpers import OP, let_lease_run_out
 from tests.test_assignment import assigned, make, other
 from tests.test_audits import claim, llm_payload, pinned, run_llm_job, submit  # noqa: F401
 
@@ -44,7 +44,7 @@ def test_lease_that_runs_out_is_counted_once_not_twice(tmp_path: Path) -> None:
     original = run_llm_job(client, "wk-a", "The Salty Hoe")
     first = assigned(ledger, original)
     assert claim(client, first).status_code == 200
-    clock.t += 31  # took it, then went silent: lease runs out
+    let_lease_run_out(ledger, clock, first)  # took it, then went silent
     second = other(WS, "wk-a", first)
     assert claim(client, second).status_code == 200
     f = follow(client, first)
@@ -131,7 +131,7 @@ def test_old_lease_does_not_excuse_a_later_unclaimed_pick(tmp_path: Path) -> Non
     client, clock, ledger = make(tmp_path, ("wk-a", "wk-b"), assign=60)
     original = run_llm_job(client, "wk-a", "The Salty Hoe")
     assert claim(client, "wk-b").status_code == 200
-    clock.t += 31  # lease (30s) runs out
+    let_lease_run_out(ledger, clock, "wk-b")
     claim(client, "wk-a")  # re-assigned to wk-b, the only eligible worker
     assert assigned(ledger, original) == "wk-b"
     clock.t += 61  # and this time wk-b never shows up

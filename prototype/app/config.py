@@ -59,6 +59,11 @@ class Settings:
     rate_limit_per_minute: int = 240
     auth_failure_limit: int = 10
     auth_failure_window_seconds: int = 600
+    # `client-prefix-v1`: IPv6 clients are counted per block of this many bits (one home or
+    # server connection usually gets a /64; 128 = per full address), and the limiter keeps at
+    # most this many clients in memory (more share one "overflow" bucket).
+    ipv6_client_prefix: int = 64
+    rate_limit_max_clients: int = 50_000
     # app/client_address.py: reverse proxies whose X-Forwarded-For header is believed, so
     # limits apply to the real client. Empty = the header is ignored (the safe default).
     trusted_proxies: tuple[str, ...] = ()
@@ -84,6 +89,40 @@ class Settings:
     # for a re-check, so a rig could tell which of its results get re-checked. 0 = live
     # (old behaviour). The operator token always sees live counts.
     public_counts_interval_seconds: int = 900
+    # `input-limits-v1` (app/input_limits.py): largest request body accepted, in bytes.
+    # Bigger bodies get 413 before they are read. The largest honest body is ~150 KB.
+    max_body_bytes: int = 256 * 1024
+    # `ledger-clock-v1` (app/ledger_clock.py): refuse to start when the server clock is
+    # more than this many seconds behind the newest time already in the ledger (a clock
+    # reset to 1970/2000, or set back), instead of writing new work into closed periods.
+    clock_behind_limit_seconds: int = 300
+    # A server clock that moves this many seconds more (or less) than a steady clock between
+    # two readings counts as a step: logged and shown on the operator health page.
+    clock_step_warn_seconds: int = 60
+    # `storage-full-v1` (app/storage.py): under this much free space (MB) on the ledger's
+    # disk the coordinator stops taking NEW work (jobs, hidden tests, enrollment codes), so
+    # the room left goes to results from rigs that already did the work. 0 = never refuse.
+    disk_reserve_mb: int = 100
+    # Under this much free space (MB) the operator health page warns. 0 = no early warning.
+    disk_warn_mb: int = 1000
+    # `recheck-release-v1` (threat model #5, app/ledger.py release_due): a new re-check
+    # (audit or tie-breaker) is held for a random whole number of seconds between these two
+    # before anyone can see or take it, so it isn't made in the second the result it
+    # re-checks was accepted. Max 0 = handed out at once (the old behaviour). Settings built
+    # in code (tests, the in-process rehearsal) start at 0; the coordinator started
+    # normally (get_settings) holds re-checks 60-600 s unless RECHECK_DELAY_* say otherwise.
+    recheck_delay_min_seconds: int = 0
+    recheck_delay_max_seconds: int = 0
+    # How often the coordinator's release timer looks for held re-checks that are due
+    # (seconds). 0 = no timer (tests call app.state.release_held themselves).
+    recheck_release_tick_seconds: float = 0.0
+
+    def __post_init__(self) -> None:
+        if not 0 <= self.recheck_delay_min_seconds <= self.recheck_delay_max_seconds:
+            raise ValueError("RECHECK_DELAY_MIN_SECONDS must be between 0 and "
+                             "RECHECK_DELAY_MAX_SECONDS")
+        if self.recheck_release_tick_seconds < 0:
+            raise ValueError("RECHECK_RELEASE_TICK_SECONDS can't be negative")
 
     def resolved_signing_key_path(self) -> Path:
         return self.signing_key_path or self.database_path.parent / "coordinator-signing.key"
@@ -188,6 +227,8 @@ def get_settings() -> Settings:
             raise ValueError("SUBMITTER_TOKEN must be at least 24 characters")
         if submitter_token == operator_token:
             raise ValueError("SUBMITTER_TOKEN must be different from OPERATOR_TOKEN")
+    # `recheck-release-v1`: RECHECK_DELAY_MAX_SECONDS=0 alone turns the hold off.
+    recheck_max = _int_env("RECHECK_DELAY_MAX_SECONDS", 600, 0, 86400)
     return Settings(
         database_path=db,
         signing_key_path=default_signing_key_path(),
@@ -208,6 +249,8 @@ def get_settings() -> Settings:
         rate_limit_per_minute=_int_env("RATE_LIMIT_PER_MINUTE", 240, 0, 100000),
         auth_failure_limit=_int_env("AUTH_FAILURE_LIMIT", 10, 0, 10000),
         auth_failure_window_seconds=_int_env("AUTH_FAILURE_WINDOW_SECONDS", 600, 10, 86400),
+        ipv6_client_prefix=_int_env("IPV6_CLIENT_PREFIX", 64, 32, 128),
+        rate_limit_max_clients=_int_env("RATE_LIMIT_MAX_CLIENTS", 50_000, 1000, 10_000_000),
         trusted_proxies=tuple(str(n) for n in
                               parse_trusted_proxies(os.getenv("TRUSTED_PROXIES"))),
         points_table=parse_points_table(os.getenv("POINTS_TABLE"), EXECUTORS),
@@ -217,4 +260,13 @@ def get_settings() -> Settings:
                                              30 * 86400),
         public_counts_interval_seconds=_int_env("PUBLIC_COUNTS_INTERVAL_SECONDS", 900, 0,
                                                 86400),
+        max_body_bytes=_int_env("MAX_BODY_BYTES", 256 * 1024, 16 * 1024, 4 * 1024 * 1024),
+        clock_behind_limit_seconds=_int_env("CLOCK_BEHIND_LIMIT_SECONDS", 300, 0, 7 * 86400),
+        clock_step_warn_seconds=_int_env("CLOCK_STEP_WARN_SECONDS", 60, 1, 86400),
+        disk_reserve_mb=_int_env("DISK_RESERVE_MB", 100, 0, 1024 * 1024),
+        disk_warn_mb=_int_env("DISK_WARN_MB", 1000, 0, 1024 * 1024),
+        recheck_delay_min_seconds=_int_env("RECHECK_DELAY_MIN_SECONDS",
+                                           min(60, recheck_max), 0, 86400),
+        recheck_delay_max_seconds=recheck_max,
+        recheck_release_tick_seconds=float(_int_env("RECHECK_RELEASE_TICK_SECONDS", 1, 1, 60)),
     )

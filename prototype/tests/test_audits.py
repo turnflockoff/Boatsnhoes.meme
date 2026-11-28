@@ -219,6 +219,7 @@ def test_passed_challenge_counts_as_confirmed(tmp_path: Path) -> None:
 
 def test_phase2_database_is_migrated(tmp_path: Path) -> None:
     path = tmp_path / "old.sqlite3"
+    path.touch(mode=0o600)  # owner-only, as the coordinator keeps it (secret-file-v1)
     db = sqlite3.connect(path)
     db.executescript("""
         CREATE TABLE jobs (job_id TEXT PRIMARY KEY, task_type TEXT NOT NULL, payload TEXT NOT NULL,

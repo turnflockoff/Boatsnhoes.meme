@@ -162,7 +162,8 @@ def test_cli_pin_and_list(registry: Path, tmp_path: Path,
                           capsys: pytest.CaptureFixture[str]) -> None:
     f = tmp_path / "tiny.gguf"
     f.write_bytes(b"abc")
-    assert model_registry.main(["pin", MODEL_ID, str(f)]) == 0
+    # Since model-fetch-v1 the CLI pin needs the published hash (or an explicit opt-out).
+    assert model_registry.main(["pin", MODEL_ID, str(f), "--expect-sha256", sha("abc")]) == 0
     assert model_registry.main(["verify", MODEL_ID, str(f)]) == 0
     model_registry.main(["list"])
     assert "PINNED" in capsys.readouterr().out
@@ -170,6 +171,7 @@ def test_cli_pin_and_list(registry: Path, tmp_path: Path,
 
 def test_phase1_database_is_migrated_in_place(tmp_path: Path) -> None:
     db_path = tmp_path / "old.sqlite3"
+    db_path.touch(mode=0o600)  # owner-only, as the coordinator keeps it (secret-file-v1)
     with sqlite3.connect(db_path) as db:
         db.execute("CREATE TABLE submissions (job_id TEXT PRIMARY KEY, worker_id TEXT NOT NULL, "
                    "result_hash TEXT NOT NULL, reward_points INTEGER NOT NULL, "

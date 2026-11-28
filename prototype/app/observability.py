@@ -45,8 +45,8 @@ _STANDARD = frozenset(vars(logging.makeLogRecord({}))) | {"message", "asctime", 
 LEVELS = {"debug": logging.DEBUG, "info": logging.INFO, "warning": logging.WARNING,
           "error": logging.ERROR}
 
-_REQUEST_ID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
-_PLAIN_TEXT = re.compile(r"^[A-Za-z0-9._:/@+-]+$")
+_REQUEST_ID = re.compile(r"^[A-Za-z0-9._-]{1,64}\Z")
+_PLAIN_TEXT = re.compile(r"^[A-Za-z0-9._:/@+-]+\Z")
 
 
 def safe_request_id(value: str | None) -> str | None:

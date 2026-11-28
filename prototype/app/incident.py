@@ -40,8 +40,10 @@ import time
 from pathlib import Path
 from typing import Any
 
+from . import ledger_clock, ledger_role
 from .config import _int_env
 from .ledger import PAUSE_VERSION, Ledger
+from .screen import say_lines
 
 DEFAULT_DB = Path("./data/prototype.sqlite3")
 
@@ -66,7 +68,7 @@ def _render(state: dict[str, Any]) -> str:
     past = [h for h in state["history"] if h["event"] == "coordinator_resumed"]
     if past:
         lines.append(f"Past pauses: {len(past)}; last resumed at {past[-1]['at']}.")
-    return "\n".join(lines) + "\n"
+    return say_lines(lines)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -103,7 +105,17 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    ledger = Ledger(args.db, assign_seconds=assign_seconds)
+    try:
+        ledger = Ledger(args.db, assign_seconds=assign_seconds)
+    except ledger_role.NotLiveLedger as exc:  # `ledger-role-v1`: pausing a backup does nothing
+        print(str(exc), file=sys.stderr)
+        return 2
+    try:
+        # `ledger-clock-v1`: never earlier than the newest time already in the ledger.
+        now = ledger_clock.tool_now(ledger.latest_time())
+    except (ledger_clock.ClockBehindError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     try:
         if args.cmd == "pause":
             newly, since = ledger.pause(now, args.reason, by="cli")

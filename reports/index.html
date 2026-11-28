@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Public Logbook — Boats n Hoes ($BNH)</title>
+<meta name="description" content="Signed points reports and redacted ledger copies from the Boats n Hoes test network, posted here and on GitHub so anyone can check the numbers. Simulated points only.">
+<meta name="theme-color" content="#090705">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+<link rel="canonical" href="https://boatsnhoes.meme/reports/">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://boatsnhoes.meme/reports/">
+<meta property="og:title" content="The public logbook — Boats n Hoes">
+<meta property="og:description" content="Every closed test period: a signed points report and the redacted ledger it came from. Check the numbers yourself.">
+<meta property="og:image" content="https://boatsnhoes.meme/assets/og-home.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://boatsnhoes.meme/assets/og-home.png">
+<link rel="stylesheet" href="/assets/site.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="nav">
+  <a class="brand" href="/" aria-label="Boats n Hoes home"><img src="/assets/mark-orange.svg" alt="" width="34" height="34"><span>BOATS <b>N</b> HOES</span></a>
+  <button class="menu" id="menubtn" type="button" aria-expanded="false" aria-controls="navlinks">Menu</button>
+  <nav class="links" id="navlinks" aria-label="Main">
+    <a href="#periods">Published periods</a><a href="#verify">Check it yourself</a><a href="#faq">FAQ</a><a href="/">← Home</a>
+  </nav>
+</header>
+
+<main id="main">
+<section class="c-hero wrap">
+  <span class="badge">Public records · test network</span>
+  <h1 style="margin-top:18px">The <span>logbook.</span></h1>
+  <p class="tag">After each test period closes, we post a signed points report and a redacted copy of the ledger it came from, here and on GitHub. You don't have to trust us: re-run the numbers yourself.</p>
+  <div class="callout" style="max-width:640px;margin:24px auto 0;text-align:left"><b>Simulated points only.</b> No coin exists. Points are bookkeeping from a test network, not tokens, not money, and not a promise of either.</div>
+</section>
+
+<section id="periods">
+  <div class="wrap">
+    <div class="kicker">Published periods</div>
+    <h2>What's been posted.</h2>
+    <p class="lead" id="keyline">Coordinator signing key: not published yet.</p>
+    <div class="ledgerlist" id="periodlist" aria-live="polite" style="margin-top:24px">
+      <div class="fact"><span class="tagline">Nothing yet</span><h3>No periods published.</h3><p>The first one appears after test rigs start running real jobs and the period has been closed for 7 days. Every file also lives in the <a href="https://github.com/turnflockoff/Boatsnhoes.meme/tree/main/reports">reports folder on GitHub</a>.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="how" style="padding-top:0">
+  <div class="wrap">
+    <div class="facts">
+      <div class="fact"><span class="tagline">1 · Who says so</span><h3>A signed report</h3><p>Points per test rig for one period, signed with the coordinator's key. Change one number and the signature stops matching.</p></div>
+      <div class="fact"><span class="tagline">2 · The receipts</span><h3>A redacted ledger copy</h3><p>Every job, check and result behind the report, with keys, prompts, answers and real names removed. Re-run the report on it and you get the same file.</p></div>
+      <div class="fact"><span class="tagline">3 · No quiet edits</span><h3>Never replaced</h3><p>Old periods stay up forever, and each new copy must keep the old history unchanged. GitHub also shows every change ever made to this folder.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="verify">
+  <div class="wrap">
+    <div class="kicker">Check it yourself</div>
+    <h2>Five minutes, no trust needed.</h2>
+    <p class="lead">You need git and Python 3.11+. Get the coordinator's public key from more than one place (this page, the GitHub folder, a project post) and make sure they all match.</p>
+    <div class="cmds" style="margin-top:24px">
+      <div class="cmd"><div><b>1 · Get the files and tools</b><code>git clone https://github.com/turnflockoff/Boatsnhoes.meme &amp;&amp; cd Boatsnhoes.meme/prototype &amp;&amp; pip install -r requirements.txt</code></div><button class="copy" type="button">Copy</button></div>
+      <div class="cmd"><div><b>2 · Check everything at once</b><code>python -m app.publish_report check --public-key &lt;coordinator key&gt;</code></div><button class="copy" type="button">Copy</button></div>
+      <div class="cmd"><div><b>Or one period by hand: file hashes</b><code>(cd ../reports/&lt;period&gt; &amp;&amp; sha256sum -c SHA256SUMS)</code></div><button class="copy" type="button">Copy</button></div>
+      <div class="cmd"><div><b>Signature and numbers</b><code>python -m app.rewards verify ../reports/&lt;period&gt;/report.json --db ../reports/&lt;period&gt;/ledger-copy.sqlite3 --public-key &lt;coordinator key&gt;</code></div><button class="copy" type="button">Copy</button></div>
+      <div class="cmd"><div><b>History unchanged between two periods</b><code>python -m app.ledger_copy compare ../reports/&lt;older&gt;/ledger-copy.sqlite3 ../reports/&lt;newer&gt;/ledger-copy.sqlite3</code></div><button class="copy" type="button">Copy</button></div>
+    </div>
+    <p class="fine" style="margin-top:14px">These only read the files. Nothing connects to the network, and no wallet or account is involved.</p>
+  </div>
+</section>
+
+<section id="faq" style="padding-top:0">
+  <div class="wrap">
+    <h2>Straight answers.</h2>
+    <div class="faq">
+      <details><summary>Are these points worth anything?</summary><p>No. They're simulated bookkeeping from a test network that checks whether old GPUs do honest work. There's no coin, no payout, and no promise one will exist.</p></details>
+      <details><summary>Why wait 7 days after a period closes?</summary><p>A ledger copy shows which past jobs were hidden test questions. Posting it late means a rig can't use that to learn which of its jobs are tests while they're still fresh. Those test questions are also retired for good.</p></details>
+      <details><summary>What's removed from the ledger copy?</summary><p>Worker keys, sign-up codes, every prompt and answer, the expected answers of hidden tests, and real owner names (replaced with owner-1, owner-2 and so on). What stays is what you need to re-check the math: who did which job, when, how it was checked, and the points.</p></details>
+      <details><summary>Why post on both the site and GitHub?</summary><p>They're the same files. The site makes them easy to find; GitHub keeps a public history of every change, so a file edited after it was posted would show up there.</p></details>
+      <details><summary>What does checking actually prove?</summary><p>That the coordinator issued the report, that its numbers come from the posted ledger, and that later copies didn't rewrite earlier history. It can't prove the coordinator recorded everything honestly in the first place. The project's threat model on GitHub lists what's still open.</p></details>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p class="footlinks"><a href="/">Home</a><a href="/mine">Mine</a><a href="/tokenomics">Tokenomics</a><a href="/litepaper">Litepaper</a><a href="/meme-lab">Meme Lab</a><a href="/casino">Casino</a><a href="/contribute">Contribute a GPU</a><a href="/reports/">Public logbook</a><a href="/stay-safe">Stay safe</a><a href="https://github.com/turnflockoff/Boatsnhoes.meme">GitHub</a></p>
+    <p>Draft project. Not an investment, and nothing here is financial advice.</p>
+  </div>
+</footer>
+<script src="/assets/reports.js" defer></script>
+</body>
+</html>

@@ -17,7 +17,7 @@ from app.config import Settings
 from app.ledger import Ledger, parse_target
 from app.ledger_copy import export_copy
 from app.main import create_app
-from tests.auth_helpers import FirstPickRng, WorkerClient, enroll
+from tests.auth_helpers import FirstPickRng, WorkerClient, enroll, let_lease_run_out
 from tests.test_audits import (
     OP,
     Clock,
@@ -115,7 +115,7 @@ def test_named_rig_keeps_its_test_while_offline_and_nobody_else_gets_it(tmp_path
     names = [e["event"] for e in ledger.events(job_id)]
     assert names.count("test_assigned") == 1 and "test_assignment_expired" not in names
     assert claim(client, "wk-b").json()["job_id"] == job_id  # it comes back: still its test
-    clock.t += 31  # and lets the lease run out: it goes back to wk-b, not to anyone else
+    let_lease_run_out(ledger, clock, "wk-b")  # it goes back to wk-b, not to anyone else
     assert claim(client, "wk-a").status_code == 404
     assert claim(client, "wk-b").json()["job_id"] == job_id
 

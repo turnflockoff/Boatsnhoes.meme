@@ -49,15 +49,19 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import sys
 import time
 from pathlib import Path
 from typing import Any
 
+from . import json_file, ledger_clock
 from .audit_policy import STRIKE_STATUSES
 from .ledger import SETTLEMENT, Ledger
 from .security import canonical_json, sha256_text
+from .json_file import MAX_REPORT_BYTES, UnsafeJSONError
 from .signing import ManifestSigner, SigningKeyError, fingerprint, parse_public_key, verify_manifest
+from .worker_guard import say
 
 REPORT_TYPE = "bnh-simulated-reward-report"
 NOTICE = ("Simulated off-chain points only. Not tokens, not money, and not a promise of "
@@ -184,10 +188,11 @@ def build_report(ledger: Ledger, since: int, until: int,
 def signed_fields(report: dict[str, Any]) -> dict[str, Any]:
     """The exact message the coordinator signs. `report_sha256` covers the whole body;
     `purpose` keeps a report signature from ever being valid as a job-manifest signature."""
+    scoring = report.get("scoring")
     return {"purpose": SIGNATURE_PURPOSE,
             "report_type": report.get("report_type"),
             "report_sha256": report.get("report_sha256"),
-            "scoring_version": (report.get("scoring") or {}).get("version"),
+            "scoring_version": scoring.get("version") if isinstance(scoring, dict) else None,
             "period": report.get("period")}
 
 
@@ -215,8 +220,13 @@ def sign_report(report: dict[str, Any], signer: ManifestSigner, now: int) -> dic
 def check_signature(report: dict[str, Any], trusted_public_key: str | None = None) -> list[str]:
     """Offline check, no database: was this report signed, unedited, by the trusted key?
     Without `trusted_public_key` it only checks the report against the key it names, which
-    proves nothing until a person compares that key's fingerprint with the coordinator's."""
-    if report.get("report_type") != REPORT_TYPE:
+    proves nothing until a person compares that key's fingerprint with the coordinator's.
+
+    The signature block's `fingerprint` field is not signed (it is only a label), so it must
+    match the key the block names, or a report signed by anyone could show the
+    coordinator's fingerprint (`json-file-v1`). Print `fingerprint(public_key)`, never the
+    field itself."""
+    if not isinstance(report, dict) or report.get("report_type") != REPORT_TYPE:
         return ["not a reward report"]
     sig = report.get("signature")
     if not isinstance(sig, dict):
@@ -224,11 +234,16 @@ def check_signature(report: dict[str, Any], trusted_public_key: str | None = Non
     problems = []
     if report.get("report_sha256") != report_hash(report):
         problems.append("report_sha256 does not match the report body (file was edited)")
-    named = str(sig.get("public_key", ""))
+    named = sig.get("public_key")
     try:
+        if not isinstance(named, str):
+            raise ValueError("not a string")
         parse_public_key(named)
     except ValueError:
         return problems + ["signature names an invalid public key"]
+    if sig.get("fingerprint") != fingerprint(named):
+        problems.append("the signature's fingerprint label doesn't belong to the key that "
+                        "signed it (edited to look like another key)")
     if trusted_public_key is not None:
         trusted = trusted_public_key.strip().lower()
         try:
@@ -249,7 +264,7 @@ def verify_report(report: dict[str, Any], ledger: Ledger,
     """Return a list of problems; empty means the report matches the ledger exactly.
     With `trusted_public_key`, the report must also carry a valid signature by that key."""
     problems = []
-    if report.get("report_type") != REPORT_TYPE:
+    if not isinstance(report, dict) or report.get("report_type") != REPORT_TYPE:
         return ["not a reward report"]
     if report.get("report_sha256") != report_hash(report):
         problems.append("report_sha256 does not match the report body (file was edited)")
@@ -260,15 +275,18 @@ def verify_report(report: dict[str, Any], ledger: Ledger,
         period = report["period"]
         fresh = build_report(ledger, int(period["since"]), int(period["until"]),
                              report["scoring"]["version"])
-    except (KeyError, TypeError, ValueError) as exc:
-        return problems + [f"cannot rebuild report: {exc}"]
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        return problems + [f"cannot rebuild report: {say(type(exc).__name__)} "
+                           f"({say(str(exc), 80)})"]
     if fresh["report_sha256"] != report.get("report_sha256"):
         problems.append("ledger gives a different report for this period")
-        old = {e["job_id"]: e for e in report.get("entries", [])}
+        entries = report.get("entries")
+        old = {str(e.get("job_id")): e for e in entries if isinstance(e, dict)} \
+            if isinstance(entries, list) else {}
         new = {e["job_id"]: e for e in fresh["entries"]}
         for job_id in sorted(old.keys() | new.keys()):
             if old.get(job_id) != new.get(job_id):
-                problems.append(f"entry differs: {job_id}")
+                problems.append(f"entry differs: {say(job_id, 80)}")
     return problems
 
 
@@ -303,8 +321,24 @@ def main(argv: list[str] | None = None) -> int:
                      help="coordinator public key you trust (default: BNH_COORDINATOR_KEY)")
     args = parser.parse_args(argv)
 
+    report: Any = None
+    if args.cmd == "verify":
+        # A report to verify usually came from someone else: read it with the limits in
+        # app/json_file.py (`json-file-v1`) and print only what we computed ourselves.
+        try:
+            report = json_file.load(args.report, "report", max_bytes=MAX_REPORT_BYTES)
+        except FileNotFoundError:
+            print(f"report not found: {say(str(args.report))}", file=sys.stderr)
+            return 2
+        except UnsafeJSONError as exc:
+            print(f"refusing to read it: {exc}", file=sys.stderr)
+            return 2
+        if not isinstance(report, dict) or report.get("report_type") != REPORT_TYPE:
+            print("not a reward report")
+            print("MISMATCH")
+            return 1
+
     if args.cmd == "verify" and args.no_db:
-        report = json.loads(args.report.read_text())
         trusted = _trusted_key(args.public_key)
         problems = check_signature(report, trusted)
         for p in problems:
@@ -312,7 +346,7 @@ def main(argv: list[str] | None = None) -> int:
         if problems:
             print("MISMATCH")
             return 1
-        print(f"signed by {report['signature']['fingerprint']}")
+        print(f"signed by {fingerprint(report['signature']['public_key'])}")
         if trusted is None:
             print("Compare that fingerprint with the coordinator's (python -m app.signing); "
                   "without a trusted key, anyone could have signed this.")
@@ -323,10 +357,37 @@ def main(argv: list[str] | None = None) -> int:
         print(f"database not found: {args.db}", file=sys.stderr)
         return 2
     # A shared ledger copy is opened read-only so checking it never changes its sha256.
+    # Someone else's copy is vetted first (app/copy_guard.py, `copy-open-v1`).
+    from . import ledger_role
     from .ledger_copy import copy_info
-    ledger = Ledger(args.db, read_only=copy_info(args.db) is not None)
+    try:
+        is_copy = copy_info(args.db) is not None
+        # `ledger-role-v1`: a backup (or a ledger a restore moved aside) is only read,
+        # never written: a signature recorded there would never reach the coordinator.
+        role = ledger_role.of_file(args.db)
+        not_live = role not in (None, ledger_role.LIVE)
+        if not_live and args.cmd == "report" and args.sign:
+            raise ledger_role.NotLiveLedger(role, str(args.db))
+        if not_live and not ledger_role.is_ours(role):
+            raise ledger_role.NotLiveLedger(role, str(args.db))
+        ledger = Ledger(args.db, untrusted=is_copy, read_only=not_live)
+    except sqlite3.DatabaseError as exc:
+        print(f"refusing to read {args.db}: {exc}", file=sys.stderr)
+        return 2
+    except ledger_role.NotLiveLedger as exc:
+        print(f"refusing to sign: {exc}" if args.cmd == "report" and args.sign
+              else f"refusing to read: {exc}", file=sys.stderr)
+        return 2
     if args.cmd == "report":
         now = int(time.time())
+        if args.sign and not is_copy:
+            try:
+                # `ledger-clock-v1`: the signature is recorded in the ledger below, never
+                # with a time earlier than one already there.
+                now = ledger_clock.tool_now(ledger.latest_time())
+            except (ledger_clock.ClockBehindError, ValueError) as exc:
+                print(str(exc), file=sys.stderr)
+                return 2
         if args.until is not None:
             until = args.until
         else:
@@ -342,6 +403,9 @@ def main(argv: list[str] | None = None) -> int:
                     raise SigningKeyError(f"coordinator key file not found: {key_path}")
                 signer = ManifestSigner.load_or_create(key_path)
                 report = sign_report(report, signer, now)
+                if not is_copy:  # the signed period's end becomes a recorded time
+                    ledger.record_signed_report(now, args.since, until,
+                                                report["report_sha256"])
         except (ReportError, SigningKeyError, ValueError) as exc:
             print(str(exc), file=sys.stderr)
             return 2
@@ -353,14 +417,13 @@ def main(argv: list[str] | None = None) -> int:
         else:
             sys.stdout.write(text)
         return 0 if report["checks"]["ok"] else 1
-    report = json.loads(args.report.read_text())
     # An explicit --public-key demands a signature; the env key only applies to signed files.
     trusted = args.public_key or (_trusted_key(None) if "signature" in report else None)
     problems = verify_report(report, ledger, trusted)
     for p in problems:
         print(p)
     if not problems and isinstance(report.get("signature"), dict):
-        print(f"signed by {report['signature']['fingerprint']}")
+        print(f"signed by {fingerprint(report['signature']['public_key'])}")
     print("OK: report matches the ledger" if not problems else "MISMATCH")
     return 0 if not problems else 1
 

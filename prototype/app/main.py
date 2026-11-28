@@ -4,19 +4,28 @@ import hmac
 import json
 import logging
 import random
+import re
+import sqlite3
+import threading
 import time
 import uuid
+from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, Callable
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from .config import Settings, get_settings
-from . import (audit_policy, client_address, key_rotation, observability, points,
-               public_counts, rate_limit, review, rewards, schemas, tasks, workers)
-from .ledger import PAUSE_VERSION, CoordinatorPaused, HiddenTestRevealed, Ledger
+from . import (audit_policy, client_address, input_limits, key_rotation, observability, owners,
+               points, public_counts, rate_limit, review, rewards, schemas, storage, tasks, vouches,
+               workers)
+from .ledger import (MAX_JOB_EVENTS, MAX_PAGE, PAUSE_VERSION, PUBLIC_EVENTS_RULE,
+                     RELEASE_OVERDUE_SECONDS, CoordinatorPaused, HiddenTestRevealed, Ledger)
 from .models import (ChallengeCreate, EnrollmentCreate, JobCreate, JobEnvelope, PauseRequest,
                      ResultSubmission, WorkerRegistration)
+from .ledger_clock import LedgerClock, default_steady
 from .security import sha256_text
 from .signing import ManifestSigner, SigningKeyError, fingerprint, verify_manifest
 
@@ -33,10 +42,34 @@ PRIVATE_EVENTS = {"audit_scheduled", "audit_match", "audit_mismatch", "audit_not
                   "tiebreak_majority", "tiebreak_unresolved", "tiebreak_not_run",
                   "tiebreak_held_for_review",
                   "auditor_assigned", "auditor_unassigned", "audit_assignment_expired",
-                  "test_assigned", "test_unassigned", "test_assignment_expired"}
+                  "test_assigned", "test_unassigned", "test_assignment_expired",
+                  # `recheck-release-v1`: a re-check exists and is waiting to come out.
+                  "recheck_held"}
+
+# `refusal-log-v1`: operator health warns about a rig that has repeated refused
+# submissions this many times since start. One or two repeats are a worker retrying after a
+# dropped reply; hundreds are a broken loop or someone probing.
+REFUSAL_REPEAT_WARN = 100
+REFUSAL_LOG_RULE = "refusal-log-v1"
 
 # How long a worker is asked to wait while the coordinator is paused (`pause-v1`).
 PAUSED_RETRY_AFTER = 60
+
+
+# Headers that carry a token a person chose or typed (24+ characters), so worth guessing.
+# Worker keys and enrollment codes are 256-bit random values and don't take guess slots.
+GUESSABLE_HEADERS = ("x-operator-token", "x-submitter-token")
+
+LIMITED_DETAIL = {
+    "locked_out": "too many failed logins from this address; try again later",
+    "too_many_at_once": "too many login attempts at once from this address; try again "
+                        "in a moment",
+}
+
+
+def carries_guessable_token(request: Request) -> bool:
+    """True if the request sends an operator or submitter token (even an empty one)."""
+    return any(name in request.headers for name in GUESSABLE_HEADERS)
 
 
 class AuthRefused(HTTPException):
@@ -46,14 +79,28 @@ class AuthRefused(HTTPException):
     HTTPException and isn't counted."""
 
 
+# `ledger-pages-v1`: GET /v1/ledger pages. A cursor is "<accepted_at>:<job_id>", exactly as
+# the previous reply's `next_after` gave it.
+LEDGER_PAGES_RULE = "ledger-pages-v1"
+DEFAULT_PAGE = 100
+LEDGER_CURSOR = re.compile(r"(\d{1,16}):([A-Za-z0-9_-]{1,80})")
+
+
 def create_app(settings: Settings | None = None,
                clock: Callable[[], float] = time.time,
                rng: random.Random | None = None,
-               limiter_clock: Callable[[], float] = time.monotonic) -> FastAPI:
+               limiter_clock: Callable[[], float] = time.monotonic,
+               steady_clock: Callable[[], float] | None = None,
+               disk_free: Callable[[Path], int | None] = storage.free_bytes) -> FastAPI:
     """Build the coordinator. `clock` and `rng` are injectable so tests are deterministic.
+    `clock` is the server clock; the coordinator never writes a time earlier than one it
+    already wrote and refuses to start far behind the ledger (`ledger-clock-v1`,
+    app/ledger_clock.py). `steady_clock` (default: time.monotonic for the real clock, the
+    injected clock itself in tests) is only used to notice clock steps.
     The default `rng` uses the OS's secure randomness, so workers can't predict audits.
     `limiter_clock` drives the request limits (app/rate_limit.py), which measure real
-    elapsed time rather than the coordinator's job clock."""
+    elapsed time rather than the coordinator's job clock. `disk_free` reads the free space
+    on the ledger's disk (`storage-full-v1`, app/storage.py); tests pass a fake."""
     rng = rng or random.SystemRandom()
     settings = settings or get_settings()
     if settings.points_table and dict(settings.points_table).keys() != tasks.EXECUTORS.keys():
@@ -85,16 +132,68 @@ def create_app(settings: Settings | None = None,
                     auditor_pick=settings.auditor_pick,
                     # `tiebreak-trust-v1`: whether a tie-breaker's majority needs trusted rigs.
                     tiebreak_decides=settings.tiebreak_decides)
-    app = FastAPI(title="Boats N Hoes Useful-Compute MVP", version="0.5.0")
+    # `storage-full-v1`: refuse new work under DISK_RESERVE_MB, warn under DISK_WARN_MB.
+    disk = storage.StorageGuard(settings.database_path, settings.disk_reserve_mb,
+                                settings.disk_warn_mb, disk_free)
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> Any:
+        """`recheck-release-v1`: while the coordinator runs, a small timer thread releases
+        held re-checks at their own (random) second, not at the moment some rig happens to
+        call: a release inside a rig's request would share that request's second with its
+        lease or accepted result, a new tell. Errors are logged and retried next tick."""
+        stop = threading.Event()
+        tick = settings.recheck_release_tick_seconds
+
+        def run() -> None:
+            while not stop.wait(tick):
+                try:
+                    app.state.release_held()
+                except Exception as exc:  # noqa: BLE001 - keep the timer alive
+                    log.error("re-check release failed",
+                              extra={"error_type": type(exc).__name__})
+        thread = None
+        if tick > 0:
+            thread = threading.Thread(target=run, name="bnh-recheck-release", daemon=True)
+            thread.start()
+        try:
+            yield
+        finally:
+            stop.set()
+            if thread is not None:
+                thread.join(timeout=max(5.0, 2 * tick))
+
+    app = FastAPI(title="Boats N Hoes Useful-Compute MVP", version="0.5.0", lifespan=lifespan)
     app.state.ledger = ledger
+    app.state.storage = disk
     app.state.settings = settings
     app.state.signer = signer
     limiter = rate_limit.RateLimiter(settings.rate_limit_per_minute, settings.auth_failure_limit,
-                                     settings.auth_failure_window_seconds, limiter_clock)
+                                     settings.auth_failure_window_seconds, limiter_clock,
+                                     ipv6_prefix=settings.ipv6_client_prefix,
+                                     max_clients=settings.rate_limit_max_clients)
     app.state.limiter = limiter
+    # `input-limits-v1` (app/input_limits.py): body size and nesting limits. Added before the
+    # request logger below, so it runs inside it: refused bodies are still logged and counted.
+    app.add_middleware(input_limits.BodyLimit, max_bytes=settings.max_body_bytes)
+    app.add_exception_handler(RequestValidationError, input_limits.validation_error)
     # `public-counts-v1` (threat model #14): public job counts are batched per window.
     batched_counts = public_counts.BatchedCounts(settings.public_counts_interval_seconds,
                                                  ledger.status_counts)
+    # `ledger-pages-v1`: the public ledger's consistency check reads the whole ledger, so
+    # the public sees it taken once per window too (same windows); the operator, live.
+    def ledger_summary(cutoff: int | None) -> dict[str, Any]:
+        """The parts of the ledger reply that read the whole ledger: point totals (results
+        accepted after `cutoff` count as pending) and the consistency check."""
+        return {"total_simulated_points": ledger.total_points(),
+                "points_by_status": ledger.points_by_status(cutoff),
+                "consistency_problems": ledger.check_consistency()}
+
+    # `ledger-pages-v1`: the public gets that summary taken once per counts window, with
+    # the public settle delay as of the moment it was taken; the operator, live.
+    batched_summary = public_counts.BatchedCounts(
+        settings.public_counts_interval_seconds,
+        lambda: ledger_summary(now() - settings.public_settle_delay_seconds
+                               if settings.public_settle_delay_seconds else None))
     # Threat model #17 follow-up: behind a listed proxy, limits apply to the real client.
     resolver = client_address.ClientResolver(
         client_address.parse_trusted_proxies(settings.trusted_proxies))
@@ -112,8 +211,15 @@ def create_app(settings: Settings | None = None,
             request.scope["bnh_client"] = cached
         return cached
 
+    # `ledger-clock-v1`: max(server clock, newest time written), never decreasing; raises
+    # ClockBehindError here if the clock is far behind the ledger.
+    ledger_clock = LedgerClock(clock, steady_clock or default_steady(clock),
+                               ledger.latest_time(), settings.clock_behind_limit_seconds,
+                               settings.clock_step_warn_seconds)
+    app.state.ledger_clock = ledger_clock
+
     def now() -> int:
-        return int(clock())
+        return ledger_clock()
     app.state.now = now
     started_at = now()
 
@@ -128,6 +234,14 @@ def create_app(settings: Settings | None = None,
                   "path": request.url.path}
         started = time.perf_counter()
         blocked = limiter.check(client_of(request), request.url.path)
+        # `guess-slot-v1`: a guessable token takes a slot before it is checked, so a burst
+        # of wrong tokens sent at the same moment can't all be checked before the first
+        # failure is counted. Freed only after the failure (if any) was recorded.
+        guess = (not blocked and request.url.path not in rate_limit.EXEMPT_PATHS
+                 and carries_guessable_token(request))
+        if guess:
+            blocked = limiter.start_guess(client_of(request))
+            guess = blocked is None
         try:
             if blocked:
                 reason, retry_after = blocked
@@ -135,8 +249,7 @@ def create_app(settings: Settings | None = None,
                 log.warning("request limited", extra={
                     "reason": reason, "retry_after": retry_after,
                     "client_tag": limiter.tag(client_of(request))})
-                detail = ("too many failed logins from this address; try again later"
-                          if reason == "locked_out" else "too many requests; slow down")
+                detail = LIMITED_DETAIL.get(reason, "too many requests; slow down")
                 response = JSONResponse(status_code=429, content={"detail": detail},
                                         headers={"Retry-After": str(retry_after)})
             else:
@@ -144,6 +257,9 @@ def create_app(settings: Settings | None = None,
         except Exception:
             access_log.exception("request failed", extra=fields | {"status": 500})
             raise
+        finally:
+            if guess:
+                limiter.finish_guess(client_of(request))
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
         response.headers["X-Request-ID"] = request_id
         level = logging.WARNING if response.status_code >= 500 else logging.INFO
@@ -167,6 +283,32 @@ def create_app(settings: Settings | None = None,
         return JSONResponse(status_code=503, headers={"Retry-After": str(PAUSED_RETRY_AFTER)},
                             content={"detail": "coordinator is paused by its operator; "
                                      "try again later", "paused_since": exc.since})
+
+    @app.exception_handler(storage.StorageLow)
+    async def storage_low(request: Request, exc: storage.StorageLow) -> JSONResponse:
+        """`storage-full-v1`: new work refused to keep room for results. How full the disk
+        is stays operator-only (it would tell a stranger whether filling it is working)."""
+        log.warning("new work refused: storage low", extra={
+            "path": request.url.path, "free_mb": exc.free_mb,
+            "reserve_mb": settings.disk_reserve_mb})
+        return JSONResponse(status_code=503, content={"detail": storage.LOW_STORAGE_DETAIL},
+                            headers={"Retry-After": str(storage.LOW_STORAGE_RETRY_AFTER)})
+
+    @app.exception_handler(sqlite3.OperationalError)
+    async def storage_failed(request: Request, exc: sqlite3.OperationalError) -> JSONResponse:
+        """`storage-full-v1`: a write that failed because the disk is full or failing is a
+        polite "try again later" (the transaction was undone, nothing changed), not a 500
+        and a dropped connection. Any other database error is still a real error."""
+        if not storage.is_storage_error(exc):
+            raise exc
+        disk.record_failed_write()
+        # The error text can contain file paths: log its type and code, not the text.
+        log.error("storage write failed", extra={
+            "path": request.url.path, "error_type": type(exc).__name__,
+            "sqlite_code": getattr(exc, "sqlite_errorcode", None),
+            "free_mb": disk.free_mb()})
+        return JSONResponse(status_code=503, content={"detail": storage.WRITE_FAILED_DETAIL},
+                            headers={"Retry-After": str(storage.WRITE_FAILED_RETRY_AFTER)})
 
     def envelope(job: dict[str, Any]) -> JobEnvelope:
         return JobEnvelope(**{k: job[k] for k in JobEnvelope.model_fields})
@@ -192,6 +334,37 @@ def create_app(settings: Settings | None = None,
             return points.resolve(settings.points_table, task_type, requested)
         except points.PointsError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    def recheck_release_time(t: int) -> int:
+        """`recheck-release-v1`: when a re-check made now comes out. A random whole second
+        between RECHECK_DELAY_MIN_SECONDS and RECHECK_DELAY_MAX_SECONDS from now (the
+        secure rng, so a rig can't predict it); `t` itself when the hold is off."""
+        if settings.recheck_delay_max_seconds <= 0:
+            return t
+        return t + rng.randint(settings.recheck_delay_min_seconds,
+                               settings.recheck_delay_max_seconds)
+
+    def prepare_release(job: dict[str, Any], t: int) -> tuple[int, str]:
+        """A held re-check coming out at `t`: same window as it was made with, counted from
+        `t`, signed again with the current key over the new deadline."""
+        window = int(job["expires_at"]) - int(job["release_at"])
+        fields = {k: job[k] for k in SIGNED_FIELDS} | {"expires_at": t + window}
+        return fields["expires_at"], signer.sign(fields)
+
+    def release_held() -> int:
+        """Release every held re-check that is due (`recheck-release-v1`). The release timer
+        calls this every RECHECK_RELEASE_TICK_SECONDS; tests call it directly."""
+        due = ledger.next_release()
+        if due is None:
+            return 0
+        t = now()
+        if due > t:
+            return 0
+        released = ledger.release_due(t, prepare_release)
+        if released:
+            log.info("re-checks released", extra={"count": released})
+        return released
+    app.state.release_held = release_held
 
     def current_signature(job: dict[str, Any]) -> dict[str, Any]:
         """Return the job with a signature from the current key. A job queued before a
@@ -222,6 +395,16 @@ def create_app(settings: Settings | None = None,
             return executor.model_sha256(payload)
         except tasks.TaskError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    def check_ttl_fits(task_type: str, payload: str, ttl_seconds: int) -> None:
+        """`lease-fit-v1`: a job whose deadline comes before its own run limit can't be
+        finished honestly; refuse it instead of letting rigs run it for nothing."""
+        needed = tasks.lease_needed(task_type, payload)
+        if ttl_seconds < needed:
+            raise HTTPException(status_code=422, detail=(
+                f"ttl_seconds must be at least {needed} for this job: its time limit plus "
+                f"model check, plus {tasks.LEASE_GRACE_SECONDS} s for the network "
+                f"({tasks.LEASE_RULE})"))
 
     def require_operator(token: str | None) -> None:
         expected = settings.operator_token
@@ -335,6 +518,11 @@ def create_app(settings: Settings | None = None,
         if snap["queue"]["overdue_leases"]:
             warnings.append(f"{snap['queue']['overdue_leases']} lease(s) past due; they are "
                             "requeued on the next worker request")
+        if snap["audits"]["release_overdue"]:
+            warnings.append(f"{snap['audits']['release_overdue']} re-check(s) more than "
+                            f"{RELEASE_OVERDUE_SECONDS} s past their release time: the "
+                            "coordinator's release timer isn't running "
+                            "(RECHECK_RELEASE_TICK_SECONDS), so they can't be handed out")
         if snap["queue"]["past_deadline"]:
             warnings.append(f"{snap['queue']['past_deadline']} job(s) past their deadline; "
                             "they expire on the next worker request")
@@ -365,6 +553,18 @@ def create_app(settings: Settings | None = None,
             warnings.append(f"{queue['counts']['needs_review']} held case(s) need a person "
                             "(stuck dispute, three different answers, or a failed hidden "
                             "test): see /v1/operator/review")
+        # Threat model #3 (`vouch-check-v1`): rigs that agreed with a rig later caught and
+        # that nothing has checked independently yet.
+        vouch = vouches.vouch_report(ledger, t)
+        if vouch["unchecked_leads"]:
+            waiting = len(vouch["unchecked_leads"]) - len(vouch["leads_to_test"])
+            warnings.append(f"{len(vouch['unchecked_leads'])} rig(s) agreed with a rig that "
+                            f"was later caught and never passed a hidden test of their own: "
+                            f"{', '.join(vouch['unchecked_leads'])}. Could be honest, could "
+                            "be a friend confirming fakes; aim a hidden test at each "
+                            "(target_worker, or `python -m app.challenge_pool issue-leads`)"
+                            + (f"; {waiting} already have one waiting" if waiting else "")
+                            + ". See /v1/operator/vouches")
         # app/rate_limit.py: someone keeps sending wrong keys/tokens/codes.
         limits = limiter.snapshot() | {"proxies": resolver.snapshot()}
         warnings.extend(resolver.warnings())
@@ -372,6 +572,14 @@ def create_app(settings: Settings | None = None,
             warnings.append(f"{len(limits['locked_out_clients'])} client address(es) locked out "
                             "after repeated wrong keys, tokens or enrollment codes: see "
                             "rate_limits. Could be a misconfigured rig or someone guessing")
+        # `client-prefix-v1`: the client table filled up with clients it couldn't forget.
+        if limits["since_start"]["overflow_requests"]:
+            warnings.append(f"{limits['since_start']['overflow_requests']} request(s) came from "
+                            f"new clients while the limiter already held "
+                            f"{limits['max_tracked_clients']} clients it couldn't forget, so "
+                            "they shared one overflow bucket and lock-out (slower for "
+                            "newcomers). Usually many addresses sending wrong keys or tokens: "
+                            "see locked_out_clients, or raise RATE_LIMIT_MAX_CLIENTS")
         # Threat model #16 follow-up: a submitter token without a points table can queue
         # jobs worth up to 1000 points for a friend's rig to claim.
         if settings.submitter_token and not settings.points_table:
@@ -396,6 +604,20 @@ def create_app(settings: Settings | None = None,
                             "are live: right after a rig submits, `queued` going up by one "
                             "tells it that result is being re-checked (threat model #14). "
                             "Set it to batch the counts, e.g. 900.")
+        # `refusal-log-v1`: repeats of a refused submission are no longer written to the
+        # audit trail, so this is the only place they show up.
+        repeats = ledger.repeated_refusals()
+        loud = sorted(w for w, n in repeats.items() if n >= REFUSAL_REPEAT_WARN)
+        if loud:
+            warnings.append(f"{len(loud)} rig(s) re-sent a submission that was already refused "
+                            f"{REFUSAL_REPEAT_WARN} or more times since the coordinator started: "
+                            f"{', '.join(loud)}. Usually a worker stuck in a retry loop; could "
+                            "be someone probing. See repeated_refusals; revoke if it keeps on")
+        # `ledger-clock-v1`: the server clock was set back, or jumped, while running.
+        warnings.extend(ledger_clock.warnings())
+        # `storage-full-v1`: free space on the ledger's disk.
+        disk_state = disk.snapshot()
+        warnings.extend(disk.warnings(disk_state))
         if problems:
             warnings.append(f"{len(problems)} consistency problem(s): see "
                             "consistency_problems")
@@ -408,6 +630,12 @@ def create_app(settings: Settings | None = None,
                 **snap, "audit_dropouts": {w: f["dropped"] for w, f in follow.items()
                                            if f["dropped"]},
                 "review": queue["counts"] | {"points_held": queue["points_held"]},
+                "vouches": {"rule": vouches.VOUCH_RULE,
+                            "caught_rigs": len(vouch["caught_rigs"]),
+                            "leads": len(vouch["leads"]),
+                            "unchecked_leads": vouch["unchecked_leads"],
+                            "leads_to_test": vouch["leads_to_test"],
+                            "weak_confirmations": vouch["weak_confirmations"]},
                 "rate_limits": limits, "points": points.describe(settings.points_table),
                 "auditor_pick": settings.auditor_pick,
                 "tiebreak_decides": settings.tiebreak_decides, "hidden_test_reuse": reuse,
@@ -415,6 +643,9 @@ def create_app(settings: Settings | None = None,
                 "public_settle_delay_seconds": settings.public_settle_delay_seconds,
                 "public_counts_interval_seconds": settings.public_counts_interval_seconds,
                 "pause": {"rule": PAUSE_VERSION, "paused": pause is not None} | (pause or {}),
+                "repeated_refusals": {"rule": REFUSAL_LOG_RULE, "since_start": repeats,
+                                      "warn_at": REFUSAL_REPEAT_WARN},
+                "clock": ledger_clock.status(), "storage": disk_state,
                 "consistency_problems": problems, "warnings": warnings}
 
     @app.get("/v1/operator/review")
@@ -428,6 +659,14 @@ def create_app(settings: Settings | None = None,
         if needs_person_only:
             queue["cases"] = [c for c in queue["cases"] if c["needs_person"]]
         return queue
+
+    @app.get("/v1/operator/vouches")
+    def operator_vouches(x_operator_token: str | None = Header(default=None)) -> dict[str, Any]:
+        """Operator-only vouch check (`vouch-check-v1`, threat model #3): rigs whose answer
+        agreed with a rig that was later caught, and confirmations that rest only on a
+        caught rig. Read-only; no prompts or answers, but it names who audited whom."""
+        require_operator(x_operator_token)
+        return vouches.vouch_report(ledger, now())
 
     @app.post("/v1/operator/pause")
     def operator_pause(body: PauseRequest,
@@ -461,8 +700,13 @@ def create_app(settings: Settings | None = None,
         """Operator-only: a one-time code that lets one new worker register.
         Only its hash is stored, so this response is the only time it is shown."""
         require_operator(x_operator_token)
-        code, expires_at = workers.issue_code(ledger, body.owner, body.ttl_seconds, now())
-        return {"enrollment_code": code, "owner": body.owner, "expires_at": expires_at,
+        disk.check_new_work()
+        try:
+            code, expires_at = workers.issue_code(ledger, body.owner, body.ttl_seconds, now())
+        except owners.OwnerLookalike as exc:  # `owner-name-v1`
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        return {"enrollment_code": code, "owner": owners.canonical(body.owner),
+                "expires_at": expires_at,
                 "notice": "Single use. Give it to the rig owner privately."}
 
     @app.post("/v1/workers/register")
@@ -477,9 +721,12 @@ def create_app(settings: Settings | None = None,
             raise HTTPException(status_code=401, detail="enrollment code required "
                                 "(the operator creates one with POST /v1/enrollments)")
         key = workers.new_worker_key()
-        outcome, owner = ledger.enroll_worker(body.worker_id, capabilities,
-                                              sha256_text(body.enrollment_code),
-                                              sha256_text(key), now())
+        try:
+            outcome, owner = ledger.enroll_worker(body.worker_id, capabilities,
+                                                  sha256_text(body.enrollment_code),
+                                                  sha256_text(key), now())
+        except owners.OwnerLookalike as exc:  # `owner-name-v1`; the code stays unused
+            raise HTTPException(status_code=409, detail=str(exc)) from None
         if outcome == "bad_code":
             raise AuthRefused(status_code=403,
                                 detail="enrollment code is invalid, used or expired")
@@ -509,8 +756,10 @@ def create_app(settings: Settings | None = None,
                    x_operator_token: str | None = Header(default=None),
                    x_submitter_token: str | None = Header(default=None)) -> JobEnvelope:
         require_job_creator(x_operator_token, x_submitter_token)
+        disk.check_new_work()
         reward_points = job_points(body.task_type, body.reward_points)
         model_sha256 = validated_model_hash(body.task_type, body.payload)
+        check_ttl_fits(body.task_type, body.payload, body.ttl_seconds)
         t = now()
         fields, signature = new_job_fields(body.task_type, body.payload, reward_points,
                                            t + body.ttl_seconds, model_sha256)
@@ -524,6 +773,7 @@ def create_app(settings: Settings | None = None,
         """Operator-only: queue a hidden known-answer job. Workers can't tell it apart.
         `target_worker` / `target_tier` aim it at one rig or a trust tier (see models)."""
         require_operator(x_operator_token)
+        disk.check_new_work()
         if body.target_worker is not None:
             aimed = ledger.get_worker(body.target_worker)
             if aimed is None:
@@ -533,6 +783,7 @@ def create_app(settings: Settings | None = None,
         # Same points as normal work of this type, so a test can't be spotted by them.
         reward_points = job_points(body.task_type, body.reward_points)
         model_sha256 = validated_model_hash(body.task_type, body.payload)
+        check_ttl_fits(body.task_type, body.payload, body.ttl_seconds)
         if not tasks.get(body.task_type).verify(body.payload, body.expected_result).ok:
             raise HTTPException(status_code=422,
                                 detail="expected_result fails this task's own verifier")
@@ -578,7 +829,10 @@ def create_app(settings: Settings | None = None,
             "audit_policy": audit_policy.AUDIT_POLICY_VERSION}
 
     @app.get("/v1/rewards/report")
-    def reward_report(since: int = 0, until: int | None = None, sign: bool = False,
+    def reward_report(since: int = Query(default=0, ge=0, le=input_limits.MAX_TIMESTAMP),
+                      until: int | None = Query(default=None, ge=0,
+                                                le=input_limits.MAX_TIMESTAMP),
+                      sign: bool = False,
                       x_operator_token: str | None = Header(default=None)) -> dict[str, Any]:
         """Operator-only Phase 5 report. Operator-only because a live per-job settlement
         view could let a worker spot a failed hidden challenge right after submitting;
@@ -589,29 +843,44 @@ def create_app(settings: Settings | None = None,
             t = now()
             report = rewards.build_report(ledger, since, until if until is not None else t + 1,
                                           settings.reward_scoring)
-            return rewards.sign_report(report, signer, t) if sign else report
+            if not sign:
+                return report
+            signed = rewards.sign_report(report, signer, t)
+            # `ledger-clock-v1`: the signed period's end becomes a recorded time.
+            ledger.record_signed_report(t, since, report["period"]["until"],
+                                        signed["report_sha256"])
+            return signed
         except rewards.ReportError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.get("/v1/jobs/{job_id}")
     def job_status(job_id: str) -> dict[str, Any]:
         job = ledger.get_job(job_id)
-        if job is None:
+        # `recheck-release-v1`: a held re-check doesn't exist publicly until released.
+        if job is None or job.get("release_at") is not None:
             raise HTTPException(status_code=404, detail="unknown job")
         public = ("job_id", "task_type", "status", "attempts", "max_attempts", "expires_at",
                   "lease_expires_at", "worker_id")
-        events = [e for e in ledger.events(job_id) if e["event"] not in PRIVATE_EVENTS]
-        return {k: job[k] for k in public} | {"events": events}
+        # `refusal-log-v1`: filtered and capped in the database, oldest first.
+        # `public-events-v1`: without the ledger-wide event ids (app/ledger.py).
+        events, total = ledger.public_job_events(job_id, PRIVATE_EVENTS, MAX_JOB_EVENTS)
+        return {k: job[k] for k in public} | {"events": events, "events_total": total,
+                                              "events_limit": MAX_JOB_EVENTS,
+                                              "public_rules": [PUBLIC_EVENTS_RULE]}
 
     @app.post("/v1/jobs/next", response_model=JobEnvelope)
     def next_job(worker_id: str | None = None,
                  authorization: str | None = Header(default=None)) -> JobEnvelope:
         worker_id = authenticate_worker(authorization, worker_id)
-        job = ledger.claim_next(worker_id, settings.lease_seconds, now())
+        t = now()
+        # `lease-fit-v1`: the lease outlasts the job's own time limit (app/tasks.py).
+        job = ledger.claim_next(worker_id, settings.lease_seconds, t,
+                                lease_for=tasks.lease_needed)
         if job is None:
             raise HTTPException(status_code=404, detail="no queued jobs")
         log.info("job leased", extra={"job_id": job["job_id"], "worker_id": worker_id,
-                                      "attempt": job["attempts"]})
+                                      "attempt": job["attempts"],
+                                      "lease_seconds": int(job["lease_expires_at"]) - t})
         return envelope(current_signature(job))
 
     @app.post("/v1/jobs/{job_id}/submit")
@@ -650,20 +919,28 @@ def create_app(settings: Settings | None = None,
         # Same time window as the original, so the deadline doesn't give the audit away.
         window = job["expires_at"] - job["created_at"]
         audit_job = tiebreak_job = None
+        audit_release = tiebreak_release = None
         if (verdict.ok and verdict.needs_audit and job["job_kind"] == "work"
                 and rng.random() < audit_policy.decide_for(
                     ledger.audit_history(worker_id), settings).rate):
+            # `recheck-release-v1`: held until a random later second; the deadline counts
+            # from then (and is signed again when it is released).
+            audit_release = recheck_release_time(t)
             # Copy the original's model hash: a re-pin since then must not change the job.
             audit_job = new_job_fields(job["task_type"], job["payload"], job["reward_points"],
-                                       t + window, job["model_sha256"])
+                                       audit_release + window, job["model_sha256"])
         # A tie-breaker is prepared for every audit result but only stored on a mismatch.
         if verdict.ok and job["job_kind"] == "audit" and settings.tiebreak:
+            tiebreak_release = recheck_release_time(t)
             tiebreak_job = new_job_fields(job["task_type"], job["payload"],
-                                          job["reward_points"], t + window, job["model_sha256"])
+                                          job["reward_points"], tiebreak_release + window,
+                                          job["model_sha256"])
         outcome, job = ledger.submit(job_id, worker_id, body.result_hash, verdict.ok, t,
                                      verdict.method, verdict.confidence, result=body.result,
                                      needs_audit=verdict.needs_audit, audit_job=audit_job,
-                                     agree=executor.results_agree, tiebreak_job=tiebreak_job)
+                                     agree=executor.results_agree, tiebreak_job=tiebreak_job,
+                                     audit_release_at=audit_release,
+                                     tiebreak_release_at=tiebreak_release)
         log.log(logging.INFO if outcome in ("accepted", "duplicate") else logging.WARNING,
                 "result submitted", extra={"job_id": job_id, "worker_id": worker_id,
                                            "outcome": outcome, "verification": verdict.method})
@@ -686,7 +963,10 @@ def create_app(settings: Settings | None = None,
         raise HTTPException(status_code=code, detail=detail)
 
     @app.get("/v1/ledger")
-    def read_ledger(x_operator_token: str | None = Header(default=None)) -> dict[str, Any]:
+    def read_ledger(limit: int = Query(default=DEFAULT_PAGE, ge=1, le=MAX_PAGE),
+                    after: str | None = Query(default=None, max_length=120),
+                    order: str = Query(default="oldest", max_length=10),
+                    x_operator_token: str | None = Header(default=None)) -> dict[str, Any]:
         """Public ledger. `public-delay-v1` (threat model #14): a result's settlement bucket
         and confidence show only PUBLIC_SETTLE_DELAY_SECONDS after it was accepted; until
         then it counts as "pending". `public-no-hashes-v1` (threat model #14 follow-up):
@@ -694,7 +974,25 @@ def create_app(settings: Settings | None = None,
         same hash as the job it re-checked. `public-counts-v1` (threat model #14): public job
         counts are taken once per PUBLIC_COUNTS_INTERVAL_SECONDS window, because live
         `queued` rose the instant a result was picked for a re-check. With the operator
-        token the view is live and complete."""
+        token the view is live and complete.
+
+        `ledger-pages-v1` (code audit, twelfth pass): entries come in pages of `limit`
+        (default 100, at most 1000), oldest first or `order=newest`; pass the reply's
+        `next_after` back as `after` for the next page. Before, every reply held every
+        result ever accepted and re-ran the whole consistency check, so one address asking
+        four times a second (inside the request limit) could stall the coordinator for the
+        rigs. The public point totals and consistency check (which read the whole ledger)
+        are now taken once per counts window, like the job counts (`totals_taken_at`)."""
+        if order not in ("oldest", "newest"):
+            raise HTTPException(status_code=422, detail="order must be 'oldest' or 'newest'")
+        cursor = None
+        if after is not None:
+            m = LEDGER_CURSOR.fullmatch(after)
+            if not m or int(m.group(1)) > input_limits.MAX_TIMESTAMP:
+                # Never echo the value back (`input-limits-v1`).
+                raise HTTPException(status_code=422, detail="after must be a next_after "
+                                    "value from an earlier reply")
+            cursor = (int(m.group(1)), m.group(2))
         operator = x_operator_token is not None
         if operator:
             require_operator(x_operator_token)
@@ -709,12 +1007,21 @@ def create_app(settings: Settings | None = None,
                                      + ["public-no-hashes-v1"]
                                      + ([public_counts.RULE]
                                         if counts["public_counts_interval_seconds"] else []))
-        return {"entries": ledger.entries(cutoff, with_hashes=operator),
-                "total_simulated_points": ledger.total_points(),
-                "points_by_status": ledger.points_by_status(cutoff),
+        rules = rules if operator else rules + [LEDGER_PAGES_RULE]
+        entries, next_cursor = ledger.entries_page(cutoff, with_hashes=operator, limit=limit,
+                                                   after=cursor,
+                                                   newest_first=order == "newest")
+        if operator:
+            summary, summary_at = ledger_summary(cutoff), t
+        else:
+            summary, summary_at, _ = batched_summary.take(t)
+        return {"entries": entries, "entries_count": ledger.entries_count(),
+                "entries_order": order, "entries_limit": limit,
+                "next_after": f"{next_cursor[0]}:{next_cursor[1]}" if next_cursor else None,
+                **summary, "totals_taken_at": summary_at,
                 "view": view, "public_settle_delay_seconds": delay,
                 "public_rules": rules, "hidden_fields": [] if operator else ["result_hash"],
-                **counts, "consistency_problems": ledger.check_consistency(),
+                **counts,
                 "notice": "Simulated points only; not tokens or money."}
 
     return app

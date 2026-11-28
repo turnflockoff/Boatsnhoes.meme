@@ -43,8 +43,8 @@ TEMP_WARN_C = 85.0           # warn at or above this edge temperature
 CRIT_MARGIN_C = 5.0          # ...or within this many degrees of the driver's own critical limit
 VRAM_WARN_FRACTION = 0.90    # warn when VRAM use reaches 90% of the card's total
 
-_CARD_RE = re.compile(r"^card\d+$")
-_DPM_RE = re.compile(r"^\s*(\d+):\s*(\d+)\s*Mhz\s*(\*)?\s*$", re.IGNORECASE)
+_CARD_RE = re.compile(r"^card\d+\Z")
+_DPM_RE = re.compile(r"^\s*(\d+):\s*(\d+)\s*Mhz\s*(\*)?\s*\Z", re.IGNORECASE)
 
 # The numbers we summarise in watch mode, in the order they are printed.
 METRICS = ("temp_c", "power_w", "vram_used_mib", "busy_percent", "sclk_mhz", "mclk_mhz", "fan_rpm")
