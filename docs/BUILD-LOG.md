@@ -1545,6 +1545,7 @@ In all three, `verify` printed **OK** and then starting the worker printed `EVIL
 - 15 real pictures made with Pillow, ffmpeg and ImageMagick (GPS photos, CMYK, greyscale, progressive JPEG, colour profiles, animated PNG/WebP/GIF, a motion-photo tail): after cleaning, every frame is pixel-for-pixel the same, nothing hidden is left, and all 15 open in Chromium and ImageMagick at the right size.
 - 30,000 random damaged files: no crash, worst 4 ms; cleaning a cleaned file never changes it. A worst-case 8 MB file takes about 0.5 s.
 - I broke the new code 18 ways on purpose; all 18 were caught. An existing guard test also caught that I'd ended two name patterns with `$` (which lets a name end in a hidden line break); fixed to `\Z`.
+- **2,581 tests in total: 2,580 passing, 1 skipped** on the committed tree (the root-only test, as designed); the new tests also pass on Python 3.11 (what CI uses).
 - `/meme-lab` at 390, 768 and 1440 px: no sideways scroll, no browser errors; strict HTML parse, site check and accessibility check pass.
 
 **Honest limits:** the tool can't see what's *in* a picture (a face, a street sign, a username in a screenshot), so your look still matters. It can't clean anything already in git history (nothing is there yet). A photo the camera marked as "turned" will show turned once that note is removed; the tool warns you. CI checks pull requests; it can't stop a push made straight to `main`.
