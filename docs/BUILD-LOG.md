@@ -1691,7 +1691,7 @@ In all three, `verify` printed **OK** and then starting the worker printed `EVIL
 **Proof**
 - 6 new tests in `tests/test_publish_report.py`; **5 fail on the old code** for the reason they test (the sixth only because the switch it turns off doesn't exist there). One older test changed: posting period 2 before period 1 is now refused by the gap rule before it reaches the "can't go back in time" rule, so that rule got its own test.
 - I broke the new code 12 ways on purpose; **all 12 were caught** (the first try missed one: the hint for the first period named the latest skipped result instead of the earliest; a test now covers it). A boundary test checks that a period starting exactly on a result's second includes it.
-- **2,671 tests: 2,669 passing, 2 skipped** before committing (the root-only test, as designed, and the release test that skips while the working tree has uncommitted changes).
+- **2,671 tests: 2,670 passing, 1 skipped** on the committed tree (the root-only test, as designed).
 
 **Honest limits:** this only covers *accepted results*. Rig activity counts (leases, timeouts) in an empty gap aren't points and aren't checked. It can't tell whether the ledger itself is complete; that's what `ledger_copy compare` between periods is for. Nothing has been published yet, so nothing already posted is affected. Nothing ran on a GPU.
 
