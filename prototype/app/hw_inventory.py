@@ -6,8 +6,8 @@ Run it on the Ubuntu machine that holds the cards:
 
 What it does: reads /etc/os-release, runs three read-only commands (`uname -r`,
 `lspci -nnk`, `vulkaninfo --summary`), lists /dev/dri, and turns the results into a
-JSON report with plain-language findings. Hostname, username and device UUIDs are
-redacted before anything is printed or saved.
+JSON report with plain-language findings. Hostname, username, home folder names and device
+UUIDs are redacted before anything is printed or saved.
 
 What it never does: use sudo, install packages, change drivers or groups, download
 anything, or touch the GPUs beyond asking the system what it can see.
@@ -160,8 +160,16 @@ _UUID = re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{
                    r"[0-9a-fA-F]{12}\b")
 
 
+# A home folder names its owner even when the tool runs under another account (sudo) or the
+# folder's name differs from the login name, so the folder part is replaced on its own.
+_HOME_PATH = re.compile(r"(?<![\w.-])(/home/|/Users/|/var/home/)(?!\[user\])[^/\\\s\"'`:;,)\]]+")
+# Windows folder names often hold a space ("C:\Users\Jane Doe"), so up to the next separator.
+_WIN_HOME_PATH = re.compile(r"(?<![\w.-])([A-Za-z]:\\Users\\)(?!\[user\])[^\\/\"'\r\n]+")
+
+
 def _redactor(hostname: str | None, username: str | None) -> Callable[[Any], Any]:
-    rules: list[tuple[re.Pattern[str], str]] = [(_UUID, "[uuid]")]
+    rules: list[tuple[re.Pattern[str], str]] = [
+        (_UUID, "[uuid]"), (_HOME_PATH, r"\1[user]"), (_WIN_HOME_PATH, r"\1[user]")]
     for value, label in ((hostname, "[host]"), (username, "[user]")):
         if value:
             rules.append((re.compile(r"(?<![\w-])" + re.escape(value) + r"(?![\w-])"), label))

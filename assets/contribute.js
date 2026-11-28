@@ -91,6 +91,52 @@
   $('#copyreport').addEventListener('click', (e) => copy(reportText, e.currentTarget));
   $('#attachreport').addEventListener('click', () => {
     const f = $('#reportfield'); f.value = (f.value ? f.value + '\n\n' : '') + reportText;
+    checkReport();
     $('#join').scrollIntoView({ behavior: 'smooth' });
   });
+
+  // --- What the pasted hardware output carries (0.5.77) ---------------------
+  // Terminal output pasted from a rig often names its owner: the prompt (alice@rig-01:~$),
+  // home folders (/home/alice/...) and device UUIDs. The form finds them before sending and
+  // offers to replace them; it never sends the field while one is left. No look-behind in
+  // these patterns: Safari before 16.4 can't parse one, and that would stop the whole page script.
+  const REPORT_MAX = 12000;
+  const PERSONAL = [
+    { label: 'a user@host name (prompt or email)',
+      re: /(^|[^\w.@-])[A-Za-z_][\w.-]{0,31}@[A-Za-z0-9](?:[A-Za-z0-9-]{0,62})(?:\.[A-Za-z0-9-]{1,63})*(?![\w@-])/g,
+      to: '$1[user]@[host]' },
+    { label: 'a home folder name',
+      re: /(^|[^\w.-])(\/home\/|\/Users\/|\/var\/home\/)(?!\[user\])[^\/\\\s"'`:;,)\]]+/g,
+      to: '$1$2[user]' },
+    { label: 'a Windows user folder name',
+      re: /(^|[^\w.-])([A-Za-z]:\\Users\\)(?!\[user\])[^\\\/"'\r\n]+/g, to: '$1$2[user]' },
+    { label: 'a device ID (UUID)',
+      re: /\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b/g, to: '[uuid]' },
+    { label: 'a network card address (MAC)',
+      re: /(^|[^\w:-])[0-9a-fA-F]{2}(?:[:-][0-9a-fA-F]{2}){5}(?![\w:-])/g, to: '$1[mac]' },
+  ];
+  function findPersonal(text) {
+    return PERSONAL.filter((p) => { p.re.lastIndex = 0; return p.re.test(text); }).map((p) => p.label);
+  }
+  function scrubPersonal(text) {
+    return PERSONAL.reduce((t, p) => { p.re.lastIndex = 0; return t.replace(p.re, p.to); }, text);
+  }
+  function reportProblem(text) {
+    const found = findPersonal(text);
+    if (found.length) return `This output still shows ${found.join(', ')}. Press "Remove them" or delete them before sending.`;
+    if (text.length > REPORT_MAX) return `This output is ${text.length.toLocaleString('en-US')} characters; the limit is 12,000. Keep the GPU and Vulkan parts.`;
+    return '';
+  }
+  const field = $('#reportfield'), status = $('#report-status'), scrub = $('#report-scrub');
+  function checkReport() {
+    const problem = reportProblem(field.value);
+    field.setCustomValidity(problem);
+    status.textContent = problem;
+    scrub.hidden = !findPersonal(field.value).length;
+    return problem;
+  }
+  field.addEventListener('input', checkReport);
+  scrub.addEventListener('click', () => { field.value = scrubPersonal(field.value); checkReport(); field.focus(); });
+  field.form.addEventListener('submit', (e) => { if (checkReport()) { e.preventDefault(); field.reportValidity(); } });
+  checkReport(); // a value the browser restored after "Back"
 })();

@@ -1585,3 +1585,32 @@ In all three, `verify` printed **OK** and then starting the worker printed `EVIL
 2. **Check the file's first bytes, not its name.** Every picture format starts with a fixed "signature" (PNG files start with `‰PNG`, JPEGs with `FF D8 FF`). A renamed PDF keeps its `%PDF` start, so it's caught.
 3. **"Nothing" can turn into something.** Wrapping a missing value in a file made the text `null`, a real file that looked fine to the form. Check for "nothing" before using a value.
 4. **Fail before the upload, not after.** Stopping a too-big file in the browser saves the visitor's typing and a wasted 9 MB upload.
+
+## 2026-11-28 (UTC): Names and device IDs kept out of the tester form (0.5.77)
+
+**Why this, this hour.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" means it's waiting for your review), and `main` has nothing the drafts branch is missing. Every GPU item left needs the rig or a decision from you, so this session did the twenty-fifth "code audit" pass, on the other form strangers fill in: the GPU tester sign-up on `/contribute`, and the command it tells them to run.
+
+**Found (old tree)**
+1. **The project probe printed device IDs and home folders.** Step 2 on `/contribute` says to run `python3 -m app.gpu_probe_cli` and paste the output. It ran `vulkaninfo --summary` with the volunteer's whole environment and printed everything. In a real run here (Mesa's software Vulkan driver, plus a screen-capture layer installed in the home folder, which is common on gaming PCs) it printed both device UUIDs and `ERROR: ... /home/alice/obs-vkcapture/libVkLayer_obs.so`.
+2. **The form sent terminal prompts as typed.** In real Chromium, a paste with `alice@rig-01:~$` prompts, a `/home/alice/...` path and a `deviceUUID` was posted exactly like that. The page only asked people to remove names themselves.
+3. **The inventory tool missed one case.** `app.hw_inventory` already removed the host and user name, but only the exact login name, so a home folder named differently, or a run with `sudo` (login name `root`), would have kept it.
+
+**Shipped**
+- `gpu_probe_cli` now runs `vulkaninfo` the same safe way the inventory tool does (fixed command, no shell, a bare environment so home-folder add-ons aren't loaded) and replaces the host name, user names (including the person who ran `sudo`), home-folder names and UUIDs with `[host]`, `[user]` and `[uuid]`. Its output says so.
+- The inventory tool also replaces home-folder names (`/home/…`, `/Users/…`, `/var/home/…`, `C:\Users\…`).
+- The tester form checks the "Hardware check output" box as you type, after "Attach", when the page loads and on Send. It looks for `user@host` names (prompts and email addresses), home folders, Windows user folders, UUIDs and network card (MAC) addresses, plus the 12,000-character limit (text added by a button skips the browser's own limit). A spoken status line says what it found; a **Remove them** button swaps each one for a placeholder; Send is blocked until they're gone.
+- Step 2's wording now says the probe and the form do this.
+
+**Proof**
+- 15 new tests (`tests/test_gpu_probe.py`, `tests/test_contribute_form.py`); **all 15 fail on the old code**. The form tests run the page's own matching code under Node on real `vulkaninfo` and `lspci` text, check that ordinary output (the browser report, PCI addresses, version numbers) is left alone, and that cleaning twice changes nothing.
+- I broke the new code 14 ways on purpose; **all 14 were caught**.
+- Real Chromium at 390 and 1440 px: the old page posted the names; the new page blocked the first Send, cleaned with one click and posted only placeholders. The browser check's own report still sends first time. No sideways scroll at 390, 768 or 1440 px; strict HTML parse, site check and accessibility check pass.
+- **2,603 tests: 2,601 passing, 2 skipped** (the root-only test, and the release test that skips while the tree has uncommitted changes). New tests also pass on Python 3.11.
+
+**Honest limits:** the form can't spot a host name typed without a prompt, a real name written as plain text, or a serial number in a format it doesn't know. It's a helper, not a guarantee; you still read each sign-up. Nothing was sent to the real Netlify form.
+
+**What you learned**
+1. **A terminal prompt is a name tag.** `alice@rig-01:~$` is "user alice on the computer called rig-01". Copying a terminal window copies that too.
+2. **Error messages leak paths.** Programs complain about files by their full path, and a full path on Linux or Mac usually starts with `/home/<your name>`.
+3. **Run helper commands with a bare environment.** Starting `vulkaninfo` with only `PATH` set means it can't load add-ons from your home folder, so there's less to leak and less that can go wrong.
+4. **Write patterns that every browser can read.** One newer regular-expression feature ("look-behind") makes Safari before 16.4 reject the whole script, which would also break the device check on the same page, so the form avoids it (and a test keeps it that way).

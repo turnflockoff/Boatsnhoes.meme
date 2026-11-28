@@ -865,13 +865,13 @@ From the prototype directory:
 
     python -m app.gpu_probe_cli
 
-This checks whether `vulkaninfo --summary` can run. Device enumeration is not proof that AI inference works.
+This checks whether `vulkaninfo --summary` can run. Device enumeration is not proof that AI inference works. Since 0.5.77 (`probe-redact-v1`) it runs `vulkaninfo` like the inventory tool below (allow-listed, no shell, a bare environment, so layers from your home folder aren't loaded) and replaces your host name, user name (and the sudo caller's), home-folder names and device UUIDs with `[host]`, `[user]` and `[uuid]` before printing, because people paste this output into the public tester form.
 
 For the full rig inventory (Phase 3 step one), run on the Ubuntu machine with the cards:
 
     python -m app.hw_inventory --out inventory.json
 
-It reads `/etc/os-release`, runs only `uname -r`, `lspci -nnk` and `vulkaninfo --summary` (an allowlist, no shell, no sudo, nothing installed), lists `/dev/dri`, and writes a versioned JSON report (`bnh-hw-inventory/1`) with plain-language findings:
+It reads `/etc/os-release`, runs only `uname -r`, `lspci -nnk` and `vulkaninfo --summary` (an allowlist, no shell, no sudo, nothing installed), lists `/dev/dri`, and writes a versioned JSON report (`bnh-hw-inventory/1`; host name, user name, home-folder names and UUIDs redacted) with plain-language findings:
 
 - how many AMD cards `lspci` sees, with PCI IDs, and which kernel driver each uses (warns on `radeon` or none: Vulkan RADV needs `amdgpu`);
 - each Vulkan device with its driver and Mesa version (warns when Vulkan only sees a CPU renderer such as llvmpipe, or sees fewer AMD cards than `lspci`);

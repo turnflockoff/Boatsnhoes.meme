@@ -57,7 +57,7 @@
   <div class="wrap">
     <div class="kicker">Step 2 · Linux rigs</div>
     <h2>Run the real hardware check.</h2>
-    <p class="lead">The same commands we run on the project's own RX 470 rig. Remove usernames or hostnames before you share the output.</p>
+    <p class="lead">The same commands we run on the project's own RX 470 rig. The project probe replaces your user name, host name, home folder and device IDs itself; for the other commands, the sign-up form spots user@host prompts, home folders and device IDs and offers to remove them before anything is sent.</p>
     <div class="cmds" style="margin-top:24px">
       <div class="cmd"><div><b>OS release</b><code>lsb_release -a</code></div><button class="copy" type="button">Copy</button></div>
       <div class="cmd"><div><b>Kernel</b><code>uname -r</code></div><button class="copy" type="button">Copy</button></div>
@@ -93,7 +93,9 @@
         <label>VRAM per card<select name="vram"><option value="">Not sure</option><option>2 GB</option><option>4 GB</option><option>6 GB</option><option>8 GB</option><option>10–12 GB</option><option>16 GB+</option></select></label>
       </div>
       <label>Operating system<select name="os"><option>Ubuntu / Debian</option><option>Other Linux</option><option>Windows</option><option>macOS</option></select></label>
-      <label>Hardware check output (optional)<textarea name="report" id="reportfield" rows="5" maxlength="12000" placeholder="Paste step 2 output, or attach the browser report from step 1"></textarea></label>
+      <label>Hardware check output (optional)<textarea name="report" id="reportfield" rows="5" maxlength="12000" aria-describedby="report-status" placeholder="Paste step 2 output, or attach the browser report from step 1"></textarea></label>
+      <p class="fine" id="report-status" role="status" aria-live="polite" style="margin:0"></p>
+      <button class="btn ghost" id="report-scrub" type="button" hidden>Remove them</button>
       <label class="consent"><input type="checkbox" name="understands" value="yes" required> I understand this is an unpaid test. No coin, reward, or payout is offered.</label>
       <button class="btn alt" type="submit">Join the crew</button>
       <p class="fine" style="margin:0">Stored with Netlify Forms and used only to contact you about this project. Ask anytime and we'll delete it.</p>

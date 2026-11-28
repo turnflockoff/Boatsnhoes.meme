@@ -1,5 +1,5 @@
 # YOUR Personal To-Do List (things only you can do)
-**Version:** 0.5.76 | **Last updated:** 2026-11-28
+**Version:** 0.5.77 | **Last updated:** 2026-11-28
 Never share passwords, API keys, or recovery phrases with anyone, including Claude.
 
 ## This week
