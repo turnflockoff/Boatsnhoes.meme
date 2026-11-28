@@ -1605,7 +1605,7 @@ In all three, `verify` printed **OK** and then starting the worker printed `EVIL
 - 15 new tests (`tests/test_gpu_probe.py`, `tests/test_contribute_form.py`); **all 15 fail on the old code**. The form tests run the page's own matching code under Node on real `vulkaninfo` and `lspci` text, check that ordinary output (the browser report, PCI addresses, version numbers) is left alone, and that cleaning twice changes nothing.
 - I broke the new code 14 ways on purpose; **all 14 were caught**.
 - Real Chromium at 390 and 1440 px: the old page posted the names; the new page blocked the first Send, cleaned with one click and posted only placeholders. The browser check's own report still sends first time. No sideways scroll at 390, 768 or 1440 px; strict HTML parse, site check and accessibility check pass.
-- **2,603 tests: 2,601 passing, 2 skipped** (the root-only test, and the release test that skips while the tree has uncommitted changes). New tests also pass on Python 3.11.
+- **2,603 tests: 2,602 passing, 1 skipped** on the committed tree (the root-only test, as designed). New tests also pass on Python 3.11.
 
 **Honest limits:** the form can't spot a host name typed without a prompt, a real name written as plain text, or a serial number in a format it doesn't know. It's a helper, not a guarantee; you still read each sign-up. Nothing was sent to the real Netlify form.
 
