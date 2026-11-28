@@ -54,3 +54,5 @@ jobs:
         run: python -m app.site_check static
       - name: Check site pages for accessibility problems (reads files only)
         run: python -m app.a11y_check
+      - name: Check Meme Lab gallery pictures carry no hidden data (location, camera, notes)
+        run: python -m app.meme_gallery check

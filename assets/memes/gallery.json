@@ -1,4 +1,4 @@
 {
-  "_notice": "Approved community memes shown on /meme-lab. Add the image file to this folder (letters, numbers, dot, dash or underscore in the name; png, jpg, gif or webp), then add an entry: {\"file\": \"/assets/memes/name.png\", \"alt\": \"what the meme shows and says\", \"credit\": \"name or handle they gave\"}. Only post memes whose maker ticked all three boxes on the form.",
+  "_notice": "Approved community memes shown on /meme-lab. Don't copy pictures here by hand: from the prototype folder run `python -m app.meme_gallery add <file> --name <name> --alt \"what the meme shows and says\" --credit \"name or handle they gave\"`. It removes hidden photo data (location, camera, notes) and adds the entry. CI (`python -m app.meme_gallery check`) fails if a picture here still has hidden data or isn't listed. Only post memes whose maker ticked all three boxes on the form.",
   "memes": []
 }

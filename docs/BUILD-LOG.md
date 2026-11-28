@@ -1526,3 +1526,30 @@ In all three, `verify` printed **OK** and then starting the worker printed `EVIL
 1. **A form for a gambling waitlist is itself a legal question**, so the casino page only informs.
 2. **Labels beat promises.** Marking each number "proposed" or "leaning" lets the page exist before the decision.
 3. **Layers matter in CSS.** A decoration placed "behind" can still paint over later content if it creates its own layer.
+
+## 2026-11-28 (UTC): Hidden photo data in Meme Lab pictures (0.5.75)
+
+**Why this, this hour.** CI was green on the drafts PR and every GPU-worker phase that doesn't need your rig or a decision from you is done, so I took the next "code audit" pass on the newest thing that takes files from strangers: the Meme Lab form from 0.5.74.
+
+**Found (on the old tree).** The posting steps were "save the picture into `assets/memes/` and list it". I made a phone-style photo carrying where it was taken (GPS), the phone's make and model, the date, an editing note with a `C:\Users\<real name>` path, a comment, and 5 KB of "motion photo" video stuck after the end of the picture. Saved and listed like that, it passed every CI check (site check, accessibility check, page tests: all green). Merged, it would have put the sender's home location on the website and in GitHub's history for good. A stray file that wasn't listed (a `.DS_Store`) would also have gone public.
+
+**Shipped**
+- `python -m app.meme_gallery add <file> --name boat-sunset --alt "..." --credit "..."`: keeps only what's needed to draw the picture (pixels, colours, animation), drops everything else, names the file by what it really is (a PNG called `.jpg` becomes `.png`), and adds the line to `gallery.json`. It never overwrites and won't add to a gallery that's already broken.
+- `python -m app.meme_gallery check`, a new CI step: fails if any picture in the folder still has hidden data, isn't listed, is a link, is listed twice, or if a list entry has odd fields, invisible characters or text the page would cut.
+- `python -m app.meme_gallery inspect <file>` shows what a picture carries without changing it.
+- Damaged files, files that aren't pictures, and pictures too big to show safely (over 8192 px a side, 40 megapixels or 8 MB) are refused. No image library is used: the tool walks the file's labelled parts and never decodes a stranger's pixels.
+- `/meme-lab` now says hidden details are removed before posting (true now, and CI enforces it). Your to-do line and the note inside `gallery.json` now point to the tool.
+
+**Proof**
+- 78 new tests (`tests/test_meme_gallery.py`), including 3,000 seeded damaged copies; the real-tree test passes.
+- 15 real pictures made with Pillow, ffmpeg and ImageMagick (GPS photos, CMYK, greyscale, progressive JPEG, colour profiles, animated PNG/WebP/GIF, a motion-photo tail): after cleaning, every frame is pixel-for-pixel the same, nothing hidden is left, and all 15 open in Chromium and ImageMagick at the right size.
+- 30,000 random damaged files: no crash, worst 4 ms; cleaning a cleaned file never changes it. A worst-case 8 MB file takes about 0.5 s.
+- I broke the new code 18 ways on purpose; all 18 were caught. An existing guard test also caught that I'd ended two name patterns with `$` (which lets a name end in a hidden line break); fixed to `\Z`.
+- `/meme-lab` at 390, 768 and 1440 px: no sideways scroll, no browser errors; strict HTML parse, site check and accessibility check pass.
+
+**Honest limits:** the tool can't see what's *in* a picture (a face, a street sign, a username in a screenshot), so your look still matters. It can't clean anything already in git history (nothing is there yet). A photo the camera marked as "turned" will show turned once that note is removed; the tool warns you. CI checks pull requests; it can't stop a push made straight to `main`.
+
+**What you learned**
+1. **A photo is a picture plus a hidden note.** Phones write where and when it was taken, and which phone, into the file itself. You can't see it, but anyone who downloads the file can read it.
+2. **"Ignored" data is still data.** Browsers stop reading a JPEG at its end marker, so whatever is glued on after it (a video, a zip) is invisible on the page but fully there in the download.
+3. **Keep a list of what's allowed, not of what's bad.** The tool keeps the few parts needed to draw a picture and drops everything else, so new kinds of hidden data are dropped too without anyone having to know about them.
