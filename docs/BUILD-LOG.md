@@ -1510,3 +1510,19 @@ In all three, `verify` printed **OK** and then starting the worker printed `EVIL
 2. **Make the file say what it is.** Instead of trusting people to point tools at the right file, the backup carries its own label, the way a photocopy might be stamped "COPY". Tools read the label, not the file name.
 3. **Reading should never change what you read.** A backup is evidence. Opening it "just to look" must leave it byte-for-byte the same, or you can't prove later it wasn't touched.
 4. **Close the shortcut, not just the official path.** The restore tool was already careful, but `cp` skipped all of it. The fix makes the shortcut fail loudly and points to the careful way.
+
+## 2026-11-28 (UTC): Five new pages: Mine, Tokenomics, Litepaper, Casino, Meme Lab (0.5.74)
+
+**Asked by you, live.** You picked: fresh Mine and Tokenomics drafts (your own drafts weren't in the repo, its history, your Drive or your artifacts), info-only casino page, all three Meme Lab parts, and a long technical litepaper.
+
+**Shipped**
+- `/mine`, `/tokenomics` (proposed numbers, each labelled; emission chart and table: 50% by year 3.5, 75% by year 7, cap 99,406,440), `/litepaper` (17 sections, every claim labelled built/tested/planned/undecided), `/casino` (not open, no sign-up, what must happen first, house rules, where to find help), `/meme-lab` (meme maker that runs in the browser with PNG download, brand kit, a reviewed submission form, gallery), `/meme-thanks`.
+- New pages linked from every subpage footer; the homepage is unchanged.
+- Fixed a display bug on all subpages: the big hero rings were painted over the header and the first section, dimming text.
+- Hype guard: the "100x" check no longer flags the CPU name "Ryzen 5 5600X".
+- **Proof:** site check and accessibility check pass on all pages; no sideways scroll at 390, 768 and 1440 px; no browser errors; the meme maker draws and exports; 2,503 tests (2,502 passing, 1 skipped).
+
+**What you learned**
+1. **A form for a gambling waitlist is itself a legal question**, so the casino page only informs.
+2. **Labels beat promises.** Marking each number "proposed" or "leaning" lets the page exist before the decision.
+3. **Layers matter in CSS.** A decoration placed "behind" can still paint over later content if it creates its own layer.

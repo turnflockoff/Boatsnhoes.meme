@@ -1,8 +1,9 @@
 # YOUR Personal To-Do List (things only you can do)
-**Version:** 0.5.73 | **Last updated:** 2026-11-28
+**Version:** 0.5.74 | **Last updated:** 2026-11-28
 Never share passwords, API keys, or recovery phrases with anyone, including Claude.
 
 ## This week
+- [ ] Meme Lab submissions (after merging): Netlify > Forms > `memes`. To post one, save the picture into `assets/memes/`, add a line to `assets/memes/gallery.json` (file, description, credit), and push. Only post ones with all three boxes ticked. Optional: add an email notification for the `memes` form.
 - [ ] ~~Cloudflare Pages upload~~ superseded 2026-11-21: hosting is Netlify
 - [x] Merge the GitHub pull requests into main (#2, #3)
 - [x] Netlify linked to GitHub (branch `main`, auto-deploys on merge)

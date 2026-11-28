@@ -144,7 +144,7 @@ table.data td.num{font-family:var(--mono);white-space:nowrap}
 
 /* long-form pages (litepaper) */
 .doc{display:grid;grid-template-columns:220px minmax(0,1fr);gap:48px;align-items:start}
-@media(max-width:900px){.doc{grid-template-columns:1fr;gap:20px}}
+@media(max-width:900px){.doc{grid-template-columns:minmax(0,1fr);gap:20px}}
 .toc{position:sticky;top:20px;font-size:13px;border:1px solid var(--line);border-radius:10px;padding:16px 18px;background:var(--card)}
 @media(max-width:900px){.toc{position:static}}
 .toc b{display:block;color:var(--acid);font:800 11px var(--mono);letter-spacing:.2em;text-transform:uppercase;margin-bottom:8px}
@@ -179,3 +179,7 @@ table.data td.num{font-family:var(--mono);white-space:nowrap}
 .asset .files a{font-size:13px;font-weight:700;color:var(--acid);text-decoration:none;border:1px solid #57351e;border-radius:7px;padding:5px 10px}
 .empty{border:1px dashed #3d332c;border-radius:10px;padding:30px;text-align:center;color:var(--muted);margin-top:22px}
 .form [hidden],[hidden]{display:none !important}
+/* the hero rings sit behind everything after them (they were painted over the header and the next section) */
+section,footer{position:relative;z-index:1}
+.nav{z-index:2}
+.form input[type=range]{accent-color:var(--acid);padding:0;border:0;background:none}
