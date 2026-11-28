@@ -365,6 +365,27 @@ class Ledger:
             db.execute("CREATE UNIQUE INDEX IF NOT EXISTS workers_key_hash ON workers(key_hash)")
             for ddl in SCALE_INDEXES + WORKER_INDEXES:
                 db.execute(ddl)
+        # `storage-full-v1` (app/storage.py): one idle connection held open for the life of
+        # the ledger. SQLite deletes the -wal and -shm side files when its last connection
+        # closes, and every request here opens and closes its own; on a full disk they then
+        # couldn't be created again and even reads (health included) failed with "disk I/O
+        # error". Never used for queries and never holds a transaction, so it blocks nothing.
+        self._keeper: sqlite3.Connection | None = sqlite3.connect(
+            self.path, timeout=10, isolation_level=None, check_same_thread=False)
+        self._keeper.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchall()
+
+    def close(self) -> None:
+        """Let go of the idle connection (the side files go once nothing else has the
+        ledger open). The ledger still works afterwards, just without that protection."""
+        keeper, self._keeper = getattr(self, "_keeper", None), None
+        if keeper is not None:
+            keeper.close()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:  # noqa: BLE001 - never raise from a finalizer
+            pass
 
     # -- plumbing -----------------------------------------------------------------
     # SQLite side files that hold the same data as the ledger itself.
@@ -409,7 +430,15 @@ class Ledger:
             yield db
             db.execute("COMMIT")
         except BaseException:
-            db.execute("ROLLBACK")
+            # `storage-full-v1`: after a failed COMMIT (disk full) or BEGIN (locked, I/O
+            # error) SQLite has already undone the transaction, and a second ROLLBACK raised
+            # "cannot rollback - no transaction is active", hiding the real error. Undo only
+            # what is still open, and always re-raise the original error.
+            if db.in_transaction:
+                try:
+                    db.execute("ROLLBACK")
+                except sqlite3.Error:
+                    pass
             raise
         finally:
             db.close()

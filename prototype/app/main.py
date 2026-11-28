@@ -5,8 +5,10 @@ import json
 import logging
 import random
 import re
+import sqlite3
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Callable
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
@@ -15,7 +17,8 @@ from fastapi.responses import JSONResponse
 
 from .config import Settings, get_settings
 from . import (audit_policy, client_address, input_limits, key_rotation, observability, points,
-               public_counts, rate_limit, review, rewards, schemas, tasks, vouches, workers)
+               public_counts, rate_limit, review, rewards, schemas, storage, tasks, vouches,
+               workers)
 from .ledger import (MAX_JOB_EVENTS, MAX_PAGE, PAUSE_VERSION, CoordinatorPaused,
                      HiddenTestRevealed, Ledger)
 from .models import (ChallengeCreate, EnrollmentCreate, JobCreate, JobEnvelope, PauseRequest,
@@ -83,7 +86,8 @@ def create_app(settings: Settings | None = None,
                clock: Callable[[], float] = time.time,
                rng: random.Random | None = None,
                limiter_clock: Callable[[], float] = time.monotonic,
-               steady_clock: Callable[[], float] | None = None) -> FastAPI:
+               steady_clock: Callable[[], float] | None = None,
+               disk_free: Callable[[Path], int | None] = storage.free_bytes) -> FastAPI:
     """Build the coordinator. `clock` and `rng` are injectable so tests are deterministic.
     `clock` is the server clock; the coordinator never writes a time earlier than one it
     already wrote and refuses to start far behind the ledger (`ledger-clock-v1`,
@@ -91,7 +95,8 @@ def create_app(settings: Settings | None = None,
     injected clock itself in tests) is only used to notice clock steps.
     The default `rng` uses the OS's secure randomness, so workers can't predict audits.
     `limiter_clock` drives the request limits (app/rate_limit.py), which measure real
-    elapsed time rather than the coordinator's job clock."""
+    elapsed time rather than the coordinator's job clock. `disk_free` reads the free space
+    on the ledger's disk (`storage-full-v1`, app/storage.py); tests pass a fake."""
     rng = rng or random.SystemRandom()
     settings = settings or get_settings()
     if settings.points_table and dict(settings.points_table).keys() != tasks.EXECUTORS.keys():
@@ -123,8 +128,12 @@ def create_app(settings: Settings | None = None,
                     auditor_pick=settings.auditor_pick,
                     # `tiebreak-trust-v1`: whether a tie-breaker's majority needs trusted rigs.
                     tiebreak_decides=settings.tiebreak_decides)
+    # `storage-full-v1`: refuse new work under DISK_RESERVE_MB, warn under DISK_WARN_MB.
+    disk = storage.StorageGuard(settings.database_path, settings.disk_reserve_mb,
+                                settings.disk_warn_mb, disk_free)
     app = FastAPI(title="Boats N Hoes Useful-Compute MVP", version="0.5.0")
     app.state.ledger = ledger
+    app.state.storage = disk
     app.state.settings = settings
     app.state.signer = signer
     limiter = rate_limit.RateLimiter(settings.rate_limit_per_minute, settings.auth_failure_limit,
@@ -241,6 +250,32 @@ def create_app(settings: Settings | None = None,
         return JSONResponse(status_code=503, headers={"Retry-After": str(PAUSED_RETRY_AFTER)},
                             content={"detail": "coordinator is paused by its operator; "
                                      "try again later", "paused_since": exc.since})
+
+    @app.exception_handler(storage.StorageLow)
+    async def storage_low(request: Request, exc: storage.StorageLow) -> JSONResponse:
+        """`storage-full-v1`: new work refused to keep room for results. How full the disk
+        is stays operator-only (it would tell a stranger whether filling it is working)."""
+        log.warning("new work refused: storage low", extra={
+            "path": request.url.path, "free_mb": exc.free_mb,
+            "reserve_mb": settings.disk_reserve_mb})
+        return JSONResponse(status_code=503, content={"detail": storage.LOW_STORAGE_DETAIL},
+                            headers={"Retry-After": str(storage.LOW_STORAGE_RETRY_AFTER)})
+
+    @app.exception_handler(sqlite3.OperationalError)
+    async def storage_failed(request: Request, exc: sqlite3.OperationalError) -> JSONResponse:
+        """`storage-full-v1`: a write that failed because the disk is full or failing is a
+        polite "try again later" (the transaction was undone, nothing changed), not a 500
+        and a dropped connection. Any other database error is still a real error."""
+        if not storage.is_storage_error(exc):
+            raise exc
+        disk.record_failed_write()
+        # The error text can contain file paths: log its type and code, not the text.
+        log.error("storage write failed", extra={
+            "path": request.url.path, "error_type": type(exc).__name__,
+            "sqlite_code": getattr(exc, "sqlite_errorcode", None),
+            "free_mb": disk.free_mb()})
+        return JSONResponse(status_code=503, content={"detail": storage.WRITE_FAILED_DETAIL},
+                            headers={"Retry-After": str(storage.WRITE_FAILED_RETRY_AFTER)})
 
     def envelope(job: dict[str, Any]) -> JobEnvelope:
         return JobEnvelope(**{k: job[k] for k in JobEnvelope.model_fields})
@@ -493,6 +528,9 @@ def create_app(settings: Settings | None = None,
                             "be someone probing. See repeated_refusals; revoke if it keeps on")
         # `ledger-clock-v1`: the server clock was set back, or jumped, while running.
         warnings.extend(ledger_clock.warnings())
+        # `storage-full-v1`: free space on the ledger's disk.
+        disk_state = disk.snapshot()
+        warnings.extend(disk.warnings(disk_state))
         if problems:
             warnings.append(f"{len(problems)} consistency problem(s): see "
                             "consistency_problems")
@@ -520,7 +558,7 @@ def create_app(settings: Settings | None = None,
                 "pause": {"rule": PAUSE_VERSION, "paused": pause is not None} | (pause or {}),
                 "repeated_refusals": {"rule": REFUSAL_LOG_RULE, "since_start": repeats,
                                       "warn_at": REFUSAL_REPEAT_WARN},
-                "clock": ledger_clock.status(),
+                "clock": ledger_clock.status(), "storage": disk_state,
                 "consistency_problems": problems, "warnings": warnings}
 
     @app.get("/v1/operator/review")
@@ -575,6 +613,7 @@ def create_app(settings: Settings | None = None,
         """Operator-only: a one-time code that lets one new worker register.
         Only its hash is stored, so this response is the only time it is shown."""
         require_operator(x_operator_token)
+        disk.check_new_work()
         code, expires_at = workers.issue_code(ledger, body.owner, body.ttl_seconds, now())
         return {"enrollment_code": code, "owner": body.owner, "expires_at": expires_at,
                 "notice": "Single use. Give it to the rig owner privately."}
@@ -623,6 +662,7 @@ def create_app(settings: Settings | None = None,
                    x_operator_token: str | None = Header(default=None),
                    x_submitter_token: str | None = Header(default=None)) -> JobEnvelope:
         require_job_creator(x_operator_token, x_submitter_token)
+        disk.check_new_work()
         reward_points = job_points(body.task_type, body.reward_points)
         model_sha256 = validated_model_hash(body.task_type, body.payload)
         t = now()
@@ -638,6 +678,7 @@ def create_app(settings: Settings | None = None,
         """Operator-only: queue a hidden known-answer job. Workers can't tell it apart.
         `target_worker` / `target_tier` aim it at one rig or a trust tier (see models)."""
         require_operator(x_operator_token)
+        disk.check_new_work()
         if body.target_worker is not None:
             aimed = ledger.get_worker(body.target_worker)
             if aimed is None:

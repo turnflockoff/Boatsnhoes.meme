@@ -94,6 +94,12 @@ class Settings:
     # A server clock that moves this many seconds more (or less) than a steady clock between
     # two readings counts as a step: logged and shown on the operator health page.
     clock_step_warn_seconds: int = 60
+    # `storage-full-v1` (app/storage.py): under this much free space (MB) on the ledger's
+    # disk the coordinator stops taking NEW work (jobs, hidden tests, enrollment codes), so
+    # the room left goes to results from rigs that already did the work. 0 = never refuse.
+    disk_reserve_mb: int = 100
+    # Under this much free space (MB) the operator health page warns. 0 = no early warning.
+    disk_warn_mb: int = 1000
 
     def resolved_signing_key_path(self) -> Path:
         return self.signing_key_path or self.database_path.parent / "coordinator-signing.key"
@@ -230,4 +236,6 @@ def get_settings() -> Settings:
         max_body_bytes=_int_env("MAX_BODY_BYTES", 256 * 1024, 16 * 1024, 4 * 1024 * 1024),
         clock_behind_limit_seconds=_int_env("CLOCK_BEHIND_LIMIT_SECONDS", 300, 0, 7 * 86400),
         clock_step_warn_seconds=_int_env("CLOCK_STEP_WARN_SECONDS", 60, 1, 86400),
+        disk_reserve_mb=_int_env("DISK_RESERVE_MB", 100, 0, 1024 * 1024),
+        disk_warn_mb=_int_env("DISK_WARN_MB", 1000, 0, 1024 * 1024),
     )

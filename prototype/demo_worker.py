@@ -315,15 +315,19 @@ def retry_after_seconds(response: httpx.Response | Reply) -> int:
 
 
 def post_with_backoff(client: httpx.Client, url: str, tries: int = 5,
-                      sleep: Any = None, **kwargs: Any) -> Reply:
+                      sleep: Any = None, retry_on: tuple[int, ...] = (429,),
+                      **kwargs: Any) -> Reply:
     """POST, and if the coordinator says "too many requests" (429), wait as long as it asks
-    and try again, a few times. Safe for claims and for submits (submits are idempotent)."""
+    and try again, a few times. Safe for claims and for submits (submits are idempotent).
+    Submits also pass 503 in `retry_on` (`storage-full-v1`): a coordinator whose disk was
+    full for a moment asks the rig to come back, and the finished result is worth keeping."""
     for attempt in range(tries):
         response = coordinator_call(client, "POST", url, **kwargs)
-        if response.status_code != 429 or attempt == tries - 1:
+        if response.status_code not in retry_on or attempt == tries - 1:
             return response
         wait = retry_after_seconds(response)
-        print(f"Coordinator says slow down ({response.detail()}); waiting {wait} s.")
+        what = "slow down" if response.status_code == 429 else "try again later"
+        print(f"Coordinator says {what} ({response.detail()}); waiting {wait} s.")
         (sleep or pause)(wait)
     return response
 
@@ -387,10 +391,11 @@ def main(argv: list[str] | None = None) -> None:
                 print("No queued jobs.")
                 return
             if response.status_code == 503:
-                # `pause-v1`: the operator paused the coordinator (an incident or upkeep).
-                # Not an error; a long-running worker would wait Retry-After and ask again.
-                print(f"Coordinator is paused by its operator; try again in "
-                      f"{retry_after_seconds(response)} s.")
+                # `pause-v1`: the operator paused the coordinator (an incident or upkeep),
+                # or `storage-full-v1`: it couldn't save right now. Not an error; a
+                # long-running worker would wait Retry-After and ask again.
+                print(f"Coordinator isn't handing out work right now ({response.detail()}); "
+                      f"try again in {retry_after_seconds(response)} s.")
                 return
             if response.status_code != 200:
                 raise SystemExit(f"Coordinator answered {response.status_code}: "
@@ -418,7 +423,8 @@ def main(argv: list[str] | None = None) -> None:
                 continue
             refusals = 0
             completed = int(time.time())
-            accepted = post_with_backoff(client, f"/v1/jobs/{job['job_id']}/submit", json={
+            accepted = post_with_backoff(client, f"/v1/jobs/{job['job_id']}/submit",
+                                         retry_on=(429, 503), json={
                 "worker_id": args.worker_id, "result": result, "result_hash": sha256_text(result),
                 "started_at": started, "completed_at": completed,
                 **schemas.receipt_fields(job, local_model_sha256(job)),
