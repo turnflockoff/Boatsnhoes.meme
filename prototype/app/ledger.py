@@ -1044,21 +1044,26 @@ class Ledger:
             "SELECT 1 FROM events WHERE job_id=? AND worker_id=? AND event='job_leased' "
             "AND id>? LIMIT 1", (job_id, worker_id, assigned_id)).fetchone() is not None
 
-    def claim_next(self, worker_id: str, lease_seconds: int, now: int) -> dict[str, Any] | None:
+    def claim_next(self, worker_id: str, lease_seconds: int, now: int,
+                   lease_for: Callable[[str, str], int] | None = None) -> dict[str, Any] | None:
         """Atomically lease the oldest queued job `worker_id` may take, or return None.
         Work and challenge jobs are first-come; audits, tie-breakers and aimed hidden tests
         only go to the worker they were assigned to (see _assign_auditors).
+        `lease_for(task_type, payload)` (`lease-fit-v1`, app/tasks.lease_needed) gives the
+        seconds this job's lease must last; the lease is the longer of that and
+        `lease_seconds`, and never past the job's own deadline.
         Raises CoordinatorPaused while paused; the worker still counts as seen, so rigs
         that keep asking during a pause stay active for audit picks after it."""
         with self._tx() as db:
             pause = self._pause_row(db)
             db.execute("UPDATE workers SET last_seen_at=? WHERE worker_id=?", (now, worker_id))
             if pause is None:
-                return self._claim(db, worker_id, lease_seconds, now)
+                return self._claim(db, worker_id, lease_seconds, now, lease_for)
         raise CoordinatorPaused(int(pause["at"]))
 
     def _claim(self, db: sqlite3.Connection, worker_id: str, lease_seconds: int,
-               now: int) -> dict[str, Any] | None:
+               now: int, lease_for: Callable[[str, str], int] | None = None
+               ) -> dict[str, Any] | None:
         self._sweep(db, now)
         self._assign_auditors(db, now)
         # An excluded worker's owner is excluded too, so one person's rigs never
@@ -1066,7 +1071,7 @@ class Ledger:
         owner = db.execute("SELECT owner FROM workers WHERE worker_id=?",
                            (worker_id,)).fetchone()
         row = db.execute(
-            "SELECT job_id FROM jobs j WHERE status='queued' AND NOT EXISTS ("
+            "SELECT job_id, task_type, payload FROM jobs j WHERE status='queued' AND NOT EXISTS ("
             "SELECT 1 FROM job_exclusions x LEFT JOIN workers w ON w.worker_id=x.worker_id "
             "WHERE x.job_id=j.job_id AND (x.worker_id=? OR "
             "(w.owner IS NOT NULL AND w.owner=?))) "
@@ -1077,6 +1082,8 @@ class Ledger:
         ).fetchone()
         if row is None:
             return None
+        if lease_for is not None:
+            lease_seconds = max(lease_seconds, int(lease_for(row["task_type"], row["payload"])))
         lease_until = min(now + lease_seconds, self._job_deadline(db, row["job_id"]))
         db.execute(
             "UPDATE jobs SET status='leased', worker_id=?, lease_expires_at=?, "

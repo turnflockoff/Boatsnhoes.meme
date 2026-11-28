@@ -332,6 +332,16 @@ def create_app(settings: Settings | None = None,
         except tasks.TaskError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    def check_ttl_fits(task_type: str, payload: str, ttl_seconds: int) -> None:
+        """`lease-fit-v1`: a job whose deadline comes before its own run limit can't be
+        finished honestly; refuse it instead of letting rigs run it for nothing."""
+        needed = tasks.lease_needed(task_type, payload)
+        if ttl_seconds < needed:
+            raise HTTPException(status_code=422, detail=(
+                f"ttl_seconds must be at least {needed} for this job: its time limit plus "
+                f"model check, plus {tasks.LEASE_GRACE_SECONDS} s for the network "
+                f"({tasks.LEASE_RULE})"))
+
     def require_operator(token: str | None) -> None:
         expected = settings.operator_token
         if not expected:
@@ -665,6 +675,7 @@ def create_app(settings: Settings | None = None,
         disk.check_new_work()
         reward_points = job_points(body.task_type, body.reward_points)
         model_sha256 = validated_model_hash(body.task_type, body.payload)
+        check_ttl_fits(body.task_type, body.payload, body.ttl_seconds)
         t = now()
         fields, signature = new_job_fields(body.task_type, body.payload, reward_points,
                                            t + body.ttl_seconds, model_sha256)
@@ -688,6 +699,7 @@ def create_app(settings: Settings | None = None,
         # Same points as normal work of this type, so a test can't be spotted by them.
         reward_points = job_points(body.task_type, body.reward_points)
         model_sha256 = validated_model_hash(body.task_type, body.payload)
+        check_ttl_fits(body.task_type, body.payload, body.ttl_seconds)
         if not tasks.get(body.task_type).verify(body.payload, body.expected_result).ok:
             raise HTTPException(status_code=422,
                                 detail="expected_result fails this task's own verifier")
@@ -773,11 +785,15 @@ def create_app(settings: Settings | None = None,
     def next_job(worker_id: str | None = None,
                  authorization: str | None = Header(default=None)) -> JobEnvelope:
         worker_id = authenticate_worker(authorization, worker_id)
-        job = ledger.claim_next(worker_id, settings.lease_seconds, now())
+        t = now()
+        # `lease-fit-v1`: the lease outlasts the job's own time limit (app/tasks.py).
+        job = ledger.claim_next(worker_id, settings.lease_seconds, t,
+                                lease_for=tasks.lease_needed)
         if job is None:
             raise HTTPException(status_code=404, detail="no queued jobs")
         log.info("job leased", extra={"job_id": job["job_id"], "worker_id": worker_id,
-                                      "attempt": job["attempts"]})
+                                      "attempt": job["attempts"],
+                                      "lease_seconds": int(job["lease_expires_at"]) - t})
         return envelope(current_signature(job))
 
     @app.post("/v1/jobs/{job_id}/submit")

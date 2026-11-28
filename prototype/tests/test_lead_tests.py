@@ -66,7 +66,7 @@ def test_lead_with_an_aimed_test_waiting_is_not_listed_to_test(tmp_path: Path) -
     assert r["unchecked_leads"] == ["wk-b"] and r["leads_to_test"] == ["wk-b"]
 
     c = client.post("/v1/challenges", headers=OP, json={
-        **llm_test("Fresh secret"), "target_worker": "wk-b", "ttl_seconds": 60})
+        **llm_test("Fresh secret"), "target_worker": "wk-b", "ttl_seconds": 300})
     assert c.status_code == 200, c.text
     r = report(client)
     assert r["leads"][0]["open_aimed_tests"] == 1
@@ -77,7 +77,7 @@ def test_lead_with_an_aimed_test_waiting_is_not_listed_to_test(tmp_path: Path) -
     assert summary["leads_to_test"] == []
 
     # Past its deadline the test no longer counts: the lead needs a new one.
-    clock.t += 61
+    clock.t += 301
     r = report(client)
     assert r["leads"][0]["open_aimed_tests"] == 0 and r["leads_to_test"] == ["wk-b"]
 

@@ -75,6 +75,31 @@ class TaskExecutor:
         it. Never raises: it is also used on old rows whose payload may not validate today."""
         return payload
 
+    def run_limit_seconds(self, payload: str) -> int:
+        """`lease-fit-v1`: the longest an honest worker may spend on this job after claiming
+        it (checking files, running, stopping the program), not counting the network.
+        0 means the task is near-instant and the plain LEASE_SECONDS lease is enough.
+        Never raises: it is also used when a stored job is handed out."""
+        return 0
+
+
+# `lease-fit-v1`: a lease must outlast the job's own time limit. Before this, every lease was
+# LEASE_SECONDS (default 60) while an `llm:generate` job may run for up to 300 s, so an honest
+# run that took longer than the lease was thrown away, counted against the rig as a lease
+# timeout, and after MAX_ATTEMPTS rigs the job failed.
+LEASE_RULE = "lease-fit-v1"
+LEASE_GRACE_SECONDS = 30            # claim reply, signature check, submit and one retry
+MODEL_CHECK_SECONDS_PER_GIB = 30    # worker re-hashes the model file (~34 MB/s, a slow disk)
+
+
+def lease_needed(task_type: str, payload: str) -> int:
+    """Seconds a lease on this job must last: the task's run limit plus LEASE_GRACE_SECONDS,
+    or 0 for near-instant tasks (and unknown types). The coordinator leases for
+    max(LEASE_SECONDS, this), and refuses a new job whose ttl_seconds is shorter."""
+    executor = EXECUTORS.get(task_type)
+    limit = executor.run_limit_seconds(payload) if executor is not None else 0
+    return limit + LEASE_GRACE_SECONDS if limit > 0 else 0
+
 
 def _sha(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
@@ -117,6 +142,7 @@ class LlmGenerateTask(TaskExecutor):
     """
     task_type = "llm:generate"
     MAX_OUTPUT_CHARS = 4000
+    MIN_TIMEOUT_S, DEFAULT_TIMEOUT_S, MAX_TIMEOUT_S = 5, 60, 300
 
     def __init__(self, registry: dict[str, model_registry.ModelEntry] | None = None):
         self._registry = registry
@@ -147,9 +173,11 @@ class LlmGenerateTask(TaskExecutor):
         prompt = data.get("prompt")
         if not isinstance(prompt, str) or not 1 <= len(prompt) <= 2000:
             raise TaskError("prompt must be 1-2000 characters")
-        max_tokens, seed, timeout_s = data.get("max_tokens", 64), data.get("seed", 0), data.get("timeout_s", 60)
+        max_tokens, seed = data.get("max_tokens", 64), data.get("seed", 0)
+        timeout_s = data.get("timeout_s", self.DEFAULT_TIMEOUT_S)
         for name, value, low, high in (("max_tokens", max_tokens, 1, 256), ("seed", seed, 0, 2**31 - 1),
-                                       ("timeout_s", timeout_s, 5, 300)):
+                                       ("timeout_s", timeout_s, self.MIN_TIMEOUT_S,
+                                        self.MAX_TIMEOUT_S)):
             if not isinstance(value, int) or isinstance(value, bool) or not low <= value <= high:
                 raise TaskError(f"{name} must be an integer between {low} and {high}")
         return InferenceSpec(model_id, prompt, max_tokens, seed, timeout_s)
@@ -168,6 +196,32 @@ class LlmGenerateTask(TaskExecutor):
             return payload
         prompt = data.get("prompt") if isinstance(data, dict) else None
         return prompt if isinstance(prompt, str) else payload
+
+    def run_limit_seconds(self, payload: str) -> int:
+        """`lease-fit-v1`: the job's own `timeout_s` (llama-cli is stopped after it) plus time
+        for the worker to re-hash the pinned model file before running it
+        (MODEL_CHECK_SECONDS_PER_GIB of its pinned size, rounded up). A payload that doesn't
+        parse gets the longest timeout, so a doubt makes the lease longer, never shorter."""
+        try:
+            data = json.loads(payload)
+        except (ValueError, TypeError, RecursionError):
+            data = None
+        if not isinstance(data, dict):
+            return self.MAX_TIMEOUT_S
+        timeout_s = data.get("timeout_s", self.DEFAULT_TIMEOUT_S)
+        if not isinstance(timeout_s, int) or isinstance(timeout_s, bool) \
+                or not self.MIN_TIMEOUT_S <= timeout_s <= self.MAX_TIMEOUT_S:
+            timeout_s = self.MAX_TIMEOUT_S
+        size = 0
+        model_id = data.get("model_id")
+        if isinstance(model_id, str):
+            try:
+                entry = self.registry.get(model_id)
+            except TaskError:  # a damaged registry: the job can't run anyway
+                entry = None
+            size = (entry.size_bytes or 0) if entry is not None else 0
+        check = -(-size * MODEL_CHECK_SECONDS_PER_GIB // 2**30)  # ceiling division
+        return timeout_s + check
 
     def _binary(self) -> str | None:
         configured = os.getenv("LLAMA_CLI")
