@@ -1395,3 +1395,32 @@ In all three, `verify` printed **OK** and then starting the worker printed `EVIL
 2. **Honest and dishonest can look the same in the logs.** A slow honest rig and a rig that skips checks both "let the lease run out". Before blaming a rig, make sure the rules gave it a fair chance.
 3. **Refuse impossible work at the door.** A job that can't be finished before its deadline only wastes rigs' time later; saying no when it's created costs nothing.
 4. **When in doubt, err towards the safe side.** If a job's settings can't be read, assuming the longest run is the safe guess: the worst case is waiting a bit longer for a crashed rig, not throwing away honest work.
+
+## 2026-11-28 (UTC): A rig could tell whose work it was re-checking, from public pages (0.5.70)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions, so this session did the nineteenth "code audit" pass. Re-checks only work if a rig can't tell them from normal work: a cheater who knows "this one is a re-check" answers it honestly and fakes the rest. The threat model said spotting one took **two** rigs comparing prompts. This pass asked: **what can one rig, alone, learn from pages anyone can read?**
+
+**Found, shown really happening** (old code, an in-process coordinator; no model was run)
+1. **Every event had a number that counts up across the whole ledger.** The public job page (`GET /v1/jobs/{id}`, no login) listed each event with its `id`: 7, 8, 9, 10, … for everything that happens anywhere.
+2. **A re-check's number was the original's plus one.** A re-check is made in the same step that accepts the work it re-checks, so "result accepted" for the original was, say, number 18, and "job created" for the re-check was always 19.
+3. **So the rig doing a re-check could find whose work it was.** It opens its own job page (19), pages through the public ledger, opens each listed job, and finds the one whose "result accepted" is 18. This worked even with **six results accepted in the same second**, where the time alone can't decide.
+4. **And the rig being re-checked could count its own re-checks.** Same trick the other way round: "is there a job created right after my result was accepted?" That's its trust tier, which is meant to stay private.
+5. **Gaps gave away hidden events.** Private events (an auditor being picked, a hidden test aimed at a rig) were left off the page, but their numbers weren't skipped, so a missing number showed where one had been written.
+
+**Shipped (`public-events-v1`)**
+- **The public job page lists events without the number:** job, rig, event, detail, time. Same order as before (the database still sorts by the number internally, so two events in the same second never swap). The reply says `public_rules: ["public-events-v1"]`.
+- **Your operator views keep the numbers**, so nothing is lost for you.
+- Nothing else changed: same ledger layout, same signed job, same worker program.
+- **Proof.**
+  - The attack is written once as a test and run twice: on the operator's private data it finds the pair both ways (so it's a real attack, not a strawman), on the public pages it finds nothing.
+  - Every kind of job (normal work, re-check, tie-breaker, hidden test, aimed hidden test) shows only the five listed fields, and no public reply (ledger, health, any job page) has an `id` anywhere.
+  - A job that was rejected, handed out again and accepted, five events in one second, still shows them in the right order.
+  - 8 new tests, **4 of them fail on the old code**. **2,447 tests in total: 2,446 passing, 1 skipped** on the committed tree (the one test that can't work as the all-powerful root user, as designed). Run on Python 3.13 and 3.11 (what CI uses).
+  - I broke the new code 9 ways on purpose (ids back, an id under another name, ids in the column list, a field missing, private events shown, newest first, sort by time and name, rule not listed, sort by time only); **8 were caught**. The 9th, sorting by time only, gives exactly the same order today, because events in the same second stay in the order they were written and the ledger's clock never goes backwards (0.5.65), so it isn't a bug.
+- **Honest limits (still open):** times are still shown to the second, and a re-check is still made in the same second its original is accepted. So a rig can look for "someone's result was accepted in the very second my job was made". With a few rigs each finishing one AI job a minute, an ordinary job shares its second with another rig's result about **3% of the time with 2 rigs, 8% with 5, 28% with 20**; a re-check does every time. That's a strong hint while the network is small, not proof. The fix is planned as its own slice (a short random wait before a re-check is released, signed when released); it needs a ledger format change, so it's in TASKS. Nothing to do on your side.
+
+**What you learned**
+1. **Numbers that count up tell strangers what happened next to what.** Ticket numbers, invoice numbers and database ids all leak order. If two things are made at the same moment, their numbers sit side by side.
+2. **Hiding a thing means hiding its shape too.** We hid the words "audit scheduled", but the gap it left in the numbering was still there, like a blacked-out line in a document that still shows how long the line was.
+3. **Test the attack, not just the fix.** Running the attacker's code on the full data first proves the attack is real; only then does "it finds nothing on the public pages" mean something.
+4. **Fix the exact leak first, then measure the fuzzy one.** The numbers gave a certain answer at any traffic level; the timing gives a probability that shrinks as more rigs join. Both matter, but they need different fixes.
