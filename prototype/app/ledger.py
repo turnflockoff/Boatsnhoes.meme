@@ -60,7 +60,7 @@ from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator
 
-from . import copy_guard, secret_file, tasks
+from . import copy_guard, run_lock, secret_file, tasks
 from .audit_policy import (
     AUDITOR_PICK_RULES,
     PASSED_STATUSES,
@@ -352,6 +352,9 @@ class Ledger:
                 raise FileNotFoundError(self.path)
             return
         self._prepare_private_files()
+        # `backup-restore-v1` (app/run_lock.py): held while this ledger is open for writing,
+        # so a restore can't swap the file under it (and it can't open one mid-restore).
+        self._run_lock: run_lock.RunLock | None = run_lock.shared(self.path)
         with closing(self._connect()) as db:
             db.execute("PRAGMA journal_mode=WAL")
             db.executescript(SCHEMA)
@@ -376,10 +379,14 @@ class Ledger:
 
     def close(self) -> None:
         """Let go of the idle connection (the side files go once nothing else has the
-        ledger open). The ledger still works afterwards, just without that protection."""
+        ledger open) and of the run lock (`backup-restore-v1`). The ledger still works
+        afterwards, just without those protections."""
         keeper, self._keeper = getattr(self, "_keeper", None), None
         if keeper is not None:
             keeper.close()
+        lock, self._run_lock = getattr(self, "_run_lock", None), None
+        if lock is not None:
+            lock.release()
 
     def __del__(self) -> None:
         try:
