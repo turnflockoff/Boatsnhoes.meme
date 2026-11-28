@@ -19,8 +19,8 @@ from .config import Settings, get_settings
 from . import (audit_policy, client_address, input_limits, key_rotation, observability, points,
                public_counts, rate_limit, review, rewards, schemas, storage, tasks, vouches,
                workers)
-from .ledger import (MAX_JOB_EVENTS, MAX_PAGE, PAUSE_VERSION, CoordinatorPaused,
-                     HiddenTestRevealed, Ledger)
+from .ledger import (MAX_JOB_EVENTS, MAX_PAGE, PAUSE_VERSION, PUBLIC_EVENTS_RULE,
+                     CoordinatorPaused, HiddenTestRevealed, Ledger)
 from .models import (ChallengeCreate, EnrollmentCreate, JobCreate, JobEnvelope, PauseRequest,
                      ResultSubmission, WorkerRegistration)
 from .ledger_clock import LedgerClock, default_steady
@@ -777,9 +777,11 @@ def create_app(settings: Settings | None = None,
         public = ("job_id", "task_type", "status", "attempts", "max_attempts", "expires_at",
                   "lease_expires_at", "worker_id")
         # `refusal-log-v1`: filtered and capped in the database, oldest first.
+        # `public-events-v1`: without the ledger-wide event ids (app/ledger.py).
         events, total = ledger.public_job_events(job_id, PRIVATE_EVENTS, MAX_JOB_EVENTS)
         return {k: job[k] for k in public} | {"events": events, "events_total": total,
-                                              "events_limit": MAX_JOB_EVENTS}
+                                              "events_limit": MAX_JOB_EVENTS,
+                                              "public_rules": [PUBLIC_EVENTS_RULE]}
 
     @app.post("/v1/jobs/next", response_model=JobEnvelope)
     def next_job(worker_id: str | None = None,

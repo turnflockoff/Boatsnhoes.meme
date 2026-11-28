@@ -254,6 +254,12 @@ REFUSAL_EVENTS = ("submission_conflict", "submission_wrong_worker", "receipt_mis
 # no longer written, a job has a handful; the cap is a second fence, not the main one.
 MAX_JOB_EVENTS = 200
 
+# `public-events-v1` (code audit, nineteenth pass): the only event fields the public job
+# page shows. Not `id`: it counts up across the whole ledger, which tied a re-check to the
+# job it re-checks for anyone looking (see public_job_events).
+PUBLIC_EVENT_COLUMNS = ("job_id", "worker_id", "event", "detail", "at")
+PUBLIC_EVENTS_RULE = "public-events-v1"
+
 # `refusal-log-v1`: every accepted result asks for the sending rig's audit record (to pick
 # its audit rate), and that read every result ever accepted (about 10 ms at 100,000, and
 # growing). This index lets it read only that rig's results.
@@ -1644,12 +1650,19 @@ class Ledger:
         """`refusal-log-v1`: one job's events for the public `GET /v1/jobs/{id}`, without
         the `hidden` ones, oldest first, at most `limit`, plus how many there are in all.
         Filtered and capped inside SQLite through `events_by_job`, so the reply's cost
-        doesn't depend on how much anyone wrote about this job."""
+        doesn't depend on how much anyone wrote about this job.
+
+        `public-events-v1` (code audit, nineteenth pass): only PUBLIC_EVENT_COLUMNS, never
+        the event's `id`. Ids count up across the whole ledger, so they let anyone line up
+        events of different jobs exactly: a re-check's `job_created` came one id after
+        the original's `result_accepted` (same transaction), and a gap in one job's ids
+        showed where a private event had been written. Order is still the real order."""
         hidden = tuple(hidden)
         marks = ",".join("?" * len(hidden)) or "NULL"
         where = f"job_id=? AND event NOT IN ({marks})"
+        cols = ", ".join(PUBLIC_EVENT_COLUMNS)
         with closing(self._connect()) as db:
-            rows = db.execute(f"SELECT * FROM events WHERE {where} ORDER BY id LIMIT ?",
+            rows = db.execute(f"SELECT {cols} FROM events WHERE {where} ORDER BY id LIMIT ?",
                               (job_id, *hidden, limit)).fetchall()
             total = db.execute(f"SELECT COUNT(*) FROM events WHERE {where}",
                                (job_id, *hidden)).fetchone()[0]
