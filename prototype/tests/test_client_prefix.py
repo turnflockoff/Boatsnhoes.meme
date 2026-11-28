@@ -185,7 +185,7 @@ def test_many_new_addresses_stay_cheap_and_the_table_stays_small() -> None:
     for n, address in enumerate(addresses):
         clock.t = n * 0.001
         assert lim.check(address, "/v1/jobs/next") is None
-    assert time.perf_counter() - started < 10.0  # about 0.3 s; the old code took minutes
+    assert time.perf_counter() - started < 10.0  # about 0.2 s; the old code took minutes
     # A bucket with one request taken is full again after 0.25 s, so only the last few
     # hundred milliseconds of clients are worth remembering.
     assert len(lim._clients) < 600
