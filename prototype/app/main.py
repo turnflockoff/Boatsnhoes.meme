@@ -18,8 +18,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from .config import Settings, get_settings
-from . import (audit_policy, client_address, input_limits, key_rotation, observability, points,
-               public_counts, rate_limit, review, rewards, schemas, storage, tasks, vouches,
+from . import (audit_policy, client_address, input_limits, key_rotation, observability, owners,
+               points, public_counts, rate_limit, review, rewards, schemas, storage, tasks, vouches,
                workers)
 from .ledger import (MAX_JOB_EVENTS, MAX_PAGE, PAUSE_VERSION, PUBLIC_EVENTS_RULE,
                      RELEASE_OVERDUE_SECONDS, CoordinatorPaused, HiddenTestRevealed, Ledger)
@@ -701,8 +701,12 @@ def create_app(settings: Settings | None = None,
         Only its hash is stored, so this response is the only time it is shown."""
         require_operator(x_operator_token)
         disk.check_new_work()
-        code, expires_at = workers.issue_code(ledger, body.owner, body.ttl_seconds, now())
-        return {"enrollment_code": code, "owner": body.owner, "expires_at": expires_at,
+        try:
+            code, expires_at = workers.issue_code(ledger, body.owner, body.ttl_seconds, now())
+        except owners.OwnerLookalike as exc:  # `owner-name-v1`
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        return {"enrollment_code": code, "owner": owners.canonical(body.owner),
+                "expires_at": expires_at,
                 "notice": "Single use. Give it to the rig owner privately."}
 
     @app.post("/v1/workers/register")
@@ -717,9 +721,12 @@ def create_app(settings: Settings | None = None,
             raise HTTPException(status_code=401, detail="enrollment code required "
                                 "(the operator creates one with POST /v1/enrollments)")
         key = workers.new_worker_key()
-        outcome, owner = ledger.enroll_worker(body.worker_id, capabilities,
-                                              sha256_text(body.enrollment_code),
-                                              sha256_text(key), now())
+        try:
+            outcome, owner = ledger.enroll_worker(body.worker_id, capabilities,
+                                                  sha256_text(body.enrollment_code),
+                                                  sha256_text(key), now())
+        except owners.OwnerLookalike as exc:  # `owner-name-v1`; the code stays unused
+            raise HTTPException(status_code=409, detail=str(exc)) from None
         if outcome == "bad_code":
             raise AuthRefused(status_code=403,
                                 detail="enrollment code is invalid, used or expired")

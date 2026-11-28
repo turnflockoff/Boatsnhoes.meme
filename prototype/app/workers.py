@@ -27,7 +27,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import ledger_clock, ledger_role
+from . import ledger_clock, ledger_role, owners
 from .ledger import CoordinatorPaused, Ledger
 from .security import sha256_text
 from .screen import say
@@ -52,6 +52,8 @@ def issue_code(ledger: Ledger, owner: str, ttl_seconds: int, now: int) -> tuple[
     if not MIN_TTL <= ttl_seconds <= MAX_TTL:
         raise ValueError(f"ttl must be between {MIN_TTL} and {MAX_TTL} seconds")
     code = new_enrollment_code()
+    # Saved as `owners.canonical(owner)`; raises owners.OwnerLookalike (a ValueError) if it
+    # reads as a different existing owner (`owner-name-v1`).
     ledger.create_enrollment(sha256_text(code), owner, now, now + ttl_seconds)
     return code, now + ttl_seconds
 
@@ -97,7 +99,7 @@ def main(argv: list[str] | None = None) -> int:
                   "`python -m app.incident resume`", file=sys.stderr)
             return 3
         print(code)
-        print(f"owner={args.owner} expires_at={expires_at} (single use; share it privately)",
+        print(f"owner={owners.canonical(args.owner)} expires_at={expires_at} (single use; share it privately)",
               file=sys.stderr)
         return 0
     if args.cmd == "revoke":

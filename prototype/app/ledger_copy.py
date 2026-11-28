@@ -115,12 +115,16 @@ def _redact(db: sqlite3.Connection, until: int, now: int, salt: bytes) -> dict[s
         "UNION SELECT worker_id FROM events WHERE worker_id IS NOT NULL)", (until,))
     db.execute("UPDATE workers SET key_hash = NULL, capabilities = '[]', last_seen_at = NULL")
     db.execute("UPDATE workers SET revoked_at = NULL WHERE revoked_at >= ?", (until,))
+    # `owner-name-v1`: owners that differ only in letter case are one owner (the ledger's
+    # own comparisons ignore case), so they get one label here too.
+    # Relabelled row by row, so a real owner that happens to be called `owner-1` can't be
+    # merged with whoever was given that label first.
     owners: dict[str, str] = {}
-    for row in db.execute("SELECT owner FROM workers WHERE owner IS NOT NULL "
-                          "ORDER BY registered_at, worker_id").fetchall():
-        owners.setdefault(row[0], f"owner-{len(owners) + 1}")
-    for real, label in owners.items():
-        db.execute("UPDATE workers SET owner = ? WHERE owner = ?", (label, real))
+    rows = db.execute("SELECT worker_id, lower(owner) FROM workers WHERE owner IS NOT NULL "
+                      "ORDER BY registered_at, worker_id").fetchall()
+    for worker_id, real in rows:
+        label = owners.setdefault(real, f"owner-{len(owners) + 1}")
+        db.execute("UPDATE workers SET owner = ? WHERE worker_id = ?", (label, worker_id))
 
     for (job_id, payload_hash) in db.execute("SELECT job_id, payload_hash FROM jobs").fetchall():
         masked = hmac.new(salt, payload_hash.encode("utf-8"), hashlib.sha256).hexdigest()

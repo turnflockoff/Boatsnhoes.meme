@@ -61,7 +61,7 @@ from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator
 
-from . import copy_guard, ledger_format, ledger_role, run_lock, secret_file, tasks
+from . import copy_guard, ledger_format, ledger_role, owners, run_lock, secret_file, tasks
 from .audit_policy import (
     AUDITOR_PICK_RULES,
     PASSED_STATUSES,
@@ -595,8 +595,17 @@ class Ledger:
     # Only sha256 hashes of enrollment codes and worker keys are stored. Both are 256-bit
     # random tokens, so a fast hash is enough: there is nothing to brute-force.
     def create_enrollment(self, code_hash: str, owner: str, now: int, expires_at: int) -> None:
+        """`owner-name-v1`: `owner` is saved in lower case, and refused (OwnerLookalike) if it
+        matches a different existing label once `.`, `_` and `-` are dropped. Checked inside
+        the same transaction, so two codes made at once can't both slip past."""
+        owner = owners.canonical(owner)
         with self._tx() as db:
             self._refuse_if_paused(db)
+            for (existing,) in db.execute(
+                    "SELECT DISTINCT lower(owner) FROM workers WHERE owner IS NOT NULL "
+                    "UNION SELECT lower(owner) FROM enrollments"):
+                if existing != owner and owners.owner_key(existing) == owners.owner_key(owner):
+                    raise owners.OwnerLookalike("owner", existing)
             db.execute("INSERT INTO enrollments(code_hash, owner, created_at, expires_at) "
                        "VALUES(?,?,?,?)", (code_hash, owner, now, expires_at))
             self._event(db, now, "enrollment_created", detail=f"owner={owner}")
@@ -619,6 +628,12 @@ class Ledger:
                 return "revoked", None
             if worker is not None and worker["key_hash"] is not None:
                 return "taken", None  # an enrollment code can't take over a keyed worker
+            if worker is None:
+                # `owner-name-v1`: a new id that reads as an existing rig's is refused.
+                key = owners.worker_key(worker_id)
+                for (existing,) in db.execute("SELECT worker_id FROM workers"):
+                    if owners.worker_key(existing) == key:
+                        raise owners.OwnerLookalike("worker", existing)
             owner = code["owner"]
             if worker is None:
                 db.execute("INSERT INTO workers(worker_id, capabilities, registered_at, "
@@ -1005,7 +1020,7 @@ class Ledger:
             "AND w.last_seen_at IS NOT NULL AND w.last_seen_at>? AND NOT EXISTS ("
             "SELECT 1 FROM job_exclusions x LEFT JOIN workers xw ON xw.worker_id=x.worker_id "
             "WHERE x.job_id=? AND (x.worker_id=w.worker_id OR "
-            "(xw.owner IS NOT NULL AND xw.owner=w.owner))) ORDER BY w.worker_id",
+            "(xw.owner IS NOT NULL AND lower(xw.owner)=lower(w.owner)))) ORDER BY w.worker_id",
             (now - self.active_seconds, job_id)).fetchall()
         return [r["worker_id"] for r in rows]
 
@@ -1150,7 +1165,7 @@ class Ledger:
             "AND j.release_at IS NULL AND NOT EXISTS ("
             "SELECT 1 FROM job_exclusions x LEFT JOIN workers w ON w.worker_id=x.worker_id "
             "WHERE x.job_id=j.job_id AND (x.worker_id=? OR "
-            "(w.owner IS NOT NULL AND w.owner=?))) "
+            "(w.owner IS NOT NULL AND lower(w.owner)=lower(?)))) "
             f"AND ((j.job_kind NOT IN ({','.join('?' * len(ASSIGNED_KINDS))}) "
             "AND j.target IS NULL) OR j.assigned_worker=?) "
             "ORDER BY created_at, job_id LIMIT 1",
@@ -1806,7 +1821,8 @@ class Ledger:
             for r in q("SELECT DISTINCT j.job_id FROM jobs j JOIN job_exclusions x USING(job_id) "
                        "JOIN workers ex ON ex.worker_id=x.worker_id "
                        "JOIN workers w ON w.worker_id=j.worker_id "
-                       "WHERE ex.owner IS NOT NULL AND ex.owner=w.owner AND w.worker_id!=ex.worker_id"):
+                       "WHERE ex.owner IS NOT NULL AND lower(ex.owner)=lower(w.owner) "
+                       "AND w.worker_id!=ex.worker_id"):
                 problems.append(f"job given to a worker with the same owner as an excluded "
                                 f"worker {r['job_id']}")
             for r in q("SELECT s.job_id FROM submissions s JOIN jobs j USING(job_id) "

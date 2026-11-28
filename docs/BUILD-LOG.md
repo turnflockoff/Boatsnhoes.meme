@@ -1642,3 +1642,34 @@ In all three, `verify` printed **OK** and then starting the worker printed `EVIL
 2. **"Valid JSON" isn't the same as "valid text".** JSON can describe half of a character pair; most files, databases and network messages can't hold one. Check text where it enters, not where it breaks.
 3. **Refuse what you don't recognise.** Ignoring unknown settings feels friendly, but it turns a typo into a job that quietly does something else. A clear "unknown key `max_token`" costs you ten seconds; a silent default costs a wrong result.
 4. **A checker must never crash.** If the code that decides "is this OK?" can throw a surprise error, that error becomes the new way in. Every failure should come out as a plain "no, because ...".
+
+## 2026-11-28 (UTC): One person typed two ways is one owner (0.5.79)
+
+**Why this, this hour.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" means it's waiting for your review), and `main` has nothing the drafts branch is missing. Every GPU item left needs the rig or a decision from you, so this session did the twenty-seventh "code audit" pass, on the rule that keeps one person from checking their own work: **rigs with the same owner never re-check or break ties on each other's results.** That rule rests on the owner label you type each time you make an enrollment code.
+
+**Found (old tree, in-process coordinator)**
+1. **`Alice` and `alice` were two different people.** Codes made for each gave two rigs the coordinator treated as strangers. With re-checks on, the second rig was handed the hidden re-run of the first rig's AI answer (`200`), and its matching answer marked the result `confirmed`. The consistency check found nothing wrong.
+2. **`bob-smith`, `bob_smith` and `bob.smith` were three owners**, same problem.
+3. **A published ledger copy told outsiders the same story**: `Alice` and `alice` became `owner-1` and `owner-2`.
+4. **A new rig could pick a name that reads as an existing one**: `WK-A`, `wk_a` or `wka` next to `wk-a`, on your screens, the review queue and reports.
+5. Found while fixing 3: the copy swapped in labels with one database update per owner, so a real owner literally called `owner-1` was merged with whoever got the label `owner-1` first.
+
+**Shipped**
+- Owner labels are saved in lower case (the reply and the CLI show the saved label).
+- A new label that only differs from an existing one by `.`, `_` or `-` is refused with the existing name ("Use exactly that name if it's the same person, or a clearly different one"). It looks at registered rigs and codes not used yet, inside the same database step as saving the code.
+- Every owner comparison (who may re-check, who may take a job, the consistency check) ignores letter case, so a ledger written by older code is covered too, including a re-check older code had already handed to the wrong rig.
+- A worker id that matches an existing one once letter case and `. _ - :` are ignored is refused at registration (`409`); the enrollment code isn't used up, so the rig can retry with a clearly different name.
+- Ledger copies give one label per owner whatever the letter case, assigned rig by rig.
+
+**Proof**
+- 20 new tests (`tests/test_owner_names.py`); **18 fail on the old code** (the other 2 test the new helper itself).
+- I broke the new code 14 ways on purpose; **all 14 were caught** (the first try missed one: removing the case-insensitive check where a rig *takes* a job, because new re-checks are already aimed at an allowed rig. A test now covers a re-check that older code had already aimed at the wrong rig).
+- **2,665 tests in total: 2,664 passing, 1 skipped** on the committed tree (the root-only test, as designed).
+
+**Honest limits:** look-alike characters (`0`/`o`, `1`/`l`), spelling variants and one person under two real names still count as different owners; labels are still only as good as your hand-out. Your two-card plan (`owner-gpu0`, `owner-gpu1`) still gives two owners. Nothing ran on a GPU.
+
+**What you learned**
+1. **Computers compare letters, not meaning.** To a database `Alice` and `alice` are as different as `Alice` and `Zed`. If a rule depends on "the same person", decide what "the same" means and write it down in code.
+2. **Normalise when you save, compare loosely when you check.** Saving in lower case keeps new data tidy; comparing with `lower()` also covers data written before the rule existed, without rewriting anything.
+3. **Refuse the near-miss, don't guess.** If `bob_smith` arrives while `bob-smith` exists, the code can't know if it's the same Bob. Asking you (with the existing name in the message) is safer than silently merging or silently splitting.
+4. **A safety check in two places is worth testing in both.** Taking the case check out of one place broke no test at first, because the other place covered it. The second place is the one that protects data written by older code.
