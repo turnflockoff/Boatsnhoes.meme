@@ -1367,3 +1367,31 @@ In all three, `verify` printed **OK** and then starting the worker printed `EVIL
 2. **Data should say what version it is.** A number in the file lets newer code upgrade it and older code say "not mine" instead of guessing. Every file format worth keeping has one (PDFs, Word files, databases).
 3. **Check, then act, while holding the lock.** "Is this column missing? Then add it" breaks when two programs both check before either acts. Taking the lock first and checking again under it is the fix, the same idea as two people not both booking the last seat.
 4. **Make forgetting impossible.** The format number only works if someone raises it. A test that fails when the layout changes without it turns "remember to" into "can't forget to".
+
+## 2026-11-28 (UTC): An honest AI job longer than a minute was thrown away (0.5.69)
+
+**Why this, why now.** PR #5 has green CI and no merge conflicts (GitHub's "blocked" just means it's waiting for your review). Every GPU item left needs the rig or one of your decisions, so this session did the eighteenth "code audit" pass. The last few asked what the clock, the disk, a backup and an old version can do to the coordinator. This one asked a plainer question, the first one the RX 470s will ask: **can an honest rig finish an AI job before the coordinator gives up on it?**
+
+**Found, shown really happening** (old code, an in-process coordinator with the default settings; a fake clock stands in for the time the run takes, no model was run)
+1. **The coordinator only waited 60 seconds for any job.** When a rig takes a job it gets a "lease": if no answer comes back before the lease ends, the coordinator assumes the rig crashed and hands the job to someone else. Every lease was `LEASE_SECONDS`, 60 s. But an AI job is allowed to run for up to 300 s (`timeout_s`), and before running it the rig re-checks the whole model file.
+2. **Three honest rigs, zero results.** One AI job with a 120 s limit, three rigs in turn, each finishing in 61 s: all three answers were refused ("job is not awaiting a result"), each rig got a "lease timeout" on its record, and the job ended as `failed`.
+3. **Honest work showed up as cheating-like behaviour.** If another rig asked for work while the first was still running, it got the job, and the first rig's honest answer was logged as a "result for a job leased to someone else", which the reward report counts as a bad submission. Audits ran into the same wall, so an honest checker on a slow card looked exactly like a rig dodging the audits it was picked for (the warning on your health page).
+4. **Impossible jobs were accepted.** A job could be queued with a 10-second deadline and a 300-second run limit.
+
+**Shipped (`lease-fit-v1`)**
+- **Each job says how long an honest run may take.** For an AI job that's its own `timeout_s` (60 s if not set) plus about 30 s per GB of the pinned model file for the re-check; if the job's settings can't be read, the longest limit (300 s) is assumed, so a doubt makes the lease longer, never shorter. The CPU demo job says "near-instant" and keeps the plain 60 s lease.
+- **The lease is that plus 30 s for the network**, or `LEASE_SECONDS` if that's longer, and never past the job's own deadline (which is signed into the job and can't move).
+- **Jobs that can't be finished are refused when they're made.** A job or hidden test whose `ttl_seconds` is shorter than the lease it needs gets "ttl_seconds must be at least N" and nothing is stored. Re-checks copy the original job's window, which already passed. The private hidden-test pool sends 600 s by default, which covers even the slowest case (570 s).
+- Nothing else changed: same ledger layout, same signed job, same worker program.
+- **Proof.**
+  - The same three-rig story on the new code: the first rig's answer is accepted, no lease timeouts. A slow honest rig's reward report shows 0 lease timeouts and 0 bad submissions. A rig that really goes silent still loses the job, just at the end of the longer lease. An auditor taking 100 s of a 120 s limit counts as "completed", not "dropped".
+  - 32 new tests, **26 of them fail on the old code**. Five older tests assumed an AI lease ends after 31 s; they now ask the ledger when it really ends.
+  - **2,439 tests in total: 2,437 passing, 2 skipped** before committing (the root-only one, and the release self-check, which skips while files are uncommitted). Run on Python 3.13 and 3.11 (what CI uses).
+  - I broke the new code 15 ways on purpose (rule not passed to the claim, `min` instead of `max`, no deadline cap, no grace, grace on CPU jobs, no model re-check time, rounding down, unreadable settings treated as the default, deeply nested settings crashing it, a damaged model list crashing it, the deadline check off by one or missing on either route, the prompt echoed in the error); **all 15 were caught.**
+- **Honest limits:** a rig that crashes now holds an AI job longer before another rig gets it (up to about 9.5 minutes in the worst case: an 8 GB model and a 300 s limit). A job handed out again late in its life still only gets what's left of its deadline. "30 s per GB" for re-checking the model file is a guess for a slow disk; the rig will tell us the real number in Phase 3. There's a "good to know" line in USER_TODO; nothing to do now.
+
+**What you learned**
+1. **A timeout is a promise to both sides.** "You may take up to 300 s" (the job) and "I'll wait 60 s" (the lease) were two different promises that didn't fit together. When two limits describe the same wait, one should be derived from the other.
+2. **Honest and dishonest can look the same in the logs.** A slow honest rig and a rig that skips checks both "let the lease run out". Before blaming a rig, make sure the rules gave it a fair chance.
+3. **Refuse impossible work at the door.** A job that can't be finished before its deadline only wastes rigs' time later; saying no when it's created costs nothing.
+4. **When in doubt, err towards the safe side.** If a job's settings can't be read, assuming the longest run is the safe guess: the worst case is waiting a bit longer for a crashed rig, not throwing away honest work.

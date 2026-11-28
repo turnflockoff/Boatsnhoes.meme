@@ -186,6 +186,14 @@ This assumes the auditor is honest. The rest of this document is about when that
   file header, every program refuses a newer ledger before changing it, and the upgrade is
   one locked, recorded step. Versions 0.5.67 and older can't read the number, so they must
   never be started on a ledger; going back means restoring a backup from before the upgrade.
+- **A lease shorter than the job loses honest work.** Before 0.5.69 every lease was
+  `LEASE_SECONDS` (60 s) while an `llm:generate` job may run for up to 300 s: an honest
+  run longer than the lease was refused, counted as a lease timeout (and, if another rig
+  had taken the job, as a bad submission), honest auditors on slow cards looked like rigs
+  dropping audits (#4), and after `MAX_ATTEMPTS` the job failed. Since 0.5.69
+  (`lease-fit-v1`, `app/tasks.py`) a lease lasts the job's own time limit plus model check
+  plus 30 s, and a job whose deadline is shorter than that is refused. A crashed rig now
+  holds an AI job longer before it moves on; the per-GiB check time is a guess until the rig.
 - **The tolerance rule is a guess** until Phase 3 produces real output from two cards.
 
 ## Order of the next fixes
