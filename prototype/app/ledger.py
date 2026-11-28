@@ -55,12 +55,13 @@ import json
 import random
 import sqlite3
 import threading
+import time
 from collections import Counter
 from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator
 
-from . import copy_guard, run_lock, secret_file, tasks
+from . import copy_guard, ledger_format, run_lock, secret_file, tasks
 from .audit_policy import (
     AUDITOR_PICK_RULES,
     PASSED_STATUSES,
@@ -260,6 +261,18 @@ WORKER_INDEXES = (
     "CREATE INDEX IF NOT EXISTS submissions_by_worker ON submissions(worker_id, audit_status)",
 )
 
+# `ledger-clock-v1`: the newest time written anywhere in the ledger.
+LATEST_TIME_SQL = (
+    "SELECT MAX(m) FROM (SELECT MAX(at) AS m FROM events "
+    "UNION ALL SELECT MAX(updated_at) FROM jobs "
+    "UNION ALL SELECT MAX(created_at) FROM jobs "
+    "UNION ALL SELECT MAX(accepted_at) FROM submissions "
+    "UNION ALL SELECT MAX(registered_at) FROM workers "
+    "UNION ALL SELECT MAX(last_seen_at) FROM workers "
+    "UNION ALL SELECT MAX(revoked_at) FROM workers "
+    "UNION ALL SELECT MAX(created_at) FROM enrollments "
+    "UNION ALL SELECT MAX(used_at) FROM enrollments)")
+
 # Job kinds that go to a randomly chosen worker instead of whoever asks first.
 ASSIGNED_KINDS = ("audit", "tiebreak")
 
@@ -346,18 +359,74 @@ class Ledger:
         if untrusted:
             self.read_only = True
             copy_guard.vet(self.path)
+            with closing(self._connect()) as db:
+                ledger_format.refuse_if_newer(ledger_format.read(db), "this ledger copy")
             return
         if read_only:
             if not self.path.exists():
                 raise FileNotFoundError(self.path)
+            # `ledger-format-v1`: checking a newer ledger with older code would read it
+            # without the rules that version added.
+            with closing(self._connect()) as db:
+                ledger_format.refuse_if_newer(ledger_format.read(db))
             return
         self._prepare_private_files()
         # `backup-restore-v1` (app/run_lock.py): held while this ledger is open for writing,
         # so a restore can't swap the file under it (and it can't open one mid-restore).
         self._run_lock: run_lock.RunLock | None = run_lock.shared(self.path)
-        with closing(self._connect()) as db:
-            db.execute("PRAGMA journal_mode=WAL")
-            db.executescript(SCHEMA)
+        try:
+            with closing(self._connect()) as db:
+                # `ledger-format-v1`: never run on a ledger a newer version wrote.
+                ledger_format.refuse_if_newer(ledger_format.read(db))
+                self._use_wal(db)
+                self._upgrade(db)
+        except BaseException:
+            self.close()
+            raise
+        # `storage-full-v1` (app/storage.py): one idle connection held open for the life of
+        # the ledger. SQLite deletes the -wal and -shm side files when its last connection
+        # closes, and every request here opens and closes its own; on a full disk they then
+        # couldn't be created again and even reads (health included) failed with "disk I/O
+        # error". Never used for queries and never holds a transaction, so it blocks nothing.
+        self._keeper: sqlite3.Connection | None = sqlite3.connect(
+            self.path, timeout=10, isolation_level=None, check_same_thread=False)
+        self._keeper.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchall()
+
+    # `ledger-format-v1`: the statements that make a fresh ledger, one at a time, so they
+    # can run inside a transaction (executescript would commit first).
+    _SCHEMA_STATEMENTS = tuple(s.strip() for s in SCHEMA.split(";") if s.strip())
+
+    @staticmethod
+    def _use_wal(db: sqlite3.Connection, wait_seconds: float = 10.0) -> None:
+        """Switch the ledger to WAL mode. A ledger in the older journal mode (every
+        restored one: `backup restore` leaves it so) needs a moment alone for the switch,
+        and SQLite answers "database is locked" at once instead of waiting when another
+        program is switching it too (seen: 1 in 60 opens with three programs starting
+        together after a restore). So wait and try again, like any other lock."""
+        deadline = time.monotonic() + wait_seconds
+        while True:
+            try:
+                db.execute("PRAGMA journal_mode=WAL").fetchall()
+                return
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc) or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.02)
+
+    def _upgrade(self, db: sqlite3.Connection) -> None:
+        """Bring the ledger up to `ledger_format.FORMAT` in one transaction (see
+        app/ledger_format.py). The write lock is taken first and everything is looked at
+        again under it, so two programs opening an old ledger at once don't both add the
+        same column; a crash part-way leaves the ledger as it was. Nothing is written when
+        the ledger is already current."""
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            found = ledger_format.read(db)  # again: someone may have upgraded meanwhile
+            ledger_format.refuse_if_newer(found)
+            existed = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND "
+                                 "name='jobs'").fetchone() is not None
+            for statement in self._SCHEMA_STATEMENTS:
+                db.execute(statement)
             # Migrate older (Phase 1-3) databases in place.
             for table, columns in MIGRATIONS.items():
                 have = {r["name"] for r in db.execute(f"PRAGMA table_info({table})").fetchall()}
@@ -368,14 +437,24 @@ class Ledger:
             db.execute("CREATE UNIQUE INDEX IF NOT EXISTS workers_key_hash ON workers(key_hash)")
             for ddl in SCALE_INDEXES + WORKER_INDEXES:
                 db.execute(ddl)
-        # `storage-full-v1` (app/storage.py): one idle connection held open for the life of
-        # the ledger. SQLite deletes the -wal and -shm side files when its last connection
-        # closes, and every request here opens and closes its own; on a full disk they then
-        # couldn't be created again and even reads (health included) failed with "disk I/O
-        # error". Never used for queries and never holds a transaction, so it blocks nothing.
-        self._keeper: sqlite3.Connection | None = sqlite3.connect(
-            self.path, timeout=10, isolation_level=None, check_same_thread=False)
-        self._keeper.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchall()
+            if found < ledger_format.FORMAT:
+                if existed:
+                    # At the newest time already written, so the ledger's clock never moves
+                    # (`ledger-clock-v1`); the server clock's reading is for people.
+                    at = db.execute(LATEST_TIME_SQL).fetchone()[0] or 0
+                    self._event(db, int(at), ledger_format.UPGRADE_EVENT, detail=json.dumps({
+                        "rule": ledger_format.RULE, "from": found,
+                        "to": ledger_format.FORMAT, "server_clock": int(time.time())},
+                        sort_keys=True))
+                db.execute(f"PRAGMA user_version = {int(ledger_format.FORMAT)}")
+            db.execute("COMMIT")
+        except BaseException:
+            if db.in_transaction:
+                try:
+                    db.execute("ROLLBACK")
+                except sqlite3.Error:
+                    pass
+            raise
 
     def close(self) -> None:
         """Let go of the idle connection (the side files go once nothing else has the
@@ -758,16 +837,7 @@ class Ledger:
         """The newest time written anywhere in the ledger (`ledger-clock-v1`): events, job
         updates, accepted results, rigs seen, enrollment codes. None for an empty ledger."""
         with closing(self._connect()) as db:
-            row = db.execute(
-                "SELECT MAX(m) FROM (SELECT MAX(at) AS m FROM events "
-                "UNION ALL SELECT MAX(updated_at) FROM jobs "
-                "UNION ALL SELECT MAX(created_at) FROM jobs "
-                "UNION ALL SELECT MAX(accepted_at) FROM submissions "
-                "UNION ALL SELECT MAX(registered_at) FROM workers "
-                "UNION ALL SELECT MAX(last_seen_at) FROM workers "
-                "UNION ALL SELECT MAX(revoked_at) FROM workers "
-                "UNION ALL SELECT MAX(created_at) FROM enrollments "
-                "UNION ALL SELECT MAX(used_at) FROM enrollments)").fetchone()
+            row = db.execute(LATEST_TIME_SQL).fetchone()
         return None if row[0] is None else int(row[0])
 
     def revealed_until(self) -> int | None:
@@ -1557,6 +1627,8 @@ class Ledger:
                     "GROUP BY event ORDER BY event", (now - window_seconds, now)).fetchall()},
                 "recent_window_seconds": window_seconds,
                 "last_event_at": one("SELECT MAX(at) FROM events"),
+                # `ledger-format-v1`: which format this ledger is (operator-only).
+                "ledger_format": ledger_format.read(db),
             }
         return snapshot
 

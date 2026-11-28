@@ -69,7 +69,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
-from . import copy_guard, ledger_clock, run_lock, secret_file
+from . import copy_guard, ledger_clock, ledger_format, run_lock, secret_file
 from .ledger import COPY_MADE_EVENT, PAUSE_EVENTS, REPORT_SIGNED_EVENT, Ledger
 from .screen import say
 
@@ -183,12 +183,20 @@ def vet(path: Path) -> dict[str, Any]:
         raise BackupError(f"not a ledger backup: {exc}") from None
     try:
         with closing(_ro(path)) as db:
+            # `ledger-format-v1`: a backup from a newer version can't be put back by this
+            # one (it would run without that version's rules). Checked first: a newer
+            # backup has columns this code doesn't know, and this says why.
+            found = ledger_format.read(db)
+            ledger_format.refuse_if_newer(found, "the backup")
             problems = _integrity(db) or _schema_problems(db)
             if problems:
                 raise BackupError("the backup can't be trusted: " + "; ".join(problems))
             info = _summary(db)
+            info["ledger_format"] = found
     except sqlite3.DatabaseError as exc:
         raise BackupError(f"not a readable ledger backup: {exc}") from None
+    except ledger_format.LedgerTooNew as exc:
+        raise BackupError(str(exc)) from None
     info["consistency_problems"] = Ledger(path, read_only=True).check_consistency()
     return info
 
