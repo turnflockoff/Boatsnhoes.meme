@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Litepaper (draft) — Boats n Hoes ($BNH)</title>
+<meta name="description" content="The Boats n Hoes technical paper: useful AI work on ordinary GPUs, how results are checked before they count, the threat model, simulated scoring, and the proposed coin. Draft; separates what's built, tested and planned.">
+<meta name="theme-color" content="#090705">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+<link rel="canonical" href="https://boatsnhoes.meme/litepaper">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://boatsnhoes.meme/litepaper">
+<meta property="og:title" content="Boats n Hoes litepaper (draft)">
+<meta property="og:description" content="Useful AI work on ordinary GPUs, checked before it counts. What's built, what's tested, what's still a plan.">
+<meta property="og:image" content="https://boatsnhoes.meme/assets/og-home.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://boatsnhoes.meme/assets/og-home.png">
+<link rel="stylesheet" href="/assets/site.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="nav">
+  <a class="brand" href="/" aria-label="Boats n Hoes home"><img src="/assets/mark-orange.svg" alt="" width="34" height="34"><span>BOATS <b>N</b> HOES</span></a>
+  <button class="menu" id="menubtn" type="button" aria-expanded="false" aria-controls="navlinks">Menu</button>
+  <nav class="links" id="navlinks" aria-label="Main">
+    <a href="#status">Status</a><a href="#verification">Verification</a><a href="#threats">Threats</a><a href="#coin">The coin</a><a href="#risks">Risks</a><a href="/">← Home</a>
+  </nav>
+</header>
+
+<main id="main">
+<section class="c-hero wrap">
+  <span class="badge">Litepaper · draft 0.5.73 · November 2026</span>
+  <h1 style="margin-top:18px">Checked before <span>it counts.</span></h1>
+  <p class="tag">A technical paper on putting ordinary GPUs to useful work, how a small network can check that work without trusting the people running it, and what a coin might later have to do with it.</p>
+  <div class="callout" style="max-width:640px;margin:24px auto 0;text-align:left"><b>Draft, and honest about it.</b> Every claim here is labelled built, tested, planned or undecided. No coin, token, chain, casino or payout exists. Nothing here is an offer or financial advice.</div>
+</section>
+
+<section>
+  <div class="wrap doc">
+    <nav class="toc" aria-label="Contents">
+      <b>Contents</b>
+      <ol>
+        <li><a href="#abstract">Abstract</a></li>
+        <li><a href="#status">Status at a glance</a></li>
+        <li><a href="#why">Why useful work</a></li>
+        <li><a href="#system">System overview</a></li>
+        <li><a href="#jobs">Jobs and receipts</a></li>
+        <li><a href="#workers">Rigs and identity</a></li>
+        <li><a href="#verification">Verification</a></li>
+        <li><a href="#privacy">Keeping checks hidden</a></li>
+        <li><a href="#scoring">Points and reports</a></li>
+        <li><a href="#ops">Running it safely</a></li>
+        <li><a href="#threats">Threat model</a></li>
+        <li><a href="#hardware">Hardware plan</a></li>
+        <li><a href="#coin">The coin (proposal)</a></li>
+        <li><a href="#future">Later directions</a></li>
+        <li><a href="#risks">Risks and limits</a></li>
+        <li><a href="#roadmap">Roadmap</a></li>
+        <li><a href="#glossary">Glossary</a></li>
+      </ol>
+    </nav>
+
+    <article class="prose">
+      <h2 id="abstract">1. Abstract</h2>
+      <p>Boats n Hoes is an open-source experiment in putting overlooked consumer GPUs to useful work. A central <b>coordinator</b> hands out small, signed AI jobs; <b>workers</b> running on volunteers' graphics cards do them and send results back; and the coordinator <b>checks</b> the work with hidden re-runs and known-answer tests before it counts. Counted work is tallied as simulated, off-chain points in reports that are signed and can be re-checked by anyone.</p>
+      <p>The hard problem isn't running a model. It's knowing a result is real when the person running it might cheat, without paying to redo every job. This paper describes how the prototype approaches that, what it can and can't prove, and how a coin is proposed to fit in later. The first milestone is deliberately modest: prove the software on two Radeon RX 470 cards in public, before any chain or token exists.</p>
+
+      <h2 id="status">2. Status at a glance</h2>
+      <div class="tablewrap">
+        <table class="data">
+          <thead><tr><th scope="col">Part</th><th scope="col">Status</th><th scope="col">Evidence</th></tr></thead>
+          <tbody>
+            <tr><td>Coordinator, worker, job signing, checks, simulated points</td><td><span class="pill done">Built · tested in software</span></td><td>Python prototype on GitHub; 2,496 automated tests, run on every change</td></tr>
+            <tr><td>Running a real AI model on a real GPU</td><td><span class="pill open">Not yet run</span></td><td>Tools to record the first run are built; the RX 470 test is next</td></tr>
+            <tr><td>Two rigs working together over a network</td><td><span class="pill open">Rehearsed in software</span></td><td>A 28-check rehearsal with simulated workers passes; not yet on the real cards</td></tr>
+            <tr><td>Public logbook of signed reports</td><td><span class="pill done">Built</span></td><td><a href="/reports/">/reports/</a>; nothing published yet</td></tr>
+            <tr><td>Coin supply, chain, launch</td><td><span class="pill">Proposed</span></td><td><a href="/tokenomics">Tokenomics</a>; decisions open</td></tr>
+            <tr><td>Paying contributors, renting compute, casino</td><td><span class="pill no">Not built</span></td><td>Each needs legal review first</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="why">3. Why useful work</h2>
+      <p>Classic proof-of-work mining turns electricity into security by having machines solve puzzles nobody needs answered. That has real strengths: coins are spread to whoever does the work, and attacking the chain costs real hardware. But the work itself is thrown away, and the cost of mining doesn't make a coin valuable; only demand does.</p>
+      <p>The bet here is different: GPUs doing work someone actually wants (answering prompts, classifying or extracting text) is useful whether or not a coin ever exists. The catch is that useful work is much harder to check than a hash. A hash puzzle can be verified in microseconds; an AI answer can only be checked by running the job again or comparing it against a known answer. Most of this paper is about doing that cheaply and without being fooled.</p>
+      <blockquote>There is no inexpensive cryptographic proof that a particular model ran correctly on a particular GPU. The prototype doesn't pretend otherwise: it relies on sampling, hidden tests and agreement between independent rigs, and says how much each is worth.</blockquote>
+
+      <h2 id="system">4. System overview</h2>
+<pre><code>          Operator (owner)
+               |
+         Coordinator  ── signs jobs (Ed25519), keeps the ledger (SQLite)
+          /        \
+   Rig A worker   Rig B worker   ── one worker per GPU, own key each
+     RX 470 4 GB    RX 470 8 GB
+          \        /
+       results + receipts
+               |
+   Checks: re-runs · hidden tests · tie-breakers · review queue
+               |
+   Simulated points ── signed reports ── public logbook</code></pre>
+      <p>The coordinator is a small web service (FastAPI) with one SQLite ledger. It is <b>trusted</b>: it is run by the project, not a decentralised network. The design tries to make that trust checkable after the fact (signed reports, shareable ledger copies) rather than pretending it isn't there.</p>
+
+      <h2 id="jobs">5. Jobs and receipts</h2>
+      <h3>Job manifest (<code>bnh-job/1</code>)</h3>
+      <p>Each job names its task type, its input (with a sha256 of it), its points, a deadline, and for model tasks the sha256 of the exact model file. The coordinator signs the whole manifest with an Ed25519 key; workers pin the coordinator's public key and refuse anything unsigned, altered or of an unknown version. Two task types exist today:</p>
+      <ul>
+        <li><code>demo:sha256</code>: a trivial hashing task used to test the plumbing.</li>
+        <li><code>llm:generate</code>: run a pinned open model (first candidate: Qwen2.5 0.5B Instruct, Q4_K_M, about 400 MB, Apache-2.0) on a prompt with a fixed seed and token limit, through llama.cpp's Vulkan backend.</li>
+      </ul>
+      <h3>Receipt (<code>bnh-receipt/1</code>)</h3>
+      <p>A worker's answer comes with a receipt repeating the job version, the hash of the input it ran and the model file it checked. The coordinator refuses receipts that don't match. This catches honest mistakes (a stale model file, an old worker), but it is <b>not proof</b>: a cheater can copy the expected values without running anything. Only the checks in section 7 catch that.</p>
+      <h3>Model files</h3>
+      <p>Models are never downloaded automatically. The operator downloads one, and it's pinned by size and sha256 (checked against the hash on the model's page) before any job can use it. Downloads are https-only with size and time limits, and every model's licence is recorded.</p>
+      <h3>Leases</h3>
+      <p>A rig that takes a job holds it for a lease long enough for that job's own time limit plus time to re-check the model file, so an honest, slow AI job isn't taken away mid-run. A job whose deadline is shorter than its own run limit is refused when queued.</p>
+
+      <h2 id="workers">6. Rigs and identity</h2>
+      <ul>
+        <li><b>Enrollment:</b> the operator issues a one-time code per rig, tied to an owner label. The rig exchanges it for its own key; the coordinator stores only a hash of the key. Rigs can be revoked instantly.</li>
+        <li><b>Same owner, no self-checks:</b> a rig never checks work by a rig with the same owner.</li>
+        <li><b>Worker safety:</b> the worker treats the coordinator as possibly hostile too: size, time and format limits on every reply, no keys over plain http to another machine, prompts passed to the model in a private file, no secrets in the model's environment, and no admin rights needed.</li>
+        <li><b>Signed releases:</b> worker code will only count as official when at least two different people from a published list have signed it; a release checker refuses extra or changed files (signers not yet chosen).</li>
+      </ul>
+
+      <h2 id="verification">7. Verification</h2>
+      <h3>7.1 Hidden re-runs (audits)</h3>
+      <p>After a result is accepted, the coordinator may quietly queue the same job again for a different, randomly chosen rig. How often depends on the rig's record: <b>50%</b> for new rigs (fewer than 5 independently checked results), <b>100%</b> for rigs with a strike, and a base <b>25%</b> for established rigs. The auditor is picked with secure randomness among active, eligible rigs; it can't race for audits, and the same owner never audits itself.</p>
+      <h3>7.2 Hidden tests (known answers)</h3>
+      <p>Some jobs are tests whose correct answer the operator already knows, produced by the pinned model on trusted hardware. They look like any other job. A wrong answer is a strike. Tests can be aimed at one rig or at a trust tier (for example, every new rig). They come from a private, owner-only stock; each is used once, and any test whose input has been revealed (including near copies with changed spacing, case or settings) is retired.</p>
+      <h3>7.3 Agreement and tie-breakers</h3>
+      <p>Two answers "agree" if they're equal after collapsing whitespace, a deliberately strict first rule. If an audit disagrees, a third rig (not either side, not their owners) re-runs it as a tie-breaker; the outvoted side gets a strike. Optional settings let only established rigs act as tie-breakers, or let a majority settle only when the rigs on the winning side are established; otherwise the case is held for a person. With only two rigs online, disputes wait in a review queue.</p>
+      <h3>7.4 Following leads</h3>
+      <p>When a rig is caught, a "vouch check" lists every rig that agreed with its answers and every confirmation that rested only on it. One hidden test can then be aimed at each of those rigs with one command.</p>
+      <h3>7.5 What a result is worth</h3>
+      <p>Every accepted result ends in one public bucket: <b>confirmed</b> (checked exactly, re-run agreed, or passed a hidden test), <b>unverified</b> (not picked for a re-run; final), <b>pending</b> (a check is still queued) or <b>held</b> (disputed, outvoted, unresolved or failed a test). A cheater who fakes answers survives an unchecked job with probability 1 − p per job, so faking n jobs goes unnoticed only (1 − p)<sup>n</sup> of the time, which is 0.75<sup>n</sup> at the base rate.</p>
+
+      <h2 id="privacy">8. Keeping checks hidden</h2>
+      <p>Checks only work if a rig can't tell when it's being checked. Several leaks were found and closed during the code audit, each shown on the old code first:</p>
+      <ul>
+        <li>The public ledger shows every result as pending for an hour, so a passed hidden test can't be spotted by watching totals right after submitting.</li>
+        <li>Public views don't show result hashes (a re-run that agrees has the same hash as its original) or internal event numbers (a re-check's number followed its original's).</li>
+        <li>Public job counts are taken once per 15-minute window.</li>
+        <li>A new re-check is held out of sight for a random 60–600 seconds and then released at its own second, with its deadline signed from then, so its timing doesn't point at the result it checks.</li>
+      </ul>
+
+      <h2 id="scoring">9. Points and reports</h2>
+      <p>Points are <b>simulated, off-chain bookkeeping</b>. They exist to prove the scoring is reproducible, not to pay anyone, and there is no promise they'll become coins. The current rule (<code>sim-points-v1</code>) counts confirmed and unverified results and nothing else; a candidate penalty rule (<code>sim-points-v2-forfeit</code>: a rig with a strike loses that period's unverified points) is built but off until the owner decides.</p>
+      <p>At the end of a period the coordinator signs a report with its key. Anyone can verify the signature offline. The operator can also export a <b>redacted ledger copy</b> (no keys, prompts, answers or real names) that lets anyone re-run the report and every consistency check; a later copy can be compared with an earlier one to prove history wasn't edited, deleted or back-dated. Reports and copies go in the <a href="/reports/">public logbook</a> after a 7-day wait, never replaced.</p>
+
+      <h2 id="ops">10. Running it safely</h2>
+      <p>The prototype has been through 22 rounds of an internal code audit, each one shown failing on the old code before the fix. Highlights:</p>
+      <ul>
+        <li><b>Hostile input:</b> request size, nesting and number limits; one-line refusals instead of crashes.</li>
+        <li><b>Guessing and flooding:</b> per-client request limits and a lock-out after 10 wrong keys, tokens or codes, also when they arrive at the same moment; one IPv6 network counts as one client.</li>
+        <li><b>Files from strangers:</b> ledger copies, reports and rig reports are opened read-only with strict checks.</li>
+        <li><b>Its own machine:</b> owner-only files for the ledger and keys, a clock that never goes backwards, polite refusals on a full disk, safe backups and restores that can't undo a revocation, a ledger format number, and backups marked so no tool writes into one by mistake.</li>
+        <li><b>Incidents:</b> an emergency pause and a written incident plan.</li>
+        <li><b>Supply chain:</b> every dependency pinned to exact, hash-checked files with reviewed licences, a weekly vulnerability check, and CI actions pinned to commits.</li>
+      </ul>
+      <p>An internal audit is not an outside one. An independent review and a bug bounty are still to come.</p>
+
+      <h2 id="threats">11. Threat model (summary)</h2>
+      <div class="tablewrap">
+        <table class="data">
+          <thead><tr><th scope="col">Attack</th><th scope="col">Defence today</th><th scope="col">What's left</th></tr></thead>
+          <tbody>
+            <tr><td>Fake or lazy answers</td><td>Hidden re-runs at 25–100%, hidden tests, strikes</td><td>Unchecked fakes survive at 0.75 per job on established rigs</td></tr>
+            <tr><td>One person, many rigs</td><td>One-time codes per owner, keys per rig, no same-owner checks</td><td>Only as good as who gets codes</td></tr>
+            <tr><td>Colluding auditors</td><td>Random auditor, vouch check, aimed tests</td><td>A ring of k in n rigs audits a friend about k/n of the time</td></tr>
+            <tr><td>Spotting a check</td><td>Same envelope, delayed public view, no hashes or ids, random release</td><td>Prompts repeat; two colluding rigs can compare them</td></tr>
+            <tr><td>Model swapping</td><td>Pinned model hash in every job and receipt</td><td>A liar can skip the check; caught only if answers differ</td></tr>
+            <tr><td>Forged jobs</td><td>Ed25519 signatures, planned key rotation, offline handover key</td><td>First contact trusts the first key seen</td></tr>
+            <tr><td>A dishonest operator</td><td>Signed reports, re-runnable ledger copies, history comparison</td><td>A copy proves the report matches the copy, not reality</td></tr>
+            <tr><td>Honest GPUs disagreeing</td><td>Whitespace-only tolerance</td><td>Unknown until two real cards run the same job</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>The full model, with 17 attacks, is in <a href="https://github.com/turnflockoff/Boatsnhoes.meme/blob/main/docs/VERIFICATION-THREAT-MODEL.md">docs/VERIFICATION-THREAT-MODEL.md</a>.</p>
+
+      <h2 id="hardware">12. Hardware plan</h2>
+      <p>The first rig is a Ryzen 5 5600X with 32 GB RAM on Ubuntu and two Radeon RX 470s (4 GB and 8 GB). These Polaris-generation cards aren't on AMD's ROCm support list, so the plan is the standard Linux driver (amdgpu) with Mesa's RADV Vulkan driver and llama.cpp's Vulkan backend. Compatibility is <b>unverified</b> until it runs on the machine.</p>
+      <p>Read-only tools are ready for that day: a hardware inventory (kernel, PCI IDs, drivers, Vulkan devices), a sensor reader (temperature, power, VRAM, clocks), a one-run recorder that proves which card actually did the work, and an evidence check that only counts a test that passed on both cards in different slots. Throughput, stability and how often two honest cards disagree will be published in the logbook.</p>
+      <p>What these cards can't realistically do: train large models, or heavy GPU rendering in tools that no longer support them. Newer cards would widen that later.</p>
+
+      <h2 id="coin">13. The coin (proposal)</h2>
+      <p>A $BNH coin is a <b>proposal</b>, and it comes after the hardware is proven. The working numbers: 60-second blocks with difficulty adjusting every block, a halving every 1,840,860 blocks (3.5 years), a starting reward of 27, a strict cap of about 99,406,440, and a fair launch with no premine (leaning). See <a href="/tokenomics">Tokenomics</a> for the schedule.</p>
+      <p>Undecided, and openly so:</p>
+      <ul>
+        <li><b>Chain:</b> a new proof-of-work chain, a fork of an Ethereum-compatible proof-of-work chain, or settling rewards on an existing chain. Ethereum itself can't be mined (proof of stake since 2022). A small mined chain is cheap to attack with rented hash power, so checkpoints and many confirmations would be needed.</li>
+        <li><b>Algorithm:</b> a memory-hungry design favouring ordinary GPUs and CPUs over ASICs; not yet written.</li>
+        <li><b>How useful work and mining connect:</b> mining could secure the chain while useful-work points are settled separately, or one could feed the other. No design is chosen.</li>
+        <li><b>Strict cap or a small permanent reward</b> to keep paying for security.</li>
+      </ul>
+      <p>Before any launch: legal review (securities, money transmission, tax), a public testnet, an independent security review and a separate, explicit decision. Simulated points are not coins and there's no plan to convert them.</p>
+
+      <h2 id="future">14. Later directions</h2>
+      <h3>Compute for others</h3>
+      <p>The natural next step is letting outside users bring AI work to the network. That would need a safe way to run other people's jobs on volunteers' machines (today only project-defined task types run), checks that scale to bigger jobs (re-running a long job is expensive), and payments, which need legal review. GPU rental networks already exist; the aim here would be checked, transparent work rather than the lowest price.</p>
+      <h3>A casino, much later</h3>
+      <p>Using the coin in a licensed casino is an idea that depends on a jurisdiction, a licence, age and identity checks, audited provably fair games and responsible-gambling tools. It may never happen. See <a href="/casino">the casino page</a>.</p>
+      <h3>AgentWiki</h3>
+      <p>An open idea: a site for AI agents and people where hosting is rewarded with storage proofs. Not designed, not built.</p>
+
+      <h2 id="risks">15. Risks and limits</h2>
+      <ul>
+        <li><b>It may not work on the cards.</b> Old GPUs, new drivers and Vulkan inference may not cooperate. If so, the logbook will say so.</li>
+        <li><b>Agreement isn't proof.</b> Two or three rigs agreeing means a cheater needed all of them, not that cheating is impossible.</li>
+        <li><b>Nothing proves which hardware ran a job.</b> A rented cloud GPU, or a CPU, gives the same answers.</li>
+        <li><b>The coordinator is trusted.</b> Signatures and copies make its honesty checkable, not unnecessary.</li>
+        <li><b>Legal risk</b> around coins and gambling can end the project faster than any attacker.</li>
+        <li><b>Coins can lose all their value.</b> Nothing here says what anything will be worth.</li>
+      </ul>
+
+      <h2 id="roadmap">16. Roadmap</h2>
+      <ol>
+        <li>Inventory the rig and run a smoke test on each RX 470.</li>
+        <li>Pin the first model and run real AI jobs on each card.</li>
+        <li>Two real workers, one coordinator: rehearse good and bad submissions on the cards; measure disagreement and tune the tolerance.</li>
+        <li>Publish the first signed report and ledger copy in the logbook.</li>
+        <li>Owner decisions: penalty rule, points table, release signers, chain path.</li>
+        <li>Only then: chain and coin design, testnet, outside audit, legal review.</li>
+      </ol>
+      <p>The live task list is on <a href="https://github.com/turnflockoff/Boatsnhoes.meme/blob/main/docs/ROADMAP.md">GitHub</a>.</p>
+
+      <h2 id="glossary">17. Glossary</h2>
+      <ul>
+        <li><b>Coordinator:</b> the service that creates, signs and checks jobs and keeps the ledger.</li>
+        <li><b>Rig / worker:</b> a volunteer's GPU and the program that runs jobs on it.</li>
+        <li><b>Audit (re-run):</b> the same job quietly given to another rig to compare answers.</li>
+        <li><b>Hidden test:</b> a job whose answer is already known, used to catch fakes.</li>
+        <li><b>Strike:</b> a failed hidden test or being outvoted in a tie-breaker.</li>
+        <li><b>Ledger copy:</b> a redacted copy of the ledger that anyone can re-check a report against.</li>
+        <li><b>Simulated points:</b> test bookkeeping; not coins, not money.</li>
+      </ul>
+      <p class="fine">This is a living draft. Corrections and questions are welcome as <a href="https://github.com/turnflockoff/Boatsnhoes.meme/issues/new">GitHub issues</a>.</p>
+    </article>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p class="footlinks"><a href="/">Home</a><a href="/mine">Mine</a><a href="/tokenomics">Tokenomics</a><a href="/litepaper">Litepaper</a><a href="/meme-lab">Meme Lab</a><a href="/casino">Casino</a><a href="/contribute">Contribute a GPU</a><a href="/reports/">Public logbook</a><a href="/stay-safe">Stay safe</a><a href="https://github.com/turnflockoff/Boatsnhoes.meme">GitHub</a></p>
+    <p>Draft project. Not an investment, and nothing here is financial advice.</p>
+  </div>
+</footer>
+<script src="/assets/nav.js" defer></script>
+</body>
+</html>

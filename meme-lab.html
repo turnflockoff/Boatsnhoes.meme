@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Meme Lab — Boats n Hoes ($BNH)</title>
+<meta name="description" content="Make a Boats n Hoes meme in your browser, grab the official art, and send your best ones in for the community gallery.">
+<meta name="theme-color" content="#090705">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+<link rel="canonical" href="https://boatsnhoes.meme/meme-lab">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://boatsnhoes.meme/meme-lab">
+<meta property="og:title" content="Boats n Hoes Meme Lab">
+<meta property="og:description" content="Make a meme in your browser, grab the official boat, and send your best ones in for the gallery.">
+<meta property="og:image" content="https://boatsnhoes.meme/assets/og-home.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://boatsnhoes.meme/assets/og-home.png">
+<link rel="stylesheet" href="/assets/site.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="nav">
+  <a class="brand" href="/" aria-label="Boats n Hoes home"><img src="/assets/mark-orange.svg" alt="" width="34" height="34"><span>BOATS <b>N</b> HOES</span></a>
+  <button class="menu" id="menubtn" type="button" aria-expanded="false" aria-controls="navlinks">Menu</button>
+  <nav class="links" id="navlinks" aria-label="Main">
+    <a href="#maker">Meme maker</a><a href="#kit">Brand kit</a><a href="#rules">Rules</a><a href="#submit">Submit</a><a href="#gallery">Gallery</a><a href="/">← Home</a>
+  </nav>
+</header>
+
+<main id="main">
+<section class="c-hero wrap">
+  <span class="badge">Meme Lab · open</span>
+  <h1 style="margin-top:18px">Rig the <span>memes.</span></h1>
+  <p class="tag">Make a meme right here, grab the official boat, and send in your best ones. Everything in the maker happens in your browser; nothing is uploaded unless you send it in.</p>
+  <div class="actions"><a class="btn" href="#maker">Make a meme</a><a class="btn ghost" href="#kit">Get the art</a></div>
+</section>
+
+<section id="maker">
+  <div class="wrap">
+    <div class="kicker">Meme maker</div>
+    <h2>Pick a deck. Load the cannons.</h2>
+    <p class="lead">Choose a background, type your lines, download the picture. Your own picture works too, and it never leaves your device.</p>
+    <div class="lab">
+      <div class="stage">
+        <canvas id="meme-canvas" width="1080" height="1080" role="img" aria-label="Meme preview with no text yet"></canvas>
+      </div>
+      <div class="form">
+        <div>
+          <p id="tpl-label" style="margin:0 0 8px;font-weight:650;font-size:14px">Background</p>
+          <div class="templates" role="group" aria-labelledby="tpl-label">
+            <button type="button" data-template="boat" aria-pressed="true">The boat</button>
+            <button type="button" data-template="logo" aria-pressed="false">Logo</button>
+            <button type="button" data-template="card" aria-pressed="false">Share card</button>
+            <button type="button" data-template="orange" aria-pressed="false">Orange</button>
+            <button type="button" data-template="dark" aria-pressed="false">Dark</button>
+            <button type="button" data-template="own" aria-pressed="false">Your picture</button>
+          </div>
+        </div>
+        <label id="meme-own-row" hidden>Your picture (PNG, JPEG, GIF or WebP; stays on your device)
+          <input id="meme-own" type="file" accept="image/png,image/jpeg,image/gif,image/webp">
+        </label>
+        <label>Top text <input id="meme-top" type="text" maxlength="120" value="TWO RX 470S" autocomplete="off"></label>
+        <label>Bottom text <input id="meme-bottom" type="text" maxlength="120" value="ONE DREAM" autocomplete="off"></label>
+        <div class="row2">
+          <label>Text size <input id="meme-size" type="range" min="40" max="150" value="96"></label>
+          <label>Text colour
+            <select id="meme-ink"><option value="white">White, black outline</option><option value="black">Black, white outline</option></select>
+          </label>
+        </div>
+        <div class="row2">
+          <label>Shape
+            <select id="meme-format"><option value="square">Square (1080 × 1080)</option><option value="wide">Wide (1200 × 675)</option><option value="tall">Tall (1080 × 1350)</option></select>
+          </label>
+          <label class="consent" style="align-self:end"><input id="meme-mark" type="checkbox" checked> Add boatsnhoes.meme in the corner</label>
+        </div>
+        <div class="report-actions" style="margin-top:4px">
+          <button class="btn" id="meme-download" type="button">Download PNG</button>
+          <button class="btn ghost" id="meme-use" type="button">Send it in ↓</button>
+        </div>
+        <p class="fine" id="meme-status" role="status" aria-live="polite" style="margin:0"></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="kit">
+  <div class="wrap">
+    <div class="kicker">Brand kit</div>
+    <h2>The official art.</h2>
+    <p class="lead">Use it in memes, fan art, banners and posts about the project. SVG files scale to any size; PNGs are ready to post.</p>
+    <div class="kit">
+      <div class="asset"><div class="thumb"><img src="/assets/boat-orange.svg" alt="The orange boat: a garden-hoe mast, a $BNH sail, a GPU-chip jib and GPU-fan portholes" width="200" height="150"></div><h3>The boat</h3><p>The main mascot, current orange colours.</p><div class="files"><a href="/assets/boat-orange.svg" download>SVG</a></div></div>
+      <div class="asset"><div class="thumb"><img src="/assets/mark-orange.svg" alt="The square logo mark with the hoe mast" width="96" height="96"></div><h3>Logo mark</h3><p>For avatars and small spaces.</p><div class="files"><a href="/assets/mark-orange.svg" download>SVG</a><a href="/assets/apple-touch-icon.png" download>PNG 180</a></div></div>
+      <div class="asset"><div class="thumb"><img src="/assets/og-home.png" alt="Share card: the orange boat next to the words Boats n Hoes" width="240" height="126"></div><h3>Share card</h3><p>1200 × 630, the picture links show when shared.</p><div class="files"><a href="/assets/og-home.png" download>PNG</a><a href="/assets/og-home.svg" download>SVG</a></div></div>
+      <div class="asset"><div class="thumb"><img src="/assets/boat.svg" alt="The boat in the earlier cream, navy and pink colours" width="200" height="150"></div><h3>Classic boat</h3><p>The earlier pink-and-navy look, for throwback memes.</p><div class="files"><a href="/assets/boat.svg" download>SVG</a><a href="/assets/mark.svg" download>Mark SVG</a><a href="/assets/og-image.png" download>Card PNG</a></div></div>
+    </div>
+    <div class="tablewrap">
+      <table class="data">
+        <caption>Colours</caption>
+        <thead><tr><th scope="col">Name</th><th scope="col">Hex</th><th scope="col">Use</th></tr></thead>
+        <tbody>
+          <tr><td>Sunrise</td><td class="num">#ffb21e</td><td>Start of the orange gradient</td></tr>
+          <tr><td>Flare</td><td class="num">#ff493e</td><td>End of the orange gradient, the "N"</td></tr>
+          <tr><td>Deep hull</td><td class="num">#090705</td><td>Background</td></tr>
+          <tr><td>Sail white</td><td class="num">#f4f1ed</td><td>Text on dark</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="rules">
+  <div class="wrap">
+    <div class="kicker">Using the art</div>
+    <h2>Keep it funny. Keep it honest.</h2>
+    <div class="split">
+      <div class="fact"><span class="tagline">Go for it</span><h3>Yes, please</h3><ul class="ticks" style="margin-top:8px"><li>Memes, fan art, stickers and banners about the project.</li><li>Jokes about boats, GPUs, garden hoes and the crew.</li><li>Remixing the boat and the colours.</li></ul></div>
+      <div class="fact"><span class="tagline">Not with our art</span><h3>Please don't</h3><ul class="ticks" style="margin-top:8px"><li>Price, profit or pump talk. No coin exists, and we won't post it.</li><li>Pretending to be official, or announcing tokens, airdrops or giveaways.</li><li>Selling merch or anything else as if it were ours.</li><li>Hate, harassment, explicit content, or real people who didn't agree to it.</li><li>Other people's art or characters you don't have the rights to.</li></ul></div>
+    </div>
+  </div>
+</section>
+
+<section id="submit">
+  <div class="wrap join">
+    <div>
+      <div class="kicker">Community gallery</div>
+      <h2>Send in your best.</h2>
+      <p class="lead">Every meme is looked at by a person before it's posted, so it can take a while, and not everything gets in. Posted memes appear in the gallery below and on GitHub, credited with the name you give.</p>
+      <ul class="ticks">
+        <li>One picture, up to 8 MB (PNG, JPEG, GIF or WebP).</li>
+        <li>Your email is optional and only used if we need to ask you something about your meme.</li>
+        <li>No coins, points or prizes for memes. Just glory.</li>
+      </ul>
+    </div>
+    <form class="form" name="memes" method="POST" action="/meme-thanks" enctype="multipart/form-data" data-netlify="true" netlify-honeypot="bot-field">
+      <input type="hidden" name="form-name" value="memes">
+      <p class="hide"><label>Leave this empty <input name="bot-field" tabindex="-1" autocomplete="off"></label></p>
+      <label>Your meme <input id="submit-file" type="file" name="meme" accept="image/png,image/jpeg,image/gif,image/webp" required></label>
+      <label>Describe it for people who can't see it <textarea name="description" rows="3" maxlength="300" required placeholder="The boat at sea, top text: ..."></textarea></label>
+      <div class="row2">
+        <label>Credit as (optional) <input name="credit" type="text" maxlength="60" autocomplete="nickname"></label>
+        <label>Email (optional) <input name="email" type="email" maxlength="200" autocomplete="email"></label>
+      </div>
+      <label class="consent"><input type="checkbox" name="made-it" value="yes" required> I made this, or I have the right to share everything in it.</label>
+      <label class="consent"><input type="checkbox" name="follows-rules" value="yes" required> It follows the rules above (no price talk, nothing pretending to be official).</label>
+      <label class="consent"><input type="checkbox" name="ok-to-post" value="yes" required> Boats n Hoes may post it on this site and on GitHub, credited as above.</label>
+      <button class="btn" type="submit">Send for review</button>
+    </form>
+  </div>
+</section>
+
+<section id="gallery">
+  <div class="wrap">
+    <div class="kicker">Approved memes</div>
+    <h2>The gallery.</h2>
+    <div id="meme-gallery" class="empty"><p style="margin:0">No memes posted yet. Yours could be the first.</p></div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p class="footlinks"><a href="/">Home</a><a href="/mine">Mine</a><a href="/tokenomics">Tokenomics</a><a href="/litepaper">Litepaper</a><a href="/meme-lab">Meme Lab</a><a href="/casino">Casino</a><a href="/contribute">Contribute a GPU</a><a href="/reports/">Public logbook</a><a href="/stay-safe">Stay safe</a><a href="https://github.com/turnflockoff/Boatsnhoes.meme">GitHub</a></p>
+    <p>Draft project. Not an investment, and nothing here is financial advice. Community memes are their makers' own words.</p>
+  </div>
+</footer>
+<script src="/assets/nav.js" defer></script>
+<script src="/assets/meme-lab.js" defer></script>
+</body>
+</html>

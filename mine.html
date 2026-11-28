@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mine — Boats n Hoes ($BNH)</title>
+<meta name="description" content="How GPUs fit into Boats n Hoes: what you can do today (help test useful AI jobs on regular GPUs) and what mining might look like later. No chain or coin exists yet.">
+<meta name="theme-color" content="#090705">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+<link rel="canonical" href="https://boatsnhoes.meme/mine">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://boatsnhoes.meme/mine">
+<meta property="og:title" content="Put your GPU to work — Boats n Hoes">
+<meta property="og:description" content="Today: help test useful AI jobs on regular GPUs. Later, maybe: mining. Here's what's real and what's still a plan.">
+<meta property="og:image" content="https://boatsnhoes.meme/assets/og-home.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://boatsnhoes.meme/assets/og-home.png">
+<link rel="stylesheet" href="/assets/site.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="nav">
+  <a class="brand" href="/" aria-label="Boats n Hoes home"><img src="/assets/mark-orange.svg" alt="" width="34" height="34"><span>BOATS <b>N</b> HOES</span></a>
+  <button class="menu" id="menubtn" type="button" aria-expanded="false" aria-controls="navlinks">Menu</button>
+  <nav class="links" id="navlinks" aria-label="Main">
+    <a href="#today">Today vs later</a><a href="#how">How it works</a><a href="#hardware">Hardware</a><a href="#value">Why useful work</a><a href="#faq">FAQ</a><a href="/">← Home</a>
+  </nav>
+</header>
+
+<main id="main">
+<section class="c-hero wrap">
+  <span class="badge">Mine · test network, no coin yet</span>
+  <h1 style="margin-top:18px">Put your GPU <span>to work.</span></h1>
+  <p class="tag">The idea: ordinary graphics cards doing useful AI work that's checked before it counts. Today that's a test on two Radeon RX 470s. Mining a coin is a later, separate step that hasn't been decided.</p>
+  <div class="actions"><a class="btn" href="/contribute">Check your GPU</a><a class="btn ghost" href="/litepaper">Read the litepaper</a></div>
+  <div class="callout" style="max-width:640px;margin:24px auto 0;text-align:left"><b>There's nothing to mine yet.</b> No chain, coin or miner download exists. The test network keeps simulated points only, and nobody is paid. A "$BNH miner" offered anywhere today is not ours.</div>
+</section>
+
+<section id="today">
+  <div class="wrap">
+    <div class="kicker">Two kinds of GPU work</div>
+    <h2>What's real today, what's later.</h2>
+    <div class="split">
+      <div class="fact"><span class="tagline">Now · being built and tested</span><h3>Useful AI jobs</h3><p>A coordinator hands out small, signed AI jobs (for example: answer a prompt with a pinned open model). A worker program on your GPU runs them and sends the result back, and the coordinator checks the work. The software exists and has thousands of automated tests; it has <b>not yet run on a real GPU</b>.</p><p style="margin-top:12px"><span class="pill done">Software built</span> <span class="pill open">GPU run pending</span></p></div>
+      <div class="fact"><span class="tagline">Later · proposed, not decided</span><h3>Mining a coin</h3><p>If a $BNH chain is ever launched, the proposal is proof-of-work mining with a memory-hungry algorithm that favours regular GPUs and CPUs over specialised machines. The chain, the algorithm, and how it would connect to useful work are all still open.</p><p style="margin-top:12px"><span class="pill open">Open</span> <a href="/tokenomics">Proposed supply →</a></p></div>
+    </div>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <div class="kicker">How the test network works</div>
+    <h2>Checked before it counts.</h2>
+    <p class="lead">A result only counts after it's been checked. Some checks are hidden, so a rig can't behave well only when it's being watched.</p>
+    <ol class="steps">
+      <li><b>Join with a one-time code</b>The operator gives each rig a single-use code. The rig gets its own key; keys are stored only as fingerprints, and a rig can be switched off at any time.</li>
+      <li><b>Get a signed job</b>Each job is signed by the coordinator, names the exact model file by its fingerprint, and has a deadline. Workers refuse anything unsigned or changed.</li>
+      <li><b>Run it on one card</b>The worker runs the pinned open model locally (llama.cpp with Vulkan is the first candidate), one worker per card, without admin rights.</li>
+      <li><b>Send the answer back</b>With a receipt that must match the job's version, input and model fingerprints.</li>
+      <li><b>Get checked</b>Some results are quietly re-run by another, randomly picked rig; some jobs are hidden tests with a known answer. Disagreements go to a third rig or to a person.</li>
+      <li><b>Points, simulated</b>Checked work is tallied as off-chain points in a signed, public report. Points are bookkeeping for the test. They are not coins and aren't paid out.</li>
+    </ol>
+  </div>
+</section>
+
+<section id="hardware">
+  <div class="wrap">
+    <div class="kicker">Hardware</div>
+    <h2>Starting small, on purpose.</h2>
+    <div class="facts" style="margin-top:24px">
+      <div class="fact"><span class="tagline">Test rig</span><h3>Two Radeon RX 470s</h3><p>Reported setup: Ryzen 5 5600X, 32 GB RAM, Ubuntu, one 4 GB and one 8 GB card. Older cards that AMD's main AI toolkit doesn't support, which is exactly why they're a good test.</p></div>
+      <div class="fact"><span class="tagline">What they can do</span><h3>Small AI models</h3><p>The first job type is text generation with a small open model (Qwen2.5 0.5B, about 400 MB, Apache-2.0). Training big models or heavy rendering isn't realistic on these cards.</p></div>
+      <div class="fact"><span class="tagline">Your card</span><h3>Check it in 10 seconds</h3><p>The <a href="/contribute">contribute page</a> reads what your browser reports about your graphics card, locally, and lets you sign up as a tester. Nothing is installed.</p></div>
+    </div>
+    <ul class="ticks" style="margin-top:24px">
+      <li>Running a GPU costs electricity. In the test, that cost is yours and nothing pays it back.</li>
+      <li>Never run a "miner" from a DM, a search ad or a file-sharing site. Real downloads will be signed by at least two people and linked only from this site and GitHub (<a href="/stay-safe">how to check</a>).</li>
+    </ul>
+  </div>
+</section>
+
+<section id="value">
+  <div class="wrap">
+    <div class="kicker">The honest bit</div>
+    <h2>Why useful work, not just hashing.</h2>
+    <p class="lead">Mining costs money, but cost alone doesn't make anything valuable. Electricity spent solving puzzles is gone either way. What mining does well is spread coins fairly and make attacking a chain expensive.</p>
+    <div class="facts" style="margin-top:24px">
+      <div class="fact"><span class="tagline">Useful</span><h3>Work someone wants</h3><p>An answered prompt or a sorted document is useful whether or not a coin ever exists. That's the bet: GPUs doing work people actually need.</p></div>
+      <div class="fact"><span class="tagline">Fair</span><h3>Anyone with a GPU</h3><p>No presale and no insiders. If coins are ever issued, the plan is that they come from work, starting at the first block.</p></div>
+      <div class="fact"><span class="tagline">Honest</span><h3>Nothing promised</h3><p>No price, profit or payout talk. If it doesn't work on real cards, the logbook will say so.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="faq">
+  <div class="wrap">
+    <h2>Straight answers.</h2>
+    <div class="faq">
+      <details><summary>Can I mine $BNH now?</summary><p>No. There's no chain to mine. You can help test the GPU side by signing up on the <a href="/contribute">contribute page</a>.</p></details>
+      <details><summary>Will testers earn coins later?</summary><p>No promise of that. Test points are simulated and only exist to prove the checking and bookkeeping work.</p></details>
+      <details><summary>Can I rent out my GPU through this?</summary><p>Not yet. Renting compute to outside customers would need payments, legal review and a safe way to run strangers' jobs on your machine. None of that exists. Today the network only runs job types the project defines.</p></details>
+      <details><summary>NVIDIA, Apple or Intel graphics?</summary><p>The first test is AMD on Linux with Vulkan. Other cards may work later; sign up and tell us what you have.</p></details>
+      <details><summary>Where can I see the results?</summary><p>Signed reports will appear in the <a href="/reports/">public logbook</a> once rigs run real jobs. All code is on <a href="https://github.com/turnflockoff/Boatsnhoes.meme">GitHub</a>.</p></details>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p class="footlinks"><a href="/">Home</a><a href="/mine">Mine</a><a href="/tokenomics">Tokenomics</a><a href="/litepaper">Litepaper</a><a href="/meme-lab">Meme Lab</a><a href="/casino">Casino</a><a href="/contribute">Contribute a GPU</a><a href="/reports/">Public logbook</a><a href="/stay-safe">Stay safe</a><a href="https://github.com/turnflockoff/Boatsnhoes.meme">GitHub</a></p>
+    <p>Draft project. Not an investment, and nothing here is financial advice.</p>
+  </div>
+</footer>
+<script src="/assets/nav.js" defer></script>
+</body>
+</html>
