@@ -59,6 +59,11 @@ class Settings:
     rate_limit_per_minute: int = 240
     auth_failure_limit: int = 10
     auth_failure_window_seconds: int = 600
+    # `client-prefix-v1`: IPv6 clients are counted per block of this many bits (one home or
+    # server connection usually gets a /64; 128 = per full address), and the limiter keeps at
+    # most this many clients in memory (more share one "overflow" bucket).
+    ipv6_client_prefix: int = 64
+    rate_limit_max_clients: int = 50_000
     # app/client_address.py: reverse proxies whose X-Forwarded-For header is believed, so
     # limits apply to the real client. Empty = the header is ignored (the safe default).
     trusted_proxies: tuple[str, ...] = ()
@@ -244,6 +249,8 @@ def get_settings() -> Settings:
         rate_limit_per_minute=_int_env("RATE_LIMIT_PER_MINUTE", 240, 0, 100000),
         auth_failure_limit=_int_env("AUTH_FAILURE_LIMIT", 10, 0, 10000),
         auth_failure_window_seconds=_int_env("AUTH_FAILURE_WINDOW_SECONDS", 600, 10, 86400),
+        ipv6_client_prefix=_int_env("IPV6_CLIENT_PREFIX", 64, 32, 128),
+        rate_limit_max_clients=_int_env("RATE_LIMIT_MAX_CLIENTS", 50_000, 1000, 10_000_000),
         trusted_proxies=tuple(str(n) for n in
                               parse_trusted_proxies(os.getenv("TRUSTED_PROXIES"))),
         points_table=parse_points_table(os.getenv("POINTS_TABLE"), EXECUTORS),

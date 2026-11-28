@@ -240,7 +240,8 @@ def test_operator_health_shows_lock_outs_and_logs_never_show_the_address(
     health = client.app.state.limiter.snapshot()
     assert health["since_start"] == {"rate_limited_requests": 0, "locked_out_requests": 1,
                                      "auth_failures": 2,
-                                     "guesses_refused_at_once": 0}
+                                     "guesses_refused_at_once": 0,
+                                     "overflow_requests": 0}
     [locked] = health["locked_out_clients"]
     assert locked["client"] == "testclient" and locked["failures_in_window"] == 2
     tag = locked["client_tag"]

@@ -250,7 +250,8 @@ def test_a_client_holding_a_slot_is_never_pruned() -> None:
     lim = RateLimiter(per_minute=0, auth_failure_limit=2, auth_failure_window=60, clock=clock)
     assert lim.start_guess("holder") is None
     clock.t = 10_000.0
-    lim._prune(clock.t)
+    for n in range(10):  # each new client sweeps the oldest entries (`client-prefix-v1`)
+        lim.check(f"other-{n}", "/v1/jobs/next")
     assert lim._clients["holder"].guessing == 1
 
 

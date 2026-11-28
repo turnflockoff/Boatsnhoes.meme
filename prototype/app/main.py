@@ -168,7 +168,9 @@ def create_app(settings: Settings | None = None,
     app.state.settings = settings
     app.state.signer = signer
     limiter = rate_limit.RateLimiter(settings.rate_limit_per_minute, settings.auth_failure_limit,
-                                     settings.auth_failure_window_seconds, limiter_clock)
+                                     settings.auth_failure_window_seconds, limiter_clock,
+                                     ipv6_prefix=settings.ipv6_client_prefix,
+                                     max_clients=settings.rate_limit_max_clients)
     app.state.limiter = limiter
     # `input-limits-v1` (app/input_limits.py): body size and nesting limits. Added before the
     # request logger below, so it runs inside it: refused bodies are still logged and counted.
@@ -570,6 +572,14 @@ def create_app(settings: Settings | None = None,
             warnings.append(f"{len(limits['locked_out_clients'])} client address(es) locked out "
                             "after repeated wrong keys, tokens or enrollment codes: see "
                             "rate_limits. Could be a misconfigured rig or someone guessing")
+        # `client-prefix-v1`: the client table filled up with clients it couldn't forget.
+        if limits["since_start"]["overflow_requests"]:
+            warnings.append(f"{limits['since_start']['overflow_requests']} request(s) came from "
+                            f"new clients while the limiter already held "
+                            f"{limits['max_tracked_clients']} clients it couldn't forget, so "
+                            "they shared one overflow bucket and lock-out (slower for "
+                            "newcomers). Usually many addresses sending wrong keys or tokens: "
+                            "see locked_out_clients, or raise RATE_LIMIT_MAX_CLIENTS")
         # Threat model #16 follow-up: a submitter token without a points table can queue
         # jobs worth up to 1000 points for a friend's rig to claim.
         if settings.submitter_token and not settings.points_table:
